@@ -3556,10 +3556,17 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     rankingScoreAvailable&&item.pairwise_ranking.status==='AVAILABLE'&&
     finite(item.pairwise_ranking_improvement)&&item.pairwise_ranking_improvement>0
   );
-  // Stage 2 begins only for stage-1 qualifiers. Fit return/risk heads on the
-  // later purged execution-head training block and choose policies on inner
-  // selection rows; the external validation and holdout remain untouched.
-  for(const item of stageOneQualified){
+  // Stage 2 fits execution/Hurdle heads for every stage-1 qualifier. If the
+  // classifier/ranker stage has no qualifier, also fit the single best
+  // diagnostic candidate so a trained, reloadable research artifact can be
+  // preserved with an explicit NOT_QUALIFIED status. This diagnostic fit does
+  // not relax stage-1 or execution gates and cannot authorize outer scoring.
+  const stageTwoCandidates=stageOneQualified.slice();
+  if(evaluated.length>0&&!stageTwoCandidates.includes(evaluated[0])){
+    evaluated[0].stage_two_diagnostic_only=true;
+    stageTwoCandidates.push(evaluated[0]);
+  }
+  for(const item of stageTwoCandidates){
     try{
       if(!Array.isArray(executionHeadRowsWithLogisticContext)||
         executionHeadRowsWithLogisticContext.length<20)
