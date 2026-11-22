@@ -101,7 +101,7 @@ jobs:
       - name: Checkout exact training SHA
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
@@ -117,9 +117,9 @@ jobs:
         with:
           name: radarx-build224-neural-closure-dataset-039c9074fc21fa0ea303e360a6ea56d3a401a559
           path: artifacts/neural-closure
-          repository: \${{ github.repository }}
+          repository: ${{ github.repository }}
           run-id: '44196188685'
-          github-token: \${{ github.token }}
+          github-token: ${{ github.token }}
 
       - name: Verify frozen input identity before training
         run: |
@@ -235,7 +235,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: radarx-build224-hurdle-v2-inner-\${{ github.event.pull_request.head.sha }}
+          name: radarx-build224-hurdle-v2-inner-${{ github.event.pull_request.head.sha }}
           path: artifacts/neural-closure-hurdle-v2-inner/
           if-no-files-found: warn
           retention-days: 30
