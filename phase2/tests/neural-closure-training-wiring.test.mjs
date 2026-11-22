@@ -447,20 +447,19 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(temporal,/Math\.ceil\(baseEpochs\*1\.5\)/,
     'the third ensemble member must retain the 1.5x epoch profile');
 
-  // The bounded eight-candidate recurrent grid keeps the plain Brier anchor
-  // and seven Brier + shared-classifier ranking weights. Focal is excluded
-  // because the prior replay showed a Brier/ranking tradeoff.
-  assert.match(trainer,/4H_BRIER_BASE_LR0015_L2_0005_E12[\s\S]*?epochs:12/);
-  assert.match(trainer,/objective:'BRIER'/);
+  // The fixed-SHA replay showed shared classifier-ranking gradients
+  // improved pairwise loss but degraded Brier. The next grid keeps classifier
+  // training Brier-only, starts from zero residual, and sweeps regularization
+  // plus locked temporal dropout while the independent rank sidecar stays active.
   for(const name of [
-    '4H_BRIER_SHARED_RANK_W005_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W010_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W020_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W040_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W060_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W080_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W120_LR0015_E16'
-  ]) assert.ok(trainer.includes(name),'missing Brier + shared-ranking challenger '+name);
+    '4H_BRIER_RESIDUAL_BASE_LR0015_L2_0005_D000_E12','4H_BRIER_REG_LR0015_L2_005_D005_E12','4H_BRIER_REG_LR0010_L2_010_D010_E10','4H_BRIER_REG_LR00075_L2_020_D010_E10',
+    '4H_BRIER_REG_LR0010_L2_050_D015_E10','4H_BRIER_REG_LR0015_L2_020_D020_E08','4H_BRIER_REG_LR0020_L2_010_D015_E08','4H_BRIER_REG_LR00075_L2_050_D020_E08'
+  ]) assert.ok(trainer.includes(name),'missing Brier generalization candidate '+name);
+  assert.ok(trainer.includes("objective:'BRIER',rankingWeight:0"));
+  assert.ok(trainer.includes("l2:0.05,dropout:0.15"));
+  assert.ok(trainer.includes("l2:0.05,dropout:0.20"));
+  assert.ok(recurrent.includes("outputWeights: Array(hidden).fill(0)"),
+    'the residual classifier must start exactly at its frozen Logistic anchor');
   assert.match(recurrent,/config\.epochs\s*>\s*30/);
   assert.match(recurrent,/deriveTrainingClassWeights\(rows\.map\(row=>row\.target\)\)/);
   assert.match(recurrent,/FOCAL_ASYMMETRIC_BRIER/);
@@ -480,23 +479,16 @@ test('TCN-LSTM classifier Brier and independent ranking sweep stay within the se
   const candidateNames=[...candidateBlock[1].matchAll(/name:'([^']+)'/g)]
     .map(match=>match[1]);
   assert.equal(candidateNames.length,8,'grid must stay within the selector hard cap');
-  assert.ok(candidateNames.includes('4H_BRIER_BASE_LR0015_L2_0005_E12'));
-  for(const name of [
-    '4H_BRIER_SHARED_RANK_W005_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W010_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W020_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W040_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W060_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W080_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W120_LR0015_E16'
-  ]) assert.ok(candidateNames.includes(name),'missing Brier + shared-ranking candidate '+name);
-  for(const weight of ['0.005','0.01','0.02','0.04','0.06','0.08','0.12']){
-    assert.ok(trainer.includes('rankingWeight:'+weight),'missing combined ranking weight '+weight);
-  }
-  assert.equal((candidateBlock[1].match(/objective:'BRIER',rankingWeight:/g)||[]).length,7,
-    'all seven ranking candidates must retain the proper-scoring Brier objective');
+  assert.deepEqual(candidateNames,[
+    '4H_BRIER_RESIDUAL_BASE_LR0015_L2_0005_D000_E12','4H_BRIER_REG_LR0015_L2_005_D005_E12','4H_BRIER_REG_LR0010_L2_010_D010_E10','4H_BRIER_REG_LR00075_L2_020_D010_E10',
+    '4H_BRIER_REG_LR0010_L2_050_D015_E10','4H_BRIER_REG_LR0015_L2_020_D020_E08','4H_BRIER_REG_LR0020_L2_010_D015_E08','4H_BRIER_REG_LR00075_L2_050_D020_E08'
+  ]);
+  assert.equal((candidateBlock[1].match(/objective:'BRIER',rankingWeight:0/g)||[]).length,8,
+    'all eight candidates must train the probability head with pure Brier loss');
+  assert.doesNotMatch(candidateBlock[1],/rankingWeight:(?:0\.[1-9]|[1-9])/,
+    'shared return-ranking gradients must not contaminate this Brier generalization sweep');
   assert.match(trainer,/rankingPairsPerTimestamp:2/,
-    'shared-ranking backprop must use a bounded, executable pair budget per 15m group');
+    'the separate independent return-ranker must retain its bounded training-only pair budget');
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.match(trainer,/minimumReturnWinRatePct:55/);
   assert.match(trainer,/rankingMinimumReturnGapPct:0\.50/);
