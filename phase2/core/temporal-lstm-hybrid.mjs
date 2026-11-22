@@ -2680,7 +2680,7 @@ export function trainTcnLstmHybrid(trainingRows, {
   if(explicitClassifierBaselineRows!==0&&explicitClassifierBaselineRows!==rows.length)
     throw new TypeError('TCN_LSTM_CLASSIFIER_BASELINE_PARTIAL_ROW_COVERAGE');
   const classifierBaselineSource=explicitClassifierBaselineRows===rows.length
-    ?'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW'
+    ?'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF'
     :'FROZEN_POOLED_LOGISTIC_ANCHOR_58_FALLBACK';
 
   const model = initializeModel(seed);
@@ -2957,7 +2957,9 @@ export function trainTcnLstmHybrid(trainingRows, {
         feature_count:explicitClassifierBaselineRows===rows.length
           ?TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_COUNT:BASELINE_FEATURES,
         training_logits_available_rows:explicitClassifierBaselineRows,
-        source_partition:'TRAINING_PARTITION_ONLY',
+        source_partition:explicitClassifierBaselineRows===rows.length
+          ?'PURGED_EXPANDING_TRAIN_ONLY_OOF_FOLDS':'TRAINING_PARTITION_ONLY',
+        predictions_are_purged_out_of_fold:explicitClassifierBaselineRows===rows.length,
         validation_or_holdout_used:false
       },
       initial_training_brier:Number(initialBrier.toFixed(8)),
