@@ -562,14 +562,14 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
     'the exact same full-sequence Logistic fit must provide baseline logits for recurrent model-training rows');
   assert.match(trainer,/training_predictions,/,
     'the external Logistic provider must return train-partition residual baseline logits');
-  assert.match(temporal,/provided\?\.training_predictions/,
+  assert.match(recurrent,/provided\?\.training_predictions/,
     'the selector must require matched 696D baseline scores on all recurrent fitting rows');
-  assert.match(temporal,/classifier_baseline_logit:prediction\.rawLogit/,
+  assert.match(recurrent,/classifier_baseline_logit:prediction\.rawLogit/,
     'the external raw Logistic logit must be attached to score rows as the classifier residual baseline');
-  assert.match(temporal,/const selectionLogits = selectionRows\.map\(\(row,rowIndex\)/,
+  assert.match(recurrent,/const selectionLogits = selectionRows\.map\(\(row,rowIndex\)/,
     'the neural classifier must be scored from the same ordered Logistic baseline vector');
-  assert.match(temporal,/baseLogit=baselineLogits\[rowIndex\]/);
-  assert.match(temporal,/same_reference_used_for_training_and_selection:true/,
+  assert.match(recurrent,/baseLogit=baselineLogits\[rowIndex\]/);
+  assert.match(recurrent,/same_reference_used_for_training_and_selection:true/,
     'training and inner-selection residuals must use the identical Logistic reference model');
   assert.match(recurrent,/resolveTcnLstmProfileClassifierBaselineLogit/,
     'frozen full-sequence Logistic logits must also be reused at inference');
