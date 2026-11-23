@@ -1,0 +1,56 @@
+name: RadarX Cognitive Sample Audit Gate
+on:
+  push:
+    branches:
+      - fix/418-holdout-isolation-20261123
+    paths:
+      - phase2/core/cognitive-training-sample-audit.mjs
+      - phase2/tools/cognitive-market-wide-historical-benchmark.mjs
+      - phase2/tests/cognitive-training-sample-audit.test.mjs
+      - .github/workflows/cognitive-sample-audit-gate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: radarx-cognitive-sample-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sample-audit:
+    name: Per-sample rejection audit regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax checks
+        run: |
+          node --check phase2/core/cognitive-training-sample-audit.mjs
+          node --check phase2/tools/cognitive-market-wide-historical-benchmark.mjs
+      - name: Unit tests for all rejection classes
+        run: node --test phase2/tests/cognitive-training-sample-audit.test.mjs
+      - name: Confirm report contains rejection-sidecar output wiring
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const source=fs.readFileSync('phase2/tools/cognitive-market-wide-historical-benchmark.mjs','utf8');
+          const required=[
+            'auditCognitiveTrainingSamples(sampleRows)',
+            'rejection_reason_counts:audit.rejection_reason_counts',
+            "await writeFile(REJECTION_PATH,rejectionJsonl,'utf8')",
+            'rejected_samples_by_symbol:audit.rejected_samples_by_symbol'
+          ];
+          for(const token of required){
+            if(!source.includes(token))throw new Error('missing rejection audit wiring: '+token);
+            console.log('PASS '+token);
+          }
+          NODE
