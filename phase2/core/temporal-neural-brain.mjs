@@ -1413,11 +1413,6 @@ export function buildTemporalNeuralProfile(samples = [], {
     const predictCalibratedTreeLogistic=sequence=>calibratedProbability(
       predictLogistic(sequence,regimeBaseline),treeLogisticCalibrator);
     const temporalTreeValidationLogistic=evaluate(regimeValidation,predictCalibratedTreeLogistic,regimePrior);
-    let temporalTreeHoldoutLogistic={
-      evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
-      model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
-      reason:'TEMPORAL_TREE_NOT_VALIDATED_HOLDOUT_REMAINS_CLOSED'
-    };
     const temporalTreeValidation=temporalTreeFit&&temporalTreeWinner
       ?evaluate(regimeValidation,predictCalibratedTemporalTree,regimePrior)
       :{evaluated:false,sample_count:regimeValidation.length,model_brier_score:null,
