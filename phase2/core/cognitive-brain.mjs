@@ -1643,16 +1643,18 @@ export function buildCognitiveLearningProfile(samples = [], {
       model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
       reason:'NO_VALIDATION_QUALIFIED_MODEL_HOLDOUT_REMAINS_CLOSED'
     };
-  const holdoutMetrics=validationWinner
-    ?(challengerHoldoutComparison.passed?challengerHoldout:neuralGlobalLogisticHoldout)
-    :fallbackHoldout;
+  // Report the only challenger actually scored on Holdout. A failed
+  // challenger is never masked by substituting a reference model's score.
+  const holdoutMetrics=validationWinner?challengerHoldout:fallbackHoldout;
+  const validationWinnerHoldoutPassed=validationWinner===null||
+    challengerHoldoutComparison.passed===true;
   const holdoutAccessOpened=validationWinner!==null||fallbackValidationQualified;
   const evidence = factorEvidence(selectedTraining, { minimumBucket });
   const rankingReady = training.length >= minTrainingSamples &&
     validation.length >= minimumValidationSamples &&
     holdout.length >= minimumHoldoutSamples &&
     evidence.covered_factor_buckets >= 4;
-  const probabilityReady = rankingReady &&
+  const probabilityReady = rankingReady && validationWinnerHoldoutPassed &&
     selectedValidation.evaluated === true && selectedValidation.beat_base_rate === true &&
     holdoutMetrics.evaluated === true && holdoutMetrics.beat_base_rate === true;
   const neuralProbabilityReady=rankingReady&&probabilityReady&&neuralSelected&&
@@ -1716,9 +1718,15 @@ export function buildCognitiveLearningProfile(samples = [], {
     holdout_access:{
       opened:holdoutAccessOpened,
       validation_winner:validationWinner?.name??null,
-      selected_model:validationWinner?.name??(fallbackValidationQualified?selectedModel:null),
+      scored_candidate:validationWinner?.name??(fallbackValidationQualified?selectedModel:null),
+      scored_candidate_passed:validationWinner
+        ?challengerHoldoutComparison.passed===true
+        :fallbackHoldout.evaluated===true&&fallbackHoldout.beat_base_rate===true,
+      selected_model:activeChallenger||(!validationWinner&&fallbackValidationQualified?selectedModel:null),
       reason:validationWinner
-        ?'ONLY_SINGLE_VALIDATION_SELECTED_CHALLENGER_SCORED_ON_FINAL_HOLDOUT'
+        ?(challengerHoldoutComparison.passed===true
+          ?'ONLY_SINGLE_VALIDATION_SELECTED_CHALLENGER_PASSED_FINAL_HOLDOUT'
+          :'ONLY_SINGLE_VALIDATION_SELECTED_CHALLENGER_SCORED_AND_FAILED_FINAL_HOLDOUT')
         :fallbackValidationQualified
           ?'ONLY_VALIDATION_QUALIFIED_LOGISTIC_FALLBACK_SCORED_ON_FINAL_HOLDOUT'
           :'NO_VALIDATION_QUALIFIED_MODEL_HOLDOUT_REMAINS_CLOSED'
