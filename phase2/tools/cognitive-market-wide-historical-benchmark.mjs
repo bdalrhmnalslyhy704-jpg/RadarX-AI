@@ -23,6 +23,11 @@ import {
   buildCognitiveLearningProfile
 } from '../core/cognitive-brain.mjs';
 import {TEMPORAL_TARGET_DEFINITION} from '../core/temporal-neural-brain.mjs';
+import {
+  auditCognitiveTrainingSamples,
+  buildCognitiveTrainingRejectionJsonl,
+  isValidCognitiveTrainingSample
+} from '../core/cognitive-training-sample-audit.mjs';
 import {evaluateExistingEngineBaselines} from '../core/cognitive-benchmark-metrics.mjs';
 
 const execFile=promisify(execFileCallback);
@@ -41,6 +46,8 @@ const OUTPUT_PATH=resolve(process.env.RADARX_COGNITIVE_BENCHMARK_REPORT||
   'artifacts/cognitive-market-wide-historical-benchmark.json');
 const SAMPLE_PATH=resolve(process.env.RADARX_COGNITIVE_BENCHMARK_SAMPLES||
   'artifacts/cognitive-market-wide-historical-samples.jsonl');
+const REJECTION_PATH=resolve(process.env.RADARX_COGNITIVE_BENCHMARK_REJECTIONS||
+  'artifacts/cognitive-market-wide-historical-rejections.jsonl');
 const delay=ms=>new Promise(resolveDelay=>setTimeout(resolveDelay,ms));
 const finite=value=>{
   if(value===null||value===undefined||value==='')return null;
@@ -204,27 +211,6 @@ async function mapLimit(items,limit,worker){
   await Promise.all(workers);
   return results;
 }
-function isValidTrainingSample(row){
-  const sequence=row?.temporal_sequence;
-  return row?.training_eligible===true&&row?.historical_baseline===true&&
-    row?.target_definition===TEMPORAL_TARGET_DEFINITION&&
-    row?.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'&&
-    ['UP','DOWN','FLAT'].includes(row?.outcome)&&
-    row?.first_passage?.path_resolution==='15M'&&
-    row?.first_passage?.outcome===row?.outcome&&
-    Number(row?.resolved_at)-Number(row?.at)===FOUR_HOURS_MS&&
-    Number(row?.horizon_ms)===FOUR_HOURS_MS&&
-    Array.isArray(sequence)&&sequence.length===24&&
-    sequence.every(step=>Array.isArray(step)&&step.length===29&&step.every(Number.isFinite));
-}
-function countBy(items,keyOf){
-  const out={};
-  for(const item of items){
-    const key=String(keyOf(item));
-    out[key]=(out[key]||0)+1;
-  }
-  return Object.fromEntries(Object.entries(out).sort((a,b)=>a[0].localeCompare(b[0])));
-}
 function metricSummary(metric){
   if(!metric||typeof metric!=='object')return null;
   return {
@@ -356,37 +342,6 @@ function summarizeProfile(profile){
         holdout_comparison:temporal.temporal_boosted_tree.holdout_comparison||null
       }:null
     }
-  };
-}
-function sampleAudit(rows){
-  const ids=new Set(),bySymbol=new Map(),validRows=[];
-  let duplicates=0,invalid=0,validSequences=0;
-  for(const row of rows){
-    const id=String(row?.id||'');
-    if(!id||ids.has(id)){duplicates++;continue;}
-    ids.add(id);
-    if(!isValidTrainingSample(row)){invalid++;continue;}
-    validRows.push(row);
-    if(Array.isArray(row.temporal_sequence))validSequences++;
-    const symbol=String(row.symbol);
-    if(!bySymbol.has(symbol))bySymbol.set(symbol,[]);
-    bySymbol.get(symbol).push(Number(row.at));
-  }
-  let spacingViolations=0;
-  for(const times of bySymbol.values()){
-    times.sort((a,b)=>a-b);
-    for(let index=1;index<times.length;index++)
-      if(times[index]-times[index-1]<FOUR_HOURS_MS)spacingViolations++;
-  }
-  return {
-    observed_rows:rows.length,unique_ids:ids.size,duplicate_ids:duplicates,
-    invalid_samples:invalid,valid_samples:validRows.length,
-    valid_temporal_sequences:validSequences,
-    per_symbol_4h_spacing_violations:spacingViolations,
-    outcome_counts:countBy(validRows,row=>row.outcome),
-    sample_month_counts:countBy(validRows,
-      row=>new Date(Number(row.at)).toISOString().slice(0,7)),
-    symbols_with_samples:bySymbol.size
   };
 }
 function csvEscape(value){
@@ -527,7 +482,7 @@ async function main(){
           expected_months_after_listing_5m:btc5.expected_months_after_first_available,
           complete_from_first_available_15m:btc15.complete_from_first_available,
           complete_from_first_available_5m:btc5.complete_from_first_available,
-          samples:samples.length,temporal_sequences:samples.filter(row=>isValidTrainingSample(row)).length,
+          samples:samples.length,temporal_sequences:samples.filter(row=>isValidCognitiveTrainingSample(row)).length,
           output:samples
         });
       }
@@ -583,7 +538,7 @@ async function main(){
           expected_months_after_listing_5m:asset5.expected_months_after_first_available,
           rejected_15m:asset15.total_rejected,rejected_5m:asset5.total_rejected,
           samples:samples.length,
-          temporal_sequences:samples.filter(row=>isValidTrainingSample(row)).length,
+          temporal_sequences:samples.filter(row=>isValidCognitiveTrainingSample(row)).length,
           output:samples
         });
       }catch(error){
@@ -594,11 +549,11 @@ async function main(){
     });
 
     const sampleRows=symbolResults.flatMap(row=>Array.isArray(row.output)?row.output:[]);
-    const audit=sampleAudit(sampleRows);
+    const audit=auditCognitiveTrainingSamples(sampleRows);
     const uniqueSamples=new Map();
     for(const row of sampleRows){
       const key=String(row?.id||'');
-      if(key&&!uniqueSamples.has(key)&&isValidTrainingSample(row))uniqueSamples.set(key,row);
+      if(key&&!uniqueSamples.has(key)&&isValidCognitiveTrainingSample(row))uniqueSamples.set(key,row);
     }
     const samples=[...uniqueSamples.values()]
       .sort((a,b)=>Number(a.at)-Number(b.at)||String(a.symbol).localeCompare(String(b.symbol)));
@@ -630,8 +585,11 @@ async function main(){
       archiveFailed===0&&archiveGapSymbols<=Math.max(2,Math.ceil(symbols.length*0.01))&&
       archiveCoverageAfterListing>=0.995&&symbolFailures.length===0;
     const samplesJsonl=writeSampleJsonl(samples);
+    const rejectionJsonl=buildCognitiveTrainingRejectionJsonl(audit);
     await mkdir(resolve(sampleOutput,'..'),{recursive:true});
+    await mkdir(resolve(REJECTION_PATH,'..'),{recursive:true});
     await writeFile(sampleOutput,samplesJsonl,'utf8');
+    await writeFile(REJECTION_PATH,rejectionJsonl,'utf8');
     console.log('[COGNITIVE_PROFILE_START] '+JSON.stringify({samples:samples.length,symbols:symbolsWithSamples,temporal_sequences:sequenceCount}));
     const profileStartedAt=Date.now();
     const profile=buildCognitiveLearningProfile(samples,{
@@ -765,6 +723,11 @@ async function main(){
       allowed_archive_gap_symbols:Math.max(2,Math.ceil(symbols.length*0.01)),
       archive_coverage_required_after_listing:0.995,
       invalid_samples:audit.invalid_samples,duplicate_ids:audit.duplicate_ids,
+      missing_sample_ids:audit.missing_ids,
+      rejection_reason_counts:audit.rejection_reason_counts,
+      rejected_samples_by_symbol:audit.rejected_samples_by_symbol,
+      rejection_audit_rows:audit.rejected_samples.length,
+      rejection_audit_output:REJECTION_PATH,
       per_symbol_4h_spacing_violations:audit.per_symbol_4h_spacing_violations,
       outcome_counts:audit.outcome_counts,sample_month_counts:audit.sample_month_counts,
       features_and_labels_audited:true,
@@ -829,7 +792,8 @@ async function main(){
         temporal_holdout:modelSummary.temporal_network.holdout_comparison,
         profitability_verified:false
       },
-      output,samples_output:sampleOutput,elapsed_ms:baseReport.elapsed_ms
+      output,samples_output:sampleOutput,rejection_audit_output:REJECTION_PATH,
+      rejection_audit_rows:audit.rejected_samples.length,elapsed_ms:baseReport.elapsed_ms
     },null,2));
     if(!qualityReady)process.exitCode=1;
   }finally{
