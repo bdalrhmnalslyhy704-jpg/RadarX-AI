@@ -1071,6 +1071,10 @@ export function buildCognitiveLearningProfile(samples = [], {
       training_positive_rate_pct: Number((fit.base_rate * 100).toFixed(1)),
       validation: { evaluated: false, reason: 'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED' },
       holdout: { evaluated: false, reason: 'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED' },
+      holdout_access:{
+        opened:false,validation_winner:null,
+        reason:'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED_HOLDOUT_REMAINS_CLOSED'
+      },
       model_selection: {
         selected_model: 'NONE',
         reason: 'INSUFFICIENT_CHRONOLOGICAL_DATA',
