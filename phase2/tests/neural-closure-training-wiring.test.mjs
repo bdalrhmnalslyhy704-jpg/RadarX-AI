@@ -577,6 +577,8 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
     'neural residual training must consume only the purged OOF Logistic predictions');
   assert.match(trainer,/training_predictions_are_out_of_fold:true/,
     'the external Logistic provider must explicitly attest OOF provenance');
+  assert.match(trainer,/training_predictions:trainingPredictions,/,
+    'the OOF prediction array must be returned under the provider contract key');
   assert.doesNotMatch(trainer,/trainingPredictions=modelTrainingRows\.map/,
     'in-sample Logistic predictions must never be used as neural training residuals');
   assert.ok(recurrent.includes('provided.training_predictions_are_out_of_fold!==true'),
