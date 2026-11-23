@@ -71,6 +71,8 @@ test('temporal network fails closed without first-passage tensor samples',()=>{
   assert.equal(predictTemporalProbability(sequenceFor(true),profile),null);
   assert.equal(profile.target_definition,TEMPORAL_TARGET_DEFINITION);
   assert.equal(profile.temporal_label_resolution,'15M_ONLY');
+  assert.equal(profile.holdout_access.opened,false);
+  assert.equal(profile.holdout.sample_count,0);
 });
 
 test('temporal boosted trees compete on the same first-passage target with regime-local purged blocks',()=>{
