@@ -350,6 +350,20 @@ test('one shared TCN keeps Holdout closed when no supported regime passes outer 
     assert.equal(profile.temporal_boosted_tree.holdout.evaluated,false);
     assert.equal(profile.temporal_boosted_tree.holdout.sample_count,0);
   }
+  for(const regime of profile.supported_regimes){
+    const tcnSelected=profile.regime_specialists[regime]?.holdout_family_selected===true;
+    const treeSelected=profile.temporal_boosted_tree.regime_specialists[regime]?.holdout_family_selected===true;
+    assert.ok(Number(tcnSelected)+Number(treeSelected)<=1,
+      'at most one temporal family may score final Holdout for a BTC regime');
+    if(tcnSelected){
+      assert.equal(profile.regime_specialists[regime].validation_family_winner,'TCN');
+      assert.equal(profile.temporal_boosted_tree.regime_specialists[regime].holdout.evaluated,false);
+    }
+    if(treeSelected){
+      assert.equal(profile.temporal_boosted_tree.regime_specialists[regime].validation_family_winner,'TEMPORAL_GBDT');
+      assert.equal(profile.regime_specialists[regime].holdout_model.evaluated,false);
+    }
+  }
   if(!profile.holdout_access.opened){
     assert.equal(profile.holdout_comparison.sample_count,0);
   }
