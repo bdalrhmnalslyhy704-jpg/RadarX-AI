@@ -359,7 +359,7 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
   assert.match(temporal,/execution_ranking_score_adjustment_weight/,
     'the selected rank adjustment must be frozen into inference and output provenance');
   assert.match(temporal,/rankingScoreAdjustmentGrid:\[0,0\.5,1,2,4\]/);
-  assert.match(temporal,/rankAdjustmentWeight\*normalizedRank/);
+  assert.match(temporal,/Number\(rankAdjustmentWeight\)\*normalizedRank/);
   assert.match(temporal,/execution_ranking_score_adjustment_weight/);
   assert.match(temporal,/execution_head_context_ablation\?\.passed===true/,
     'inner qualification must require a matched execution-head ablation pass');
