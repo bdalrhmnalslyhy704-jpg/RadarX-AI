@@ -161,13 +161,22 @@ before(async () => {
     selection: {
       status: 'ABSTAIN_NO_INNER_SELECTION_SUPERIORITY',
       selection_scoring: {
-        method: 'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6'
+        method: 'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6',
+        ranking_uses_inner_selection_partition_only: true,
+        outer_validation_or_holdout_used: false
       },
       execution_head_context_ablation_qualification: {
-        passed: false, reason: 'CONTEXT_POLICY_FAILED_ABSOLUTE_GATES_VS_NO_EXPOSURE_REFERENCE'
+        qualified: false, status: 'EVALUATED',
+        reason: 'CONTEXT_POLICY_FAILED_ABSOLUTE_GATES_VS_NO_EXPOSURE_REFERENCE',
+        source_partition: 'INNER_SELECTION_ONLY', holdout_values_used: false
+      },
+      ranking_head_selection_qualification: {
+        qualified: false, status: 'UNAVAILABLE',
+        source_partition: 'INNER_SELECTION_ONLY', holdout_values_used: false
       },
       execution_head_context_ablation: {
         status: 'FAIL', passed: false,
+        source_partition: 'INNER_SELECTION_ONLY', holdout_values_used: false,
         contextual: {trade_count: 7, win_rate_pct: 42.857142857, net_pnl_pct: 0.060233, max_drawdown_pct: 0.193713},
         pooled_only: {trade_count: 0, win_rate_pct: null, net_pnl_pct: 0, max_drawdown_pct: 0}
       },
@@ -464,4 +473,31 @@ test('34. verifier rejects scientific qualification status drift from the qualif
   const result = verifyHurdleV2Artifact(resealed);
   assert.equal(result.valid, false);
   assert.equal(result.reason, 'QUALIFICATION_STATUS_INCONSISTENT');
+});
+
+test('35. verifier rejects outer-validation or holdout use in selection scoring after resealing', () => {
+  const tampered = structuredClone(artifact);
+  tampered.inner_qualification.selection_scoring.ranking_uses_inner_selection_partition_only = false;
+  tampered.inner_qualification.selection_scoring.outer_validation_or_holdout_used = true;
+  const resealed = resealArtifact(tampered);
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+});
+test('36. verifier rejects gate evidence sourced outside inner selection after resealing', () => {
+  const tampered = structuredClone(artifact);
+  tampered.inner_qualification.gate_results.source_partition = 'OUTER_VALIDATION';
+  tampered.inner_qualification.context_ablation.holdout_values_used = true;
+  const resealed = resealArtifact(tampered);
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+});
+test('37. verifier rejects ranking-head qualification evidence sourced outside inner selection', () => {
+  const tampered = structuredClone(artifact);
+  tampered.inner_qualification.ranking_head_selection_qualification.source_partition = 'OUTER_VALIDATION';
+  const resealed = resealArtifact(tampered);
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID');
 });
