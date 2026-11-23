@@ -1913,7 +1913,60 @@ async function main(){
       outer_validation_replay_started:false,holdout_values_used:false
     };
     await atomicJson(outputPath,innerOnlyReport);
-    console.log(JSON.stringify(innerOnlyReport,null,2));
+    const innerDiagnostic=innerOnlyReport.tcn_lstm_inner_diagnostics??{};
+    const executionAblation=innerOnlyReport.hurdle_v2?.execution_ablation??{};
+    const candidateSummary=(innerDiagnostic.candidates??[]).map(candidate=>({
+      name:candidate.name??null,
+      selection_brier:candidate.selection_brier??null,
+      brier_improvement:candidate.brier_improvement??null,
+      pairwise_ranking_improvement:candidate.pairwise_ranking_improvement??null,
+      independent_ranking_signal_passed:
+        candidate.independent_ranking_signal_passed??null,
+      execution_head_context_ablation_passed:
+        candidate.execution_head_context_ablation_passed??null,
+      passed_inner_margin:candidate.passed_inner_margin??null
+    }));
+    console.log(JSON.stringify({
+      schema:innerOnlyReport.schema,
+      status:innerOnlyReport.status,
+      code_commit_sha:innerOnlyReport.code_commit_sha,
+      dataset:{
+        sha256:innerOnlyReport.dataset_sha256,
+        input_file_sha256:innerOnlyReport.input_file_sha256,
+        source_commit_sha:innerOnlyReport.dataset_source_commit_sha,
+        rows:innerOnlyReport.dataset_row_count
+      },
+      split_id:innerOnlyReport.split_id,
+      split_counts:innerOnlyReport.split_counts,
+      hurdle_v2:{
+        qualification_status:innerOnlyReport.hurdle_v2?.qualification_status??'NOT_EXPORTED',
+        selection_status:innerOnlyReport.hurdle_v2?.selection_status??null,
+        inner_qualified:innerOnlyReport.hurdle_v2?.inner_qualified===true,
+        artifact_content_hash:innerOnlyReport.hurdle_v2?.artifact_content_hash??null,
+        artifact_manifest_hash:innerOnlyReport.hurdle_v2?.artifact_manifest_hash??null,
+        fresh_process_reload_verified:
+          innerOnlyReport.hurdle_v2?.fresh_process_reload_verified===true,
+        execution_ablation:{
+          status:executionAblation.status??null,
+          contextual:executionAblation.contextual??null,
+          pooled_only:executionAblation.pooled_only??null
+        }
+      },
+      temporal_inner_selection:{
+        status:innerDiagnostic.status??null,
+        selection_status:innerDiagnostic.selection_status??null,
+        selected_configuration:innerDiagnostic.selected_configuration??null,
+        diagnostic_configuration:innerDiagnostic.diagnostic_configuration??null,
+        baseline_selection_brier:innerDiagnostic.baseline_selection_brier??null,
+        candidate_count:candidateSummary.length,
+        candidates:candidateSummary
+      },
+      holdout:innerOnlyReport.holdout,
+      outer_validation_replay_started:innerOnlyReport.outer_validation_replay_started,
+      holdout_values_used:innerOnlyReport.holdout_values_used,
+      paper_trading:innerOnlyReport.paper_trading,
+      real_order_execution:innerOnlyReport.real_order_execution
+    },null,2));
     if(!hurdleV2ExportStatus?.artifact_path)
       throw new Error(hurdleV2ExportStatus?.reason??'HURDLE_V2_INNER_ONLY_EXPORT_FAILED');
     return;
