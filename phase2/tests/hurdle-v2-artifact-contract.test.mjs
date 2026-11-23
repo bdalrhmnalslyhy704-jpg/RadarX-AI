@@ -1,5 +1,6 @@
 import test, {before} from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -26,6 +27,38 @@ function allFinite(value) {
   if (Array.isArray(value)) return value.every(allFinite);
   if (value && typeof value === 'object') return Object.values(value).every(allFinite);
   return typeof value !== 'number' || Number.isFinite(value);
+}
+function canonical(value) {
+  if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
+  if (value && typeof value === 'object') {
+    return '{' + Object.keys(value).sort().map(key =>
+      JSON.stringify(key) + ':' + canonical(value[key])).join(',') + '}';
+  }
+  return JSON.stringify(value);
+}
+function sha256(value) {
+  return createHash('sha256').update(Buffer.from(canonical(value), 'utf8')).digest('hex');
+}
+function resealArtifact(source, changes = {}) {
+  const copy = structuredClone(source);
+  Object.assign(copy, changes);
+  const core = {...copy};
+  delete core.artifact_content_hash;
+  delete core.artifact_manifest;
+  delete core.artifact_manifest_hash;
+  delete core.hash_status;
+  delete core.signature_status;
+  copy.artifact_content_hash = sha256(core);
+  copy.artifact_manifest = {
+    ...copy.artifact_manifest,
+    input_file_sha256: copy.input_file_sha256,
+    dataset_source_commit_sha: copy.dataset_source_commit_sha,
+    split_definition: copy.split_definition,
+    purge_definition: copy.purge_definition,
+    artifact_content_hash: copy.artifact_content_hash
+  };
+  copy.artifact_manifest_hash = sha256(copy.artifact_manifest);
+  return copy;
 }
 function makeNormalizer(count) {
   return {
@@ -190,11 +223,20 @@ test('03. artifact contains both independently serialized heads', () => {
 test('04. artifact records complete code, dataset, target, split and cost provenance', () => {
   assert.equal(artifact.code_commit_sha, fixture.codeCommitSha);
   assert.equal(artifact.dataset_sha256, fixture.datasetSha256);
+  assert.equal(artifact.dataset_source_commit_sha, fixture.datasetSourceCommitSha);
+  assert.equal(artifact.input_file_sha256, fixture.inputFileSha256);
   assert.equal(artifact.dataset_row_count, 32300);
   assert.equal(artifact.target_definition, fixture.targetDefinition);
   assert.equal(artifact.target_semantics, fixture.targetSemantics);
   assert.equal(artifact.split_id, fixture.splitDefinition.schema);
   assert.equal(artifact.round_trip_cost_bps, 30);
+  assert.deepEqual(artifact.split_definition.counts, {
+    train: 19269, validation: 6282, holdout: 6389, purged: 360, total: 32300
+  });
+  assert.equal(artifact.artifact_manifest.input_file_sha256, fixture.inputFileSha256);
+  assert.equal(artifact.artifact_manifest.dataset_source_commit_sha, fixture.datasetSourceCommitSha);
+  assert.deepEqual(artifact.artifact_manifest.split_definition, artifact.split_definition);
+  assert.deepEqual(artifact.artifact_manifest.purge_definition, artifact.purge_definition);
 });
 test('05. Hurdle objective and calibration contract are explicit', () => {
   assert.equal(artifact.objective_id, HURDLE_V2_OBJECTIVE);
@@ -347,4 +389,27 @@ test('26. qualification failure never deletes the artifact', async () => {
   assert.equal(disk.inner_qualification.passed, false);
   assert.equal(disk.artifact_content_hash, artifact.artifact_content_hash);
   await rm(directory, {recursive:true,force:true});
+});
+test('27. verifier rejects an invalid source SHA even after valid hashes are rebuilt', () => {
+  const tampered = resealArtifact(artifact, {input_file_sha256: 'not-a-sha256'});
+  const result = verifyHurdleV2Artifact(tampered);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'PROVENANCE_INVALID');
+});
+test('28. verifier rejects a changed fixed split even after valid hashes are rebuilt', () => {
+  const tampered = structuredClone(artifact);
+  tampered.split_definition.counts.train -= 1;
+  const resealed = resealArtifact(tampered);
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'SPLIT_PROVENANCE_INVALID');
+});
+test('29. verifier rejects enabling real orders even after valid hashes are rebuilt', () => {
+  const tampered = resealArtifact(artifact, {
+    paper_trading: false,
+    real_order_execution: true
+  });
+  const result = verifyHurdleV2Artifact(tampered);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'EXECUTION_POLICY_MISMATCH');
 });
