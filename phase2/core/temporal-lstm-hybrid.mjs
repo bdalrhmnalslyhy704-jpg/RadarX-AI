@@ -312,7 +312,10 @@ export function splitTcnLstmHurdleProbabilityCalibrationRows(rows, netReturns, {
   ));
   const earlierGroups = groups.slice(0, -calibrationGroupCount);
   const trainingGroups = earlierGroups.filter(group =>
-    group.items.every(item => Number(item.row.resolved_at) < calibrationMinAt)
+    group.items.every(item =>
+      Number(item.row.resolved_at) < calibrationMinAt &&
+      Number(item.row.at) <= calibrationMinAt - horizonMs
+    )
   );
   const purgedGroups = earlierGroups.filter(group =>
     !group.items.every(item => Number(item.row.resolved_at) < calibrationMinAt)

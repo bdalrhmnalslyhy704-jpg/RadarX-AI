@@ -146,11 +146,11 @@ test('Hurdle probability calibration split keeps an earlier training block, four
     minimumTrainingGroups:20,minimumCalibrationGroups:8,minimumClassRows:8
   });
   assert.equal(split.status,'READY');
-  assert.equal(split.diagnostics.training_groups,24);
-  assert.equal(split.diagnostics.purged_groups,16);
+  assert.equal(split.diagnostics.training_groups,25);
+  assert.equal(split.diagnostics.purged_groups,15);
   assert.equal(split.diagnostics.calibration_groups,10);
-  assert.equal(split.diagnostics.training_rows,96);
-  assert.equal(split.diagnostics.purged_rows,64);
+  assert.equal(split.diagnostics.training_rows,100);
+  assert.equal(split.diagnostics.purged_rows,60);
   assert.equal(split.diagnostics.calibration_rows,40);
   assert.equal(split.diagnostics.chronology_valid,true);
   assert.equal(split.diagnostics.forward_label_horizon_valid,true);
