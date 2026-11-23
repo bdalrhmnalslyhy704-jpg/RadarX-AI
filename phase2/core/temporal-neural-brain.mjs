@@ -868,7 +868,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     trained:false,selected:false,regime_specialists:emptyCoverage,
     supported_regimes:[],
     validation:{evaluated:false,reason:'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED'},
-    holdout:{evaluated:false,reason:'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED'},
+    holdout:{evaluated:false,sample_count:0,reason:'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED'},
+    holdout_access:{opened:false,reason:'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED_HOLDOUT_REMAINS_CLOSED'},
     holdout_comparison:{passed:false,required_live_holdout_samples:liveHoldoutSamples},
     _fit:null,_baseline_fit:null
   };
@@ -910,7 +911,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       supported_regimes:[],
       selected_regimes:[],
       validation:{evaluated:false,reason:'TEMPORAL_CHRONOLOGICAL_SAMPLE_MINIMUMS_NOT_MET'},
-      holdout:{evaluated:false,reason:'TEMPORAL_CHRONOLOGICAL_SAMPLE_MINIMUMS_NOT_MET'},
+      holdout:{evaluated:false,sample_count:0,reason:'TEMPORAL_CHRONOLOGICAL_SAMPLE_MINIMUMS_NOT_MET'},
+      holdout_access:{opened:false,reason:'SAMPLE_MINIMUMS_NOT_MET_HOLDOUT_REMAINS_CLOSED'},
       holdout_comparison:{passed:false,required_live_holdout_samples:liveHoldoutSamples},
       _fit:null,_baseline_fit:null
     };
@@ -1030,7 +1032,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       trained:false,selected:false,supported_regimes:[],selected_regimes:[],
       regime_specialists:emptyCoverage,
       validation:{evaluated:false,reason:'REGIME_LOCAL_TCN_TRAINING_BLOCK_BELOW_MINIMUM'},
-      holdout:{evaluated:false,reason:'REGIME_LOCAL_TCN_TRAINING_BLOCK_BELOW_MINIMUM'},
+      holdout:{evaluated:false,sample_count:0,reason:'REGIME_LOCAL_TCN_TRAINING_BLOCK_BELOW_MINIMUM'},
+      holdout_access:{opened:false,reason:'REGIME_TRAINING_MINIMUM_NOT_MET_HOLDOUT_REMAINS_CLOSED'},
       holdout_comparison:{passed:false,required_live_holdout_samples:liveHoldoutSamples},
       _fit:null,_baseline_fit:null
     };
