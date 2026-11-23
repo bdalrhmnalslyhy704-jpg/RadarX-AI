@@ -6,6 +6,7 @@ import {
 import {
   auditCognitiveTrainingSamples,
   buildCognitiveTrainingRejectionJsonl,
+  buildCognitiveTrainingTensorJsonl,
   cognitiveTrainingSampleRejectionReasons,
   isValidCognitiveTrainingSample
 } from '../core/cognitive-training-sample-audit.mjs';
@@ -111,4 +112,21 @@ test('rejection JSONL records sample identities and reasons but never serializes
   assert.equal(rows[0].id,'BAD-JSONL');
   assert.deepEqual(rows[0].reasons,['TEMPORAL_SEQUENCE_MISSING']);
   assert.equal(Object.hasOwn(rows[0],'temporal_sequence'),false);
+});
+
+test('tensor sidecar preserves every value in the full 24x29 sequence with stable identity',()=>{
+  const sequence=Array.from({length:24},(_,step)=>
+    Array.from({length:29},(_,channel)=>Number((step*0.1+channel*0.001).toFixed(6))));
+  const row=validSample({id:'FULL-TENSOR-001',symbol:'ETHUSDT',temporal_sequence:sequence});
+  const jsonl=buildCognitiveTrainingTensorJsonl([row]);
+  const parsed=jsonl.trim().split('\n').map(line=>JSON.parse(line));
+  assert.equal(parsed.length,1);
+  assert.equal(parsed[0].id,row.id);
+  assert.equal(parsed[0].symbol,row.symbol);
+  assert.equal(parsed[0].sequence_steps,24);
+  assert.equal(parsed[0].sequence_channels,29);
+  assert.deepEqual(parsed[0].temporal_sequence,sequence);
+  assert.equal(parsed[0].temporal_sequence_sha256.length,64);
+  assert.equal(buildCognitiveTrainingTensorJsonl([validSample({temporal_sequence:null})]),'',
+    'invalid tensor rows are never written into the replay sidecar');
 });
