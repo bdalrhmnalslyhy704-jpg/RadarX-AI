@@ -1462,7 +1462,7 @@ async function main(){
               report:temporalLogisticContext.report,
               feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
               feature_schema_names:[...LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES],
-              training_predictions,
+              training_predictions:trainingPredictions,
               training_predictions_are_out_of_fold:true,
               training_prediction_coverage:temporalLogisticContext.oof_prediction_coverage,
               predictions
