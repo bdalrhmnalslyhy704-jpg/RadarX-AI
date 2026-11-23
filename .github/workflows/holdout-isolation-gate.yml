@@ -53,6 +53,9 @@ jobs:
           const temporal=fs.readFileSync('phase2/core/temporal-neural-brain.mjs','utf8');
           const guards=[
             [!cognitive.includes('const neuralHoldout=neuralFit&&'), 'cognitive challengers are not scored on Holdout before validation winner selection'],
+            [cognitive.indexOf('const upEventHoldout=asUpEventRows(holdout)')>
+              cognitive.indexOf('const validationWinner=validationQualified[0]||null;'),
+              'cognitive Holdout labels are not derived until after one Validation winner exists'],
             [cognitive.includes('NO_VALIDATION_QUALIFIED_MODEL_HOLDOUT_REMAINS_CLOSED'), 'cognitive Holdout stays closed when no model qualifies on Validation'],
             [temporal.includes('const validationFamilyWinner=validationFamilyCandidates[0]||null;'), 'one temporal model family is frozen from Validation before Holdout'],
             [temporal.includes("holdoutFamilySelected==='TCN'&&"), 'TCN Holdout is scored only when TCN wins the per-regime validation-family selection'],
