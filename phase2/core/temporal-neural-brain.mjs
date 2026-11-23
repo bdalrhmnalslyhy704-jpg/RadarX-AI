@@ -1930,18 +1930,17 @@ export function buildTemporalNeuralProfile(samples = [], {
       reason:validationReason
     },
     holdout_access:{
-      opened:validationSelectedRegimes.length>0||temporalTreeValidationRegimes.length>0,
-      tcn_validation_selected_regimes:validationSelectedRegimes,
-      temporal_tree_validation_selected_regimes:temporalTreeValidationRegimes,
+      opened:tcnHoldoutRegimes.length>0||temporalTreeHoldoutRegimes.length>0,
+      tcn_validation_selected_regimes:tcnHoldoutRegimes,
+      temporal_tree_validation_selected_regimes:temporalTreeHoldoutRegimes,
       selected_validation_families:Object.fromEntries(regimes.map(regime=>[
-        regime,regimeResults[regime]?.validation_family_winner||
-          temporalBoostedTreeResults[regime]?.validation_family_winner||null
+        regime,regimeResults[regime]?.validation_family_winner||null
       ])),
       tcn_holdout_scored_regimes:tcnHoldoutRegimes,
       temporal_tree_holdout_scored_regimes:temporalTreeHoldoutRegimes,
       reason:tcnHoldoutRegimes.length||temporalTreeHoldoutRegimes.length
-        ?'ONE_VALIDATION_SELECTED_FAMILY_PER_REGIME_SCORED_ON_FINAL_HOLDOUT'
-        :'NO_TEMPORAL_FAMILY_PASSED_VALIDATION_HOLDOUT_REMAINS_CLOSED'
+        ?'ONE_VALIDATION_WINNER_PER_REGIME_SCORED_ON_FINAL_HOLDOUT'
+        :'NO_VALIDATION_FAMILY_WINNER_HOLDOUT_REMAINS_CLOSED'
     },
     holdout:{
       ...holdoutModel,
