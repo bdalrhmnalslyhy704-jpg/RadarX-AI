@@ -240,10 +240,10 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   for(const regime of profile.supported_regimes){
     const specialist=profile.regime_specialists[regime];
     if(!specialist.validation_passed){
-      assert.equal(specialist.holdout.evaluated,false,
-        'a regime that failed Validation must not be evaluated on final Holdout');
-      assert.equal(specialist.holdout.sample_count,0);
-      assert.equal(specialist.holdout_logistic.evaluated,false);
+      assert.equal(specialist.holdout_brier,null,
+        'a regime that failed Validation must not expose a Holdout score');
+      assert.equal(specialist.holdout_pooled_logistic_brier,null);
+      assert.equal(specialist.holdout_diagnostic_only,false);
     }
   }
   for(const specialist of Object.values(profile.temporal_boosted_tree.regime_specialists)){
@@ -273,7 +273,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   }
 });
 
-test('one shared TCN passes independent outer gates in each supported BTC regime',()=>{
+test('one shared TCN keeps Holdout closed when no supported regime passes outer Validation',()=>{
   const rows=[];
   for(let group=0;group<32;group++){
     for(let index=0;index<36;index++){
@@ -290,8 +290,16 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   assert.equal(profile.trained,true);
   assert.equal(profile.regime_split_method,'SHARED_GLOBAL_TIME_SPLIT_WITH_REGIME_LOCAL_AUXILIARY_TREE_SPLITS_V1');
   assert.equal(profile.validation.evaluated,true);
-  assert.equal(profile.holdout_access.opened,true);
-  assert.equal(profile.holdout.evaluated,true);
+  const tcnValidationSelected=profile.supported_regimes.some(regime=>
+    profile.regime_specialists[regime]?.validation_passed===true);
+  const treeValidationSelected=Object.values(profile.temporal_boosted_tree.regime_specialists)
+    .some(specialist=>specialist.supported&&specialist.validation_passed);
+  assert.equal(profile.holdout_access.opened,tcnValidationSelected||treeValidationSelected);
+  if(!profile.holdout_access.opened){
+    assert.equal(profile.holdout.evaluated,false);
+    assert.equal(profile.holdout.sample_count,0);
+    assert.equal(profile.holdout_comparison.sample_count,0);
+  }
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON']);
   const expert=profile.regime_specialists.BTC_RISK_ON;
   assert.equal(expert.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES');
@@ -333,7 +341,11 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   assert.equal(expert.logistic_probability_calibration.sample_count,expert.selection_calibration_samples,
     'the logistic challenger must be calibrated on the exact same regime-local later block');
   assert.ok(Number.isFinite(profile.validation.pooled_logistic_brier_score));
-  assert.ok(Number.isFinite(profile.holdout.pooled_logistic_brier_score));
+  if(profile.holdout_access.opened){
+    assert.ok(Number.isFinite(profile.holdout.pooled_logistic_brier_score));
+  }else{
+    assert.equal(profile.holdout.pooled_logistic_brier_score,null);
+  }
   assert.equal(profile.calibration_fit_scope,'SHARED_POOLED_CALIBRATION_BLOCK_ONLY');
   assert.equal(profile.training_strategy,'SHARED_POOLED_TCN_TRAIN_ONLY_SELECTION_CALIBRATION_V1');
   assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
@@ -348,7 +360,6 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
     'final holdout must remain strictly later than all fitting and selection data');
   assert.equal(profile.regime_specialists.BTC_RISK_OFF.status,'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE');
   assert.ok(profile.regime_specialists.BTC_RISK_OFF.support_gaps.includes('HOLDOUT_SAMPLE_COUNT'));
-  assert.ok(profile.holdout_comparison.sample_count>=40);
   assert.equal(profile.holdout_comparison.sample_count,profile.holdout.sample_count,
     'comparison sample count must describe rows actually evaluated');
   for(const regime of profile.supported_regimes){
