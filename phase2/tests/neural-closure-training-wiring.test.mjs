@@ -43,7 +43,8 @@ test('trainer emits a reproducible manifest and scores only outer validation whi
   const contracts=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
   assert.match(trainer,/holdout_access_status:'LOCKED_NOT_SCORED'/);
   assert.match(trainer,/holdout_metrics_read:false/);
-  assert.ok(trainer.includes('const eventRows=[...split.validation];'));
+  assert.ok(trainer.includes('const eventRows=args.hurdleInnerOnly?[]:[...split.validation];'));
+  assert.match(trainer,/if\(!args\.hurdleInnerOnly\)\s*supports\.validation=assertMinimumClassSupport\('validation',split\.validation\)/);
   assert.match(trainer,/experiment_manifest:experimentManifest/);
   assert.ok(trainer.includes('experiment-manifest.json'));
   assert.ok(trainer.includes('node_version:process.version'));
@@ -210,8 +211,12 @@ test('fixed-SHA trainer keeps failed-inner TCN-LSTM diagnostic fits out of outer
     'the selector may retain a diagnostic fit for inner audit only');
   assert.match(trainer,/const selectedFit=selection\.selected_fit\?\?selection\.diagnostic_fit\?\?null/);
   assert.match(trainer,/const innerQualified=selection\.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY'[\s\S]*?calibrator\.fitted===true/);
-  assert.match(trainer,/if\(innerQualified&&selectedFit!==null&&calibrator\.fitted===true\)/,
-    'only an inner-qualified model with supported calibration may create an outer-scored artifact');
+  assert.match(trainer,/if\(!args\.hurdleInnerOnly&&innerQualified&&selectedFit!==null&&calibrator\.fitted===true\)/,
+    'the legacy TCN outer-scored artifact still requires full inner qualification and calibration');
+  assert.match(trainer,/if\(hurdleHeadsAvailable\)[\s\S]*?createHurdleV2Artifact\([\s\S]*?writeHurdleV2ArtifactAtomic\(/,
+    'the dual-head Hurdle V2 diagnostic artifact must export independently of the scientific gate');
+  assert.match(recurrent,/const stageTwoCandidates=stageOneQualified\.slice\(\)/,
+    'the best diagnostic fit must receive train-only Hurdle heads when stage one abstains');
   assert.match(trainer,/passed:innerQualified/);
   assert.match(trainer,/inner_selection_qualified:innerQualified/);
   assert.match(trainer,/diagnostic_only:!innerQualified/);
@@ -327,7 +332,7 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the TCN-LSTM research ablation must use the existing supported 6144-row training budget');
   assert.match(trainer,/max_training_samples:6144/,
     'the reported TCN-LSTM training budget must match the actual trainer configuration');
-  assert.match(temporal,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_TEMPORAL_LOGISTIC_CV_CLASSIFIER_AND_INDEPENDENT_RANK_SCORE_V6/,
+  assert.match(temporal,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_MATCHED_FULL_SEQUENCE_LOGISTIC_CV_OOF_CLASSIFIER_AND_INDEPENDENT_RANK_SCORE_V8/,
     'the active execution head must include the purged temporal-CV Logistic score plus neural classifier and ranking scores');
   assert.match(temporal,/LOGIT_CONTEXT_AUGMENTED/,
     'the score-conditioned head must be the default execution path');
@@ -347,6 +352,37 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'each pooled channel must also receive the train-only independent raw ranking score');
   assert.match(temporal,/POOLED_ONLY/,
     'the pooled-only head must be retained as a matched ablation control');
+  assert.match(temporal,/rankingScoreAdjustmentGrid:\[0,0\.5,1,2,4\]/,
+    'the contextual execution policy must select its rank-score adjustment on inner data only');
+  assert.match(temporal,/normalized_independent_return_rank_score/,
+    'the independent rank score must remain separate from classifier probabilities');
+  assert.match(temporal,/execution_ranking_score_adjustment_weight/,
+    'the selected rank adjustment must be frozen into inference and output provenance');
+  assert.match(temporal,/rankingScoreAdjustmentGrid:\[0,0\.5,1,2,4\]/);
+  assert.match(temporal,/minimumPositiveNetReturnProbabilityGrid:\[0,0\.45,0\.50,0\.55,0\.60\]/);
+  assert.match(temporal,/execution_minimum_positive_net_return_probability/);
+  assert.match(trainer,/minimumPositiveNetReturnProbabilities:contextPositiveProbabilityThresholds/);
+  assert.match(trainer,/minimum_positive_net_return_probability:contextPositiveProbabilityThresholds\[0\]/);
+  assert.match(trainer,/execution_minimum_positive_net_return_probability/);
+    const externalContracts=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+  assert.match(externalContracts,/EXTERNAL_EXECUTION_POSITIVE_RETURN_PROBABILITY_THRESHOLD_NOT_FROZEN/);
+  assert.match(temporal,/Number\(rankAdjustmentWeight\)\*normalizedRank/);
+  assert.match(temporal,/baseRiskAdjustedScores\[index\]>0/,
+    'rank adjustment must never make a non-positive base expected return eligible');
+  assert.match(temporal,/riskPenaltyWeightGrid=\[0\.01,0\.025,0\.05,0\.1/,
+    'inner risk policy must test lower positive downside penalties');
+  assert.match(trainer,/baseRiskAdjustedScores:contextBaseScores/);
+  assert.match(trainer,/rankingScoreAdjustmentWeights:contextRankWeights/);
+  assert.match(trainer,/baseRiskAdjustedScores:pooledBaseScores/);
+  assert.match(trainer,/baseRiskAdjustedScoresByPolicy/,
+    'outer bootstrap must use the same positive base-return gate');
+  assert.match(externalContracts,/baseGateEnabled/,
+    'outer execution scoring must enforce the independent positive base-return gate');
+  assert.match(temporal,/rank_adjusted_execution_selection_score/,
+    'outer validation must receive the frozen rank-adjusted ordering score');
+  assert.match(temporal,/execution_ranking_score_adjustment_weight/);
+  assert.match(trainer,/execution_risk_score_semantics:[\s\S]{0,600}RANK_ADJUSTMENT_ONLY_SORTS_ELIGIBLE_CANDIDATES_V2/,
+    'the exported TCN-LSTM artifact must describe the exact frozen rank-adjusted execution score');
   assert.match(temporal,/execution_head_context_ablation\?\.passed===true/,
     'inner qualification must require a matched execution-head ablation pass');
   assert.match(temporal,/splitTcnLstmTrainingRowsForExecutionHead/,
@@ -365,6 +401,10 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'execution heads must be skipped for candidates that fail inner Brier or independent ranking');
   assert.match(temporal,/item\.brier_improvement>requiredImprovement/);
   assert.match(temporal,/item\.pairwise_ranking_improvement>0/);
+  assert.match(temporal,/accuracy>50&&finite\(logisticAccuracy\)&&\s*accuracy>logisticAccuracy/,
+    'independent ranking must beat chance and the matched Logistic accuracy');
+  assert.match(temporal,/rankHead\.weight_l2_norm>1e-8/,
+    'a constant zero-weight rank head must not pass qualification');
   assert.match(temporal,/representation_out_of_sample:true/,
     'the fitted execution head must attest to out-of-sample representations');
   assert.match(temporal,/fitHurdleReturnHead/,
@@ -375,8 +415,12 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the selected return estimator must be frozen before outer validation');
   assert.match(trainer,/pooledOnlyExpectedNetReturnPct/,
     'the pooled-only outer comparator must use its own inner-selected return estimator');
-  assert.match(trainer,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_TEMPORAL_LOGISTIC_CV_CLASSIFIER_AND_RANKER_V5/,
-    'the report must publish the exact active V5 score-gated execution-head schema');
+  assert.match(trainer,/TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA/,
+    'the report must publish the exact execution-head schema exported by the inference module');
+  assert.match(trainer,/execution_head_input_feature_schema:\s*TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA/,
+    'the public artifact contract must reference the same schema used by model fitting and inference');
+  assert.doesNotMatch(trainer,/RANKER_V5/,
+    'the report must not mislabel the active independent rank-score V6 features as V5');
   assert.match(temporal,/RECENCY_WEIGHTED_COMPLETE_15M_DECISION_BUCKETS_V1/,
     'the recurrent fit budget must cover full inner-training chronology in complete decision buckets');
   assert.match(trainer,/training_sample_selection:selection\.training_sample_selection\?\?null/,
@@ -438,20 +482,19 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(temporal,/Math\.ceil\(baseEpochs\*1\.5\)/,
     'the third ensemble member must retain the 1.5x epoch profile');
 
-  // The bounded eight-candidate recurrent grid keeps the plain Brier anchor
-  // and seven Brier + shared-classifier ranking weights. Focal is excluded
-  // because the prior replay showed a Brier/ranking tradeoff.
-  assert.match(trainer,/4H_BRIER_BASE_LR0015_L2_0005_E12[\s\S]*?epochs:12/);
-  assert.match(trainer,/objective:'BRIER'/);
+  // The fixed-SHA replay showed shared classifier-ranking gradients
+  // improved pairwise loss but degraded Brier. The next grid keeps classifier
+  // training Brier-only, starts from zero residual, and sweeps regularization
+  // plus locked temporal dropout while the independent rank sidecar stays active.
   for(const name of [
-    '4H_BRIER_SHARED_RANK_W005_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W010_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W020_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W040_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W060_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W080_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W120_LR0015_E16'
-  ]) assert.ok(trainer.includes(name),'missing Brier + shared-ranking challenger '+name);
+    '4H_BRIER_RESIDUAL_BASE_LR0015_L2_0005_D000_E12','4H_BRIER_REG_LR0015_L2_005_D005_E12','4H_BRIER_REG_LR0010_L2_010_D010_E10','4H_BRIER_REG_LR00075_L2_020_D010_E10',
+    '4H_BRIER_REG_LR0010_L2_050_D015_E10','4H_BRIER_REG_LR0015_L2_020_D020_E08','4H_BRIER_REG_LR0020_L2_010_D015_E08','4H_BRIER_REG_LR00075_L2_050_D020_E08'
+  ]) assert.ok(trainer.includes(name),'missing Brier generalization candidate '+name);
+  assert.ok(trainer.includes("objective:'BRIER',rankingWeight:0"));
+  assert.ok(trainer.includes("l2:0.05,dropout:0.15"));
+  assert.ok(trainer.includes("l2:0.05,dropout:0.20"));
+  assert.ok(recurrent.includes("outputWeights: Array(hidden).fill(0)"),
+    'the residual classifier must start exactly at its frozen Logistic anchor');
   assert.match(recurrent,/config\.epochs\s*>\s*30/);
   assert.match(recurrent,/deriveTrainingClassWeights\(rows\.map\(row=>row\.target\)\)/);
   assert.match(recurrent,/FOCAL_ASYMMETRIC_BRIER/);
@@ -471,30 +514,33 @@ test('TCN-LSTM classifier Brier and independent ranking sweep stay within the se
   const candidateNames=[...candidateBlock[1].matchAll(/name:'([^']+)'/g)]
     .map(match=>match[1]);
   assert.equal(candidateNames.length,8,'grid must stay within the selector hard cap');
-  assert.ok(candidateNames.includes('4H_BRIER_BASE_LR0015_L2_0005_E12'));
-  for(const name of [
-    '4H_BRIER_SHARED_RANK_W005_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W010_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W020_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W040_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W060_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W080_LR0015_E16',
-    '4H_BRIER_SHARED_RANK_W120_LR0015_E16'
-  ]) assert.ok(candidateNames.includes(name),'missing Brier + shared-ranking candidate '+name);
-  for(const weight of ['0.005','0.01','0.02','0.04','0.06','0.08','0.12']){
-    assert.ok(trainer.includes('rankingWeight:'+weight),'missing combined ranking weight '+weight);
-  }
-  assert.equal((candidateBlock[1].match(/objective:'BRIER',rankingWeight:/g)||[]).length,7,
-    'all seven ranking candidates must retain the proper-scoring Brier objective');
-  assert.match(trainer,/rankingPairsPerTimestamp:12/,
-    'ranking supervision must use a broader bounded set of same-time return pairs');
+  assert.deepEqual(candidateNames,[
+    '4H_BRIER_RESIDUAL_BASE_LR0015_L2_0005_D000_E12','4H_BRIER_REG_LR0015_L2_005_D005_E12','4H_BRIER_REG_LR0010_L2_010_D010_E10','4H_BRIER_REG_LR00075_L2_020_D010_E10',
+    '4H_BRIER_REG_LR0010_L2_050_D015_E10','4H_BRIER_REG_LR0015_L2_020_D020_E08','4H_BRIER_REG_LR0020_L2_010_D015_E08','4H_BRIER_REG_LR00075_L2_050_D020_E08'
+  ]);
+  assert.equal((candidateBlock[1].match(/objective:'BRIER',rankingWeight:0/g)||[]).length,8,
+    'all eight candidates must train the probability head with pure Brier loss');
+  assert.doesNotMatch(candidateBlock[1],/rankingWeight:(?:0\.[1-9]|[1-9])/,
+    'shared return-ranking gradients must not contaminate this Brier generalization sweep');
+  assert.match(trainer,/rankingPairsPerTimestamp:16/,
+    'the independent return-ranker must use the full available training-only extreme-pair budget');
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.match(trainer,/minimumReturnWinRatePct:55/);
   assert.match(trainer,/rankingMinimumReturnGapPct:0\.50/);
-  const classifierProbabilityImplementation=recurrent.match(
-    /export function predictTcnLstmHybridProbability\([\s\S]*?\n}/
-  )?.[0]??'';
-  assert.ok(classifierProbabilityImplementation.includes('return sigmoid(forward.logit);'));
+  // Use source offsets rather than a brace-based regex: the function has a
+  // destructured options parameter whose closing brace precedes its body.
+  const classifierProbabilityStart=recurrent.indexOf(
+    'export function predictTcnLstmHybridProbability('
+  );
+  const classifierProbabilityReturn=recurrent.indexOf(
+    'return sigmoid(forward.logit);',classifierProbabilityStart
+  );
+  const classifierProbabilityImplementation=
+    classifierProbabilityStart>=0&&classifierProbabilityReturn>=classifierProbabilityStart
+      ?recurrent.slice(classifierProbabilityStart,
+        classifierProbabilityReturn+'return sigmoid(forward.logit);'.length)
+      :'';
+  assert.ok(classifierProbabilityImplementation.endsWith('return sigmoid(forward.logit);'));
   assert.doesNotMatch(classifierProbabilityImplementation,/ranking_residual_logit|blendWeight/,
     'the proper-scoring classifier probability must remain independent of ranking features');
   assert.match(recurrent,/export function predictTcnLstmHybridRankingScore[\s\S]*?return Number\(forward\.ranking_score\)/);
@@ -529,6 +575,7 @@ test('Logistic reference threshold and probability evaluation are strictly prede
 test('score-conditioned execution heads receive a matched pooled-only outer-validation ablation with separately frozen risk penalties',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   const recurrent=await readFile(lstmModuleUrl,'utf8');
+  const logistic=await readFile(new URL('../core/temporal-logistic-baseline.mjs',import.meta.url),'utf8');
   assert.match(trainer,/predictTcnLstmHybridExecutionHeads/);
   assert.match(trainer,/variant:'POOLED_ONLY'/);
   assert.match(trainer,/pooled_only_execution_risk_adjusted_score/);
@@ -543,10 +590,47 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
   assert.match(trainer,/score_conditioned_external_ablation:executionHeadExternalAblation/);
   assert.match(trainer,/externalLogisticExecutionContextProvider:\(modelTrainingRows,scoringRows\)/,
     'the main trainer must fit a separate Logistic context only after the recurrent pre-head training block is fixed');
+  assert.ok(trainer.includes('foldCount:9,purgeMs:86_400_000')&&
+    trainer.includes('initialTrainingFraction:0.15,validationFraction:0.09'),
+    'the execution-context Logistic must reserve later forward folds for OOF residual generation');
+  assert.ok(logistic.includes('const tuningFolds=folds.folds.slice(0,3)'),
+    'only the first three early folds may select Logistic hyperparameters');
+  assert.ok(logistic.includes('const oofBaselineFolds=folds.folds.slice(tuningFolds.length,-2)'),
+    'OOF residual scores must come from folds after hyperparameter selection and before the separate calibration folds');
+  assert.ok(logistic.includes('oof_baseline_generation_folds:oofBaselineFolds.length'));
   assert.match(trainer,/requireExternalLogisticSelectionBaseline:true/,
     'production inner selection must fail closed without the full ordered Logistic reference');
   assert.match(trainer,/raw_logit:probabilityLogit\(rawProbability\)/,
     'the external Logistic provider must expose its raw probability score separately from calibrated context');
+  assert.match(logistic,/const oofPredictionByIndex=new Map/,
+    'the Logistic trainer must expose raw purged expanding-fold OOF predictions');
+  assert.match(logistic,/maximum_training_label_resolved_at/,
+    'each OOF baseline score must carry the last time used to train its fold');
+  assert.match(logistic,/oof_prediction_coverage/,
+    'the Logistic report must disclose unscored warmup/tail rows');
+  assert.match(trainer,/const trainingPredictions=temporalLogisticContext\.oof_predictions\.map/,
+    'neural residual training must consume only the purged OOF Logistic predictions');
+  assert.match(trainer,/training_predictions_are_out_of_fold:true/,
+    'the external Logistic provider must explicitly attest OOF provenance');
+  assert.match(trainer,/training_predictions:trainingPredictions,/,
+    'the OOF prediction array must be returned under the provider contract key');
+  assert.doesNotMatch(trainer,/trainingPredictions=modelTrainingRows\.map/,
+    'in-sample Logistic predictions must never be used as neural training residuals');
+  assert.ok(recurrent.includes('provided.training_predictions_are_out_of_fold!==true'),
+    'the selector must reject non-OOF residual baseline scores');
+  assert.match(recurrent,/classifier_baseline_logit:prediction\.rawLogit/,
+    'the external raw Logistic logit must be attached to score rows as the classifier residual baseline');
+  assert.match(recurrent,/const selectionLogits = selectionRows\.map\(\(row,rowIndex\)/,
+    'the neural classifier must be scored from the same ordered Logistic baseline vector');
+  assert.match(recurrent,/baseLogit=baselineLogits\[rowIndex\]/);
+  assert.match(recurrent,/training_logits_are_purged_out_of_fold:requireExternalLogisticSelectionBaseline/,
+    'neural training residuals must be fitted only on strictly purged OOF baseline scores');
+  assert.match(recurrent,/selection_logits_from_final_train_only_refit:true/,
+    'inner-selection scores must use the final Logistic refit trained only on the earlier training block');
+  assert.match(recurrent,/minimumOofTrainingRows=Math\.max\(20,Math\.ceil\(modelTrainingRows\.length\*0\.50\)\)/,
+    'at least half of the pre-head model rows must have valid OOF baseline scores');
+  assert.match(recurrent,/resolveTcnLstmProfileClassifierBaselineLogit/,
+    'frozen full-sequence Logistic logits must also be reused at inference');
   assert.match(recurrent,/resolveTcnLstmInnerSelectionLogisticBaseline/,
     'the internal classifier gate must resolve a matched Logistic baseline distinct from the residual anchor');
   assert.match(recurrent,/external_logistic_raw_logit/,
@@ -571,6 +655,20 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
 });
 
 
+test('fixed-SHA manifest identifies the actual TCN-LSTM selection objective and hashes the exact serialized manifest bytes',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.ok(trainer.includes('objective_id:training.model_internal_diagnostics?.TCN_LSTM_HYBRID?.selection_scoring?.method??null,'),
+    'the manifest must bind the actual selected classifier/ranking objective identifier');
+  assert.ok(trainer.includes("const experimentManifestBytes=Buffer.from(JSON.stringify(experimentManifest,null,2)+'\\n','utf8');"),
+    'manifest hashing must use the exact pretty-printed UTF-8 bytes written to disk');
+  assert.ok(trainer.includes('const experimentManifestSha256=sha256(experimentManifestBytes);'),
+    'manifest digest must be computed from its serialized bytes');
+  assert.ok(trainer.includes('experiment_manifest_sha256:experimentManifestSha256,'),
+    'the report integrity block must publish the exact manifest digest');
+  assert.ok(trainer.includes("await atomicJson(join(dirname(outputPath),'experiment-manifest.json'),experimentManifest);"),
+    'the hashed manifest bytes must match the separately written manifest file');
+});
+
 test('TCN-LSTM never opens holdout automatically after external validation',async()=>{
   const recurrent=await readFile(lstmModuleUrl,'utf8');
   assert.match(recurrent,/HOLDOUT_LOCKED_PENDING_EXPLICIT_FINAL_PROTOCOL_AUTHORIZATION/);
@@ -587,7 +685,12 @@ test('neural candidates cannot open outer validation before passing their purged
   assert.match(trainer,/if\(temporalProfile\?\._research_fit&&v8Coverage\.complete&&v8PerformanceQualified\)/);
   assert.match(trainer,/if\(!qualificationPassed\)[\s\S]*?INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED[\s\S]*?return;/);
   assert.match(trainer,/if\(attentionInnerQualified&&[\s\S]*?missingAttentionRegimes\.length===0\)/);
-  assert.match(trainer,/if\(innerQualified&&selectedFit!==null&&calibrator\.fitted===true\)/);
+  assert.match(trainer,/if\(!args\.hurdleInnerOnly&&innerQualified&&selectedFit!==null&&calibrator\.fitted===true\)/);
+  assert.match(trainer,/if\(args\.hurdleInnerOnly\)[\s\S]*?HURDLE_V2_INNER_TRAINING_REPORT_V1[\s\S]*?outer_validation_replay_started:false/);
+  assert.match(trainer,/if\(!args\.hurdleInnerOnly\)\s*supports\.validation=assertMinimumClassSupport\('validation',split\.validation\)/,
+    'inner-only Hurdle training must not inspect outer-validation class labels');
+  assert.match(trainer,/const eventRows=args\.hurdleInnerOnly\?\[\]:\[\.\.\.split\.validation\]/,
+    'inner-only Hurdle training must not materialize outer scoring rows');
   assert.match(trainer,/INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED/);
   assert.match(trainer,/INNER_SELECTION_PROTOCOL_NOT_IMPLEMENTED_OUTER_VALIDATION_NOT_OPENED/);
   assert.doesNotMatch(trainer,/predictionsByModel\.HYBRID_TCN_ATTENTION\s*=/);

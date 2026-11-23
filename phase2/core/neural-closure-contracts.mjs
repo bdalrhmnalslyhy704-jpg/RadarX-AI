@@ -2332,7 +2332,9 @@ export function topKMatchedCountSignals(rows,scores,targetSelection){
  * identical outer-validation opportunities. Lambda is read-only here.
  */
 export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logisticProbabilities,{
-  riskPenaltyWeights,topKGrid=[1,2,3],roundTripCostBps=30,
+  riskPenaltyWeights,rankingScoreAdjustmentWeights=null,
+  baseRiskAdjustedScores=null,minimumPositiveNetReturnProbabilities=null,
+  topKGrid=[1,2,3],roundTripCostBps=30,
   minimumRiskAdjustedScore=null,abstentionPercentile=null
 }={}){
   if(!Array.isArray(rows)||!rows.length||
@@ -2343,15 +2345,40 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
     topKGrid.some(k=>!Number.isInteger(k)||k<1||k>100)||
     !finite(roundTripCostBps)||Number(roundTripCostBps)<0||Number(roundTripCostBps)>300)
     throw new TypeError('EXTERNAL_EXECUTION_RISK_TOP_K_INPUT_INVALID');
+  const baseGateEnabled=Array.isArray(baseRiskAdjustedScores);
+  const rankWeightsProvided=Array.isArray(rankingScoreAdjustmentWeights);
+  if((baseRiskAdjustedScores!==null&&!baseGateEnabled)||
+    (rankingScoreAdjustmentWeights!==null&&!rankWeightsProvided)||
+    baseGateEnabled!==rankWeightsProvided||
+    (baseGateEnabled&&(
+      baseRiskAdjustedScores.length!==rows.length||
+      rankingScoreAdjustmentWeights.length!==rows.length)))
+    throw new TypeError('EXTERNAL_EXECUTION_BASE_SCORE_GATE_ALIGNMENT_INVALID');
   if(rows.some((row,index)=>!row?.id||!row?.symbol||!finite(row?.at)||
     !finite(riskAdjustedScores[index])||
     !finite(logisticProbabilities[index])||Number(logisticProbabilities[index])<0||
     Number(logisticProbabilities[index])>1||
-    !finite(riskPenaltyWeights[index])||Number(riskPenaltyWeights[index])<0))
+    !finite(riskPenaltyWeights[index])||Number(riskPenaltyWeights[index])<0||
+    (baseGateEnabled&&(!finite(baseRiskAdjustedScores[index])||
+      !finite(rankingScoreAdjustmentWeights[index])||
+      Number(rankingScoreAdjustmentWeights[index])<0||
+      Number(rankingScoreAdjustmentWeights[index])>8))))
     throw new TypeError('EXTERNAL_EXECUTION_RISK_TOP_K_ROW_INVALID');
   const lambdas=[...new Set(riskPenaltyWeights.map(Number))];
   if(lambdas.length!==1)
     throw new TypeError('EXTERNAL_EXECUTION_RISK_LAMBDA_NOT_FROZEN');
+  const rankWeights=baseGateEnabled
+    ?[...new Set(rankingScoreAdjustmentWeights.map(Number))]:[];
+  if(baseGateEnabled&&rankWeights.length!==1)
+    throw new TypeError('EXTERNAL_EXECUTION_RANK_ADJUSTMENT_WEIGHT_NOT_FROZEN');
+  const positiveProbabilityThresholds=Array.isArray(minimumPositiveNetReturnProbabilities)
+    ?[...new Set(minimumPositiveNetReturnProbabilities.map(Number))]:[];
+  if(minimumPositiveNetReturnProbabilities!==null&&
+    (!Array.isArray(minimumPositiveNetReturnProbabilities)||
+      minimumPositiveNetReturnProbabilities.length!==rows.length||
+      minimumPositiveNetReturnProbabilities.some(value=>!finite(value)||value<0||value>1)||
+      positiveProbabilityThresholds.length!==1))
+    throw new TypeError('EXTERNAL_EXECUTION_POSITIVE_RETURN_PROBABILITY_THRESHOLD_NOT_FROZEN');
   if(new Set(rows.map(row=>String(row.id))).size!==rows.length)
     throw new TypeError('EXTERNAL_EXECUTION_RISK_TOP_K_DUPLICATE_ROW_ID');
   if(minimumRiskAdjustedScore!==null&&
@@ -2360,11 +2387,18 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
   if(abstentionPercentile!==null&&
     (!finite(abstentionPercentile)||Number(abstentionPercentile)<=0||Number(abstentionPercentile)>=1))
     throw new TypeError('EXTERNAL_EXECUTION_ABSTENTION_PERCENTILE_INVALID');
+  // A ranking adjustment cannot make a non-positive base monetary expectancy eligible.
+  const selectionScores=baseGateEnabled
+    ?riskAdjustedScores.map((score,index)=>
+      Number(baseRiskAdjustedScores[index])>0?Number(score):-1e9)
+    :riskAdjustedScores;
+  const frozenThreshold=minimumRiskAdjustedScore===null
+    ?(baseGateEnabled?0:null):Number(minimumRiskAdjustedScore);
   const trials=topKGrid.map(topK=>{
-    const neuralMask=minimumRiskAdjustedScore===null
-      ?topKRankingSignals(rows,riskAdjustedScores,topK)
-      :topKThresholdSignals(rows,riskAdjustedScores,topK,Number(minimumRiskAdjustedScore));
-    const logisticMask=minimumRiskAdjustedScore===null
+    const neuralMask=frozenThreshold===null
+      ?topKRankingSignals(rows,selectionScores,topK)
+      :topKThresholdSignals(rows,selectionScores,topK,frozenThreshold);
+    const logisticMask=frozenThreshold===null
       ?topKRankingSignals(rows,logisticProbabilities,topK)
       :topKMatchedCountSignals(rows,logisticProbabilities,neuralMask);
     const options={threshold:0.5,roundTripCostBps:Number(roundTripCostBps),
@@ -2382,8 +2416,12 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
       logistic_selected_count:logisticMask.signal_count,
       abstained_decision_group_count:neuralMask.abstained_decision_group_count??0,
       abstention_active:neuralMask.abstention_active===true,
-      minimum_risk_adjusted_score:minimumRiskAdjustedScore,
+      minimum_risk_adjusted_score:frozenThreshold,
       abstention_percentile:abstentionPercentile,
+      positive_base_risk_adjusted_candidate_count:baseGateEnabled
+        ?baseRiskAdjustedScores.filter(value=>Number(value)>0).length:null,
+      positive_base_risk_adjusted_gate_enforced:baseGateEnabled,
+      ranking_score_adjustment_weight:baseGateEnabled?rankWeights[0]:null,
       logistic_matched_candidate_signal_counts:
         logisticMask.signal_count===neuralMask.signal_count,
       logistic_matched_candidate_trade_counts:
@@ -2399,22 +2437,32 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
     };
   });
   return {
-    schema:'RADARX_TCN_LSTM_FROZEN_EXECUTION_RISK_EXTERNAL_VALIDATION_TOP_K_V1',
+    schema:'RADARX_TCN_LSTM_FROZEN_EXECUTION_RISK_EXTERNAL_VALIDATION_TOP_K_V2',
     status:'AVAILABLE',evaluation_partition:'OUTER_VALIDATION_ONLY',
-    score_source:'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
+    score_source:baseGateEnabled
+      ?'POSITIVE_BASE_RISK_ADJUSTED_NET_RETURN_GATE_THEN_FROZEN_RANK_ADJUSTED_SELECTION_SCORE_V2'
+      :'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
     risk_penalty_weight:lambdas[0],
+    ranking_score_adjustment_weight:baseGateEnabled?rankWeights[0]:null,
+    minimum_positive_net_return_probability:positiveProbabilityThresholds.length
+      ?positiveProbabilityThresholds[0]:null,
+    positive_return_probability_threshold_refitted_on_outer_validation:false,
+    base_risk_adjusted_return_gate_enforced:baseGateEnabled,
     baseline:'LOGISTIC_REGRESSION_SAME_TRAINING_PARTITION',
     ranking:'TOP_K_PER_IDENTICAL_CLOSED_15M_DECISION_TIMESTAMP',
     top_k_grid:[...topKGrid],opportunity_rows:rows.length,
     round_trip_cost_bps:Number(roundTripCostBps),
     frozen_abstention_policy:{
-      enabled:minimumRiskAdjustedScore!==null,
-      minimum_risk_adjusted_score:minimumRiskAdjustedScore,
+      enabled:frozenThreshold!==null,
+      minimum_risk_adjusted_score:frozenThreshold,
       percentile_selected_on_inner_selection:abstentionPercentile,
       source_partition:'INNER_SELECTION_ONLY',
       threshold_refitted_on_outer_validation:false,
-      strictly_positive_score_required:minimumRiskAdjustedScore!==null,
-      score_floor_rule:minimumRiskAdjustedScore===null?null:
+      strictly_positive_score_required:frozenThreshold!==null,
+      base_expected_net_return_after_risk_must_be_positive:baseGateEnabled,
+      minimum_positive_net_return_probability:positiveProbabilityThresholds.length
+        ?positiveProbabilityThresholds[0]:0,
+      score_floor_rule:frozenThreshold===null?null:
         'INNER_SELECTION_QUANTILE_CLAMPED_AT_ZERO_WITH_STRICT_GREATER_THAN',
       baseline_signal_counts_matched:trials.every(row=>
         row.logistic_matched_candidate_signal_counts===true),
@@ -2423,6 +2471,7 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
     },
     portfolio_policy:NEURAL_CLOSURE_PORTFOLIO_POLICY,
     lambda_refitted_on_outer_validation:false,
+    rank_adjustment_weight_refitted_on_outer_validation:false,
     outer_validation_used_for_model_fit_or_selection:false,
     holdout_rows_or_scores_used:false,
     thresholds_or_lambda_tuned_on_outer_validation:false,
@@ -2443,6 +2492,7 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
 export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
   executionScoresByPolicy={},
   executionPolicyConfigurations={},
+  baseRiskAdjustedScoresByPolicy={},
   topKGrid=[1,2,3],
   roundTripCostBps=30,
   repetitions=250,
@@ -2503,6 +2553,20 @@ export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
     const config=executionPolicyConfigurations[name]??{};
     if(config.minimum_score!==undefined&&!finite(config.minimum_score))
       return unavailable('BOOTSTRAP_EXECUTION_POLICY_THRESHOLD_INVALID',{policy:name});
+    if(config.minimum_positive_net_return_probability!==undefined&&
+      (!finite(config.minimum_positive_net_return_probability)||
+        config.minimum_positive_net_return_probability<0||
+        config.minimum_positive_net_return_probability>1))
+      return unavailable('BOOTSTRAP_POSITIVE_RETURN_PROBABILITY_THRESHOLD_INVALID',{policy:name});
+    if(config.require_positive_base_score!==undefined&&
+      typeof config.require_positive_base_score!=='boolean')
+      return unavailable('BOOTSTRAP_EXECUTION_BASE_GATE_CONFIGURATION_INVALID',{policy:name});
+    if(config.require_positive_base_score===true){
+      const baseScores=baseRiskAdjustedScoresByPolicy?.[name];
+      if(!Array.isArray(baseScores)||baseScores.length!==rows.length||
+        baseScores.some(value=>!finite(value)))
+        return unavailable('BOOTSTRAP_EXECUTION_BASE_SCORE_ALIGNMENT_INVALID',{policy:name});
+    }
     if(config.match_trade_counts_with!==undefined&&
       (!policyNames.includes(config.match_trade_counts_with)||
         config.match_trade_counts_with===name))
@@ -2538,8 +2602,16 @@ export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
       for(const [policyName,scores] of Object.entries(executionScoresByPolicy)){
         const config=executionPolicyConfigurations[policyName]??{};
         if(config.match_trade_counts_with)continue;
-        const detail=topKThresholdSignals(rows,scores,topK,
-          config.minimum_score===undefined?null:Number(config.minimum_score));
+        const baseScores=config.require_positive_base_score===true
+          ?baseRiskAdjustedScoresByPolicy[policyName]:null;
+        const selectionScores=baseScores
+          ?scores.map((score,index)=>Number(baseScores[index])>0?score:-1e9)
+          :scores;
+        const minimumScore=config.minimum_score===undefined
+          ?(baseScores?0:null):Number(config.minimum_score);
+        const detail=minimumScore===null
+          ?topKRankingSignals(rows,selectionScores,topK)
+          :topKThresholdSignals(rows,selectionScores,topK,minimumScore);
         selectionDetails[policyName]=detail;
         selectedMasks[policyName+'|'+topK]=detail.probabilities;
       }
@@ -2776,6 +2848,9 @@ export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
       policy_configurations:Object.fromEntries(policyNames.map(name=>[
         name,{...(executionPolicyConfigurations[name]??{})}
       ])),
+      positive_base_return_gate_policies:policyNames.filter(name=>
+        executionPolicyConfigurations[name]?.require_positive_base_score===true),
+      base_risk_adjusted_scores_are_never_rank_adjusted:true,
       selective_policies_use_inner_selection_thresholds_only:true,
       matched_comparator_trade_counts_by_decision_bucket:true,
       round_trip_cost_bps:Number(roundTripCostBps),

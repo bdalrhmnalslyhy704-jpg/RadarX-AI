@@ -35,6 +35,7 @@ import {
 } from '../core/temporal-neural-brain.mjs';
 import {
   TCN_LSTM_HYBRID_SCHEMA,TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS,TCN_LSTM_HIDDEN,
+  TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
   buildTcnLstmFlattenedFeatures,selectTcnLstmHybridHyperparameters,fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
   predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability,
@@ -54,6 +55,10 @@ import {
   createVersionedModelArtifact,verifyVersionedModelArtifact,
   attachResearchLineageToModelArtifact
 } from '../core/model-artifact-guardian.mjs';
+import {
+  createHurdleV2Artifact,writeHurdleV2ArtifactAtomic,
+  HURDLE_V2_OBJECTIVE
+} from '../core/hurdle-v2-artifact-contract.mjs';
 import {
   fitTunedTemporalLogisticBaseline,predictTemporalLogisticProbability,
   predictCrossFittedCalibratedTemporalLogisticProbability,
@@ -85,10 +90,12 @@ function argsMap(argv){
   const args={input:'artifacts/neural-closure/dataset.json',
     output:'reports/neural-closure/fixed-sha-benchmark.json',
     epochs:8,denseEpochs:36,minimumHoldoutTrades:100,
-    minimumWinRatePct:55,maximumDrawdownPct:8,roundTripCostBps:30};
+    minimumWinRatePct:55,maximumDrawdownPct:8,roundTripCostBps:30,
+    hurdleInnerOnly:false};
   for(let index=2;index<argv.length;index++){
     const token=argv[index];
     if(!token.startsWith('--'))throw new Error('UNKNOWN_ARGUMENT:'+token);
+    if(token==='--hurdleInnerOnly'){args.hurdleInnerOnly=true;continue;}
     const value=argv[index+1];
     if(value===undefined||value.startsWith('--'))throw new Error('ARGUMENT_VALUE_MISSING:'+token);
     const key=token.slice(2);
@@ -351,13 +358,18 @@ async function main(){
     throw new Error('TEMPORAL_SEQUENCE_CHANNEL_19_MUST_BE_BTC_TREND_RETURN_12BAR');
   const split=splitFourHourRows(rows);
   const supports={
-    train:assertMinimumClassSupport('train',split.train),
-    validation:assertMinimumClassSupport('validation',split.validation)
+    train:assertMinimumClassSupport('train',split.train)
   };
-  // The untouched holdout is present only as a row-count/integrity boundary.
-  // No holdout labels, features, predictions, returns or metrics are consumed.
-  const eventRows=[...split.validation];
-  if(!eventRows.length)throw new Error('SHARED_EXTERNAL_SCORING_ROWS_EMPTY');
+  // Inner-only Hurdle training must not inspect outer-validation labels or
+  // generate outer predictions. In normal benchmark mode, class support is
+  // checked before the external scoring phase as in the frozen protocol.
+  if(!args.hurdleInnerOnly)
+    supports.validation=assertMinimumClassSupport('validation',split.validation);
+  // The untouched holdout remains a row-count/integrity boundary only. Inner
+  // mode does not even copy outer-validation rows into its scoring envelope.
+  const eventRows=args.hurdleInnerOnly?[]:[...split.validation];
+  if(!args.hurdleInnerOnly&&!eventRows.length)
+    throw new Error('SHARED_EXTERNAL_SCORING_ROWS_EMPTY');
   const training={
     model_source_commit_sha:sourceCommitSha,
     dataset_source_commit_sha:datasetSourceCommitSha,
@@ -378,11 +390,12 @@ async function main(){
   const modelArtifactsByModel={};
   const trainingArtifacts={};
   const unavailable={};
+  let hurdleV2ExportStatus=null;
   const logisticTrainingVectors=split.train.map(row=>
     buildTcnLstmFlattenedFeatures(row.temporal_sequence));
   const fixedLogisticFit=fitLogisticBaseline(split.train);
-  const fixedLogisticValidationProbabilities=split.validation.map(row=>
-    predictLogistic(row.features,fixedLogisticFit));
+  const fixedLogisticValidationProbabilities=args.hurdleInnerOnly?[]:
+    split.validation.map(row=>predictLogistic(row.features,fixedLogisticFit));
   const logisticTuning=fitTunedTemporalLogisticBaseline(
     split.train,logisticTrainingVectors,{
       foldCount:5,purgeMs:86_400_000,
@@ -403,14 +416,12 @@ async function main(){
         })
     });
   const logisticFit=logisticTuning.model;
-  const rawTunedLogisticValidationProbabilities=split.validation.map(row=>
-    predictTemporalLogisticProbability(
-      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
-    ));
-  const calibratedTunedLogisticValidationProbabilities=split.validation.map(row=>
-    predictCrossFittedCalibratedTemporalLogisticProbability(
-      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
-    ));
+  const rawTunedLogisticValidationProbabilities=args.hurdleInnerOnly?[]:
+    split.validation.map(row=>predictTemporalLogisticProbability(
+      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit));
+  const calibratedTunedLogisticValidationProbabilities=args.hurdleInnerOnly?[]:
+    split.validation.map(row=>predictCrossFittedCalibratedTemporalLogisticProbability(
+      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit));
   const logisticArtifact=makeArtifact({
     name:'RADARX_LOGISTIC_TCN_LSTM_FULL_ORDERED_SEQUENCE_BASELINE',
     family:'LOGISTIC_REGRESSION',version:'FULL_ORDERED_TEMPORAL_SEQUENCE_696_V1',
@@ -444,15 +455,15 @@ async function main(){
     fit_partition:'FIXED_SHA_OUTER_TRAIN_ONLY',
     training_rows:split.train.length
   };
-  const fixedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
-    fixedLogisticValidationProbabilities,split.validation.map(row=>row.target)
-  );
-  const rawTunedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
-    rawTunedLogisticValidationProbabilities,split.validation.map(row=>row.target)
-  );
-  const calibratedTunedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
-    calibratedTunedLogisticValidationProbabilities,split.validation.map(row=>row.target)
-  );
+  const fixedLogisticValidationMetrics=args.hurdleInnerOnly?null:
+    evaluateBinaryProbabilityMetrics(fixedLogisticValidationProbabilities,
+      split.validation.map(row=>row.target));
+  const rawTunedLogisticValidationMetrics=args.hurdleInnerOnly?null:
+    evaluateBinaryProbabilityMetrics(rawTunedLogisticValidationProbabilities,
+      split.validation.map(row=>row.target));
+  const calibratedTunedLogisticValidationMetrics=args.hurdleInnerOnly?null:
+    evaluateBinaryProbabilityMetrics(calibratedTunedLogisticValidationProbabilities,
+      split.validation.map(row=>row.target));
   training.logistic_baseline_temporal_cv={
     ...logisticTuning.report,
     feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
@@ -460,8 +471,16 @@ async function main(){
     feature_transform:'24X29_ROW_MAJOR_FLATTENED_CLOSED_SEQUENCE',
     feature_source:'SAME_CLOSED_24X29_TEMPORAL_SEQUENCE_AS_TCN_LSTM'
   };
-  training.logistic_baseline_comparison={
-    schema:'RADARX_FIXED_VS_TUNED_LOGISTIC_OUTER_VALIDATION_DIAGNOSTIC_V2',
+  training.logistic_baseline_comparison=args.hurdleInnerOnly?{
+    schema:'RADARX_TUNED_LOGISTIC_INNER_CV_ONLY_V1',
+    status:'OUTER_VALIDATION_NOT_SCORED_IN_HURDLE_INNER_ONLY_MODE',
+    feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
+    cv_status:logisticTuning.report.status,
+    fold_count:logisticTuning.report.fold_count,
+    selected_configuration:logisticTuning.report.selected_configuration,
+    outer_validation_rows_scored:0,holdout_used:false
+  }:{
+
     primary_promotion_baseline:{
       feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
       feature_count:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length,
@@ -497,7 +516,7 @@ async function main(){
     outer_validation_used_for_threshold_selection:false,
     holdout_used:false
   };
-  const logisticRawPredictionRows=predictionRows(eventRows,
+  const logisticRawPredictionRows=args.hurdleInnerOnly?[]:predictionRows(eventRows,
     row=>predictTemporalLogisticProbability(
       buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
     ),{
@@ -1382,7 +1401,10 @@ async function main(){
           minimumReturnWinRatePct:55,
           rankingScoreWeight:0.01,
           rankingMinimumReturnGapPct:0.50,
-          rankingPairsPerTimestamp:12,
+          // Use every available top-four versus bottom-four extreme comparison per timestamp.
+          // This raises the prior 8-pair budget to the complete 16-pair set where available.
+          // The classifier remains pure Brier; ranking scores stay in their own sidecar.
+          rankingPairsPerTimestamp:16,
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
@@ -1401,8 +1423,8 @@ async function main(){
             const temporalLogisticContext=fitTunedTemporalLogisticBaseline(
               modelTrainingRows,
               modelTrainingRows.map(row=>row.logistic_feature_vector),{
-                foldCount:5,purgeMs:86_400_000,
-                initialTrainingFraction:0.32,validationFraction:0.12,
+                foldCount:9,purgeMs:86_400_000,
+                initialTrainingFraction:0.15,validationFraction:0.09,
                 minimumTrainingRows:100,minimumValidationRows:50,minimumClassCount:5,
                 candidateGrid:[
                   {l2:0.001,learningRate:0.01},{l2:0.01,learningRate:0.01},
@@ -1412,6 +1434,17 @@ async function main(){
                 ],
                 maxEpochs:160,seed:22429
               });
+            // Train-time residuals use raw purged expanding-fold OOF scores.
+            // Rows without a valid forward-fold prediction are deliberately
+            // excluded from the neural residual fit rather than assigned an
+            // in-sample score from the final Logistic refit.
+            const trainingPredictions=temporalLogisticContext.oof_predictions.map(item=>({
+              id:String(item.id),at:Number(item.at),
+              raw_logit:Number(item.raw_logit),
+              oof_fold:Number(item.fold),
+              maximum_training_label_resolved_at:Number(item.maximum_training_label_resolved_at),
+              source_partition:item.source_partition
+            }));
             const predictions=scoringRows.map(row=>{
               const rawProbability=predictTemporalLogisticProbability(
                 row.logistic_feature_vector,temporalLogisticContext.model
@@ -1430,30 +1463,33 @@ async function main(){
               report:temporalLogisticContext.report,
               feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
               feature_schema_names:[...LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES],
+              training_predictions:trainingPredictions,
+              training_predictions_are_out_of_fold:true,
+              training_prediction_coverage:temporalLogisticContext.oof_prediction_coverage,
               predictions
             };
           },
           candidates:[
-            // Keep the proper-scoring Brier objective fixed while sweeping a
-            // wider shared-classifier ranking-loss range. The previous Focal
-            // sweep improved the sidecar rank score but degraded inner Brier;
-            // this grid tests joint probability quality and return ordering.
-            {name:'4H_BRIER_BASE_LR0015_L2_0005_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
-              objective:'BRIER'},
-            {name:'4H_BRIER_SHARED_RANK_W005_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.005},
-            {name:'4H_BRIER_SHARED_RANK_W010_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.01},
-            {name:'4H_BRIER_SHARED_RANK_W020_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.02},
-            {name:'4H_BRIER_SHARED_RANK_W040_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.04},
-            {name:'4H_BRIER_SHARED_RANK_W060_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.06},
-            {name:'4H_BRIER_SHARED_RANK_W080_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.08},
-            {name:'4H_BRIER_SHARED_RANK_W120_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.12}
+            // The previous fixed-SHA run showed that shared classifier-ranking
+            // gradients improved pairwise rank loss but consistently degraded
+            // Brier. Keep return ranking in its independent sidecar and use this
+            // grid to search for a better-generalizing Brier residual instead.
+            {name:'4H_BRIER_RESIDUAL_BASE_LR0015_L2_0005_D000_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR0015_L2_005_D005_E12',learningRate:0.0015,l2:0.005,dropout:0.05,epochs:12,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR0010_L2_010_D010_E10',learningRate:0.0010,l2:0.01,dropout:0.10,epochs:10,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR00075_L2_020_D010_E10',learningRate:0.00075,l2:0.02,dropout:0.10,epochs:10,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR0010_L2_050_D015_E10',learningRate:0.0010,l2:0.05,dropout:0.15,epochs:10,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR0015_L2_020_D020_E08',learningRate:0.0015,l2:0.02,dropout:0.20,epochs:8,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR0020_L2_010_D015_E08',learningRate:0.0020,l2:0.01,dropout:0.15,epochs:8,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR00075_L2_050_D020_E08',learningRate:0.00075,l2:0.05,dropout:0.20,epochs:8,
+              objective:'BRIER',rankingWeight:0}
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
@@ -1465,6 +1501,68 @@ async function main(){
         ):{fitted:false,reason:'INNER_SELECTION_DID_NOT_QUALIFY'};
         const innerQualified=selection.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY'&&
           selectedFit!==null&&calibrator.fitted===true;
+        const hurdleHeadsAvailable=selectedFit?.model?.executionRegressionHeadsFitted===true&&
+          selectedFit?.model?.executionHeadInputFeatureSchema===TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA&&
+          selectedFit?.model?.executionHurdleReturnHeads?.LOGIT_CONTEXT_AUGMENTED?.fitted===true&&
+          selectedFit?.model?.executionHurdleReturnHeads?.POOLED_ONLY?.fitted===true&&
+          selectedFit?.model?.executionHurdleReturnHeads?.LOGIT_CONTEXT_AUGMENTED?.probability_calibration?.fitted===true&&
+          selectedFit?.model?.executionHurdleReturnHeads?.POOLED_ONLY?.probability_calibration?.fitted===true;
+        if(hurdleHeadsAvailable){
+          const hurdleArtifact=createHurdleV2Artifact({
+            fit:selectedFit,selection,
+            datasetSha256:datasetSha,inputFileSha256,
+            datasetSourceCommitSha,datasetRowCount:rows.length,
+            targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+            targetSemantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+            splitDefinition:{
+              schema:split.schema,purge_ms:split.purge_ms,
+              counts:{train:split.train.length,validation:split.validation.length,
+                holdout:split.holdout.length},
+              boundaries:split.boundaries
+            },
+            codeCommitSha:sourceCommitSha,
+            roundTripCostBps:args.roundTripCostBps,
+            randomSeed:22429,innerQualified,
+            objectiveId:HURDLE_V2_OBJECTIVE,
+            selectionObjectiveId:selection.selection_scoring?.method??
+              'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6'
+          });
+          const exportResult=await writeHurdleV2ArtifactAtomic(
+            join(dirname(outputPath),'model-artifacts'),hurdleArtifact
+          );
+          hurdleV2ExportStatus={
+            ...exportResult,inner_qualified:innerQualified,
+            qualification_status:innerQualified
+              ?'INNER_QUALIFIED_FOR_OUTER_REPLAY':'NOT_QUALIFIED',
+            selection_status:selection.status,
+            execution_ablation:selection.execution_head_context_ablation??selection.execution_head_context_ablation_qualification?.result??null,
+            selection_scoring:selection.selection_scoring??null
+          };
+          trainingArtifacts.HURDLE_V2={
+            artifact_content_hash:exportResult.artifact_content_hash,
+            artifact_manifest_hash:exportResult.artifact_manifest_hash,
+            artifact_path:exportResult.artifact_path,
+            manifest_path:exportResult.manifest_path,
+            training_status:'TRAINED',
+            evaluation_status:innerQualified?'INNER_QUALIFIED':'NOT_QUALIFIED',
+            contextual_head_present:true,pooled_head_present:true,
+            reload_status:'FRESH_PROCESS_RELOAD_VERIFIED',
+            inner_qualification_status:selection.status,
+            promotion_status:'NOT_APPROVED'
+          };
+          training.model_internal_diagnostics.HURDLE_V2={
+            ...trainingArtifacts.HURDLE_V2,
+            context_ablation:selection.execution_head_context_ablation??selection.execution_head_context_ablation_qualification?.result??null,
+            selection_scoring:selection.selection_scoring??null,
+            holdout_values_used:false
+          };
+        }else{
+          hurdleV2ExportStatus={
+            status:'HURDLE_V2_DUAL_HEAD_TRAINING_UNAVAILABLE',
+            reason:'DIAGNOSTIC_FIT_DID_NOT_PRODUCE_BOTH_FITTED_HURDLE_HEADS',
+            inner_qualified:false,holdout_values_used:false
+          };
+        }
         training.model_internal_diagnostics.TCN_LSTM_HYBRID={
           status:innerQualified?'INNER_SELECTION_AND_CALIBRATION_QUALIFIED':
             selection.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY'
@@ -1505,7 +1603,7 @@ async function main(){
               :'FOUR_HOUR_LSTM_CALIBRATION_SUPPORT_NOT_MET',
           diagnostic_only:!innerQualified
         };
-        if(innerQualified&&selectedFit!==null&&calibrator.fitted===true){
+        if(!args.hurdleInnerOnly&&innerQualified&&selectedFit!==null&&calibrator.fitted===true){
           const artifact=makeArtifact({
             name:'RADARX_TCN_LSTM_HYBRID_FIRST_TOUCH_4H',
             family:'TCN_LSTM_HYBRID',version:'TCN_LSTM_ATTENTION_FIRST_TOUCH_4H_V2',
@@ -1521,7 +1619,20 @@ async function main(){
               execution_logistic_context_metadata:
                 selectedFit.execution_logistic_context_metadata??null,
               execution_risk_policy:selectedFit.execution_risk_policy??null,
-              execution_risk_score_semantics:'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
+              execution_ranking_score_adjustment_weight:
+                Number(selectedFit.execution_ranking_score_adjustment_weight??0),
+              execution_minimum_positive_net_return_probability:
+                Number(selectedFit.execution_minimum_positive_net_return_probability??0),
+              pooled_only_execution_ranking_score_adjustment_weight:
+                Number(selectedFit.pooled_only_execution_ranking_score_adjustment_weight??0),
+              pooled_only_execution_minimum_positive_net_return_probability:
+                Number(selectedFit.pooled_only_execution_minimum_positive_net_return_probability??0),
+              execution_risk_score_semantics:
+                Number(selectedFit.execution_ranking_score_adjustment_weight??0)>0
+                  ?'POSITIVE_BASE_RISK_ADJUSTED_RETURN_REQUIRED; RANK_ADJUSTMENT_ONLY_SORTS_ELIGIBLE_CANDIDATES_V2'
+                  :selectedFit.execution_return_estimator==='HURDLE_EXPECTED_VALUE'
+                    ?'HURDLE_EXPECTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK'
+                    :'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
               target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
               outcome_horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
               fit_partition:'FIXED_SHA_OUTER_TRAIN_INTERNAL_TRAIN_ONLY'
@@ -1603,9 +1714,12 @@ async function main(){
               pooledOnlyReturnEstimator==='HURDLE_EXPECTED_VALUE'
                 ?pooledOnlyExecution.predicted_hurdle_net_return_pct
                 :pooledOnlyExecution.predicted_net_return_pct;
+            const pooledOnlyRankAdjustmentWeight=0;
             const pooledOnlyRiskAdjustedScore=
               pooledOnlyExpectedNetReturnPct-
-              pooledOnlyRiskPenaltyWeight*pooledOnlyExecution.predicted_downside_risk_pct;
+              pooledOnlyRiskPenaltyWeight*pooledOnlyExecution.predicted_downside_risk_pct+
+              pooledOnlyRankAdjustmentWeight*
+                Number(pooledOnlyExecution.normalized_independent_return_rank_score??0);
             if(!finite(pooledOnlyRiskAdjustedScore)||
               !finite(pooledOnlyExpectedNetReturnPct)||
               !finite(pooledOnlyExecution.predicted_downside_risk_pct))
@@ -1640,7 +1754,24 @@ async function main(){
               execution_return_estimator:executionScore.return_estimator,
               predicted_downside_risk_pct:Number(executionScore.predicted_downside_risk_pct),
               execution_risk_penalty_weight:Number(executionScore.risk_penalty_weight),
-              execution_risk_adjusted_score:Number(executionScore.risk_adjusted_net_return_score),
+              execution_ranking_score_adjustment_weight:
+                Number(executionScore.ranking_score_adjustment_weight),
+              execution_minimum_positive_net_return_probability:
+                Number(executionScore.minimum_positive_net_return_probability),
+              predicted_positive_net_return_probability:
+                Number(executionScore.predicted_positive_net_return_probability),
+              positive_return_probability_eligible:
+                executionScore.positive_return_probability_eligible===true,
+              normalized_independent_return_rank_score:
+                Number(executionScore.normalized_independent_return_rank_score),
+              execution_base_risk_adjusted_expected_net_return_pct:
+                Number(executionScore.base_risk_adjusted_expected_net_return_pct),
+              execution_base_risk_adjusted_return_positive:
+                executionScore.base_risk_adjusted_return_positive===true,
+              execution_rank_adjusted_selection_score:
+                Number(executionScore.rank_adjusted_execution_selection_score),
+              execution_risk_adjusted_score:
+                Number(executionScore.rank_adjusted_execution_selection_score),
               execution_risk_abstention_threshold:Number(contextRiskPolicy.selected_minimum_risk_adjusted_score),
               execution_risk_abstention_percentile:Number(contextRiskPolicy.selected_abstention_percentile),
               execution_risk_abstention_source_partition:'INNER_SELECTION_ONLY',
@@ -1654,8 +1785,13 @@ async function main(){
                 pooledOnlyExecution.predicted_positive_net_return_probability,
               pooled_only_execution_return_estimator:pooledOnlyReturnEstimator,
               pooled_only_predicted_downside_risk_pct:Number(pooledOnlyExecution.predicted_downside_risk_pct),
+              pooled_only_execution_base_risk_adjusted_expected_net_return_pct:
+                Number(pooledOnlyRiskAdjustedScore),
               pooled_only_execution_risk_adjusted_score:Number(pooledOnlyRiskAdjustedScore),
               pooled_only_execution_risk_penalty_weight:Number(pooledOnlyRiskPenaltyWeight),
+              pooled_only_execution_ranking_score_adjustment_weight:Number(pooledOnlyRankAdjustmentWeight),
+              pooled_only_execution_minimum_positive_net_return_probability:
+                Number(pooledOnlyExecution.minimum_positive_net_return_probability??0),
               pooled_only_execution_risk_abstention_threshold:Number(
                 pooledOnlyRiskPolicy.selected_minimum_risk_adjusted_score
               ),
@@ -1700,7 +1836,7 @@ async function main(){
             execution_head_context_ablation:selection.execution_head_context_ablation_qualification?.result??null,
             execution_head_context_ablation_required_for_inner_qualification:true,
             execution_head_input_feature_schema:
-              'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_TEMPORAL_LOGISTIC_CV_CLASSIFIER_AND_RANKER_V5',
+              TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
           execution_logistic_context:selection.execution_logistic_context??null,
             ranking_head_schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
             ranking_head_parameters:TCN_LSTM_HIDDEN,
@@ -1724,11 +1860,13 @@ async function main(){
           };
         }else{
           unavailable.TCN_LSTM_HYBRID={
-            reason:!innerQualified
-              ?'INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED'
-              :selectedFit===null
-                ?'NO_SELECTED_OR_DIAGNOSTIC_TCN_LSTM_FIT'
-                :'TCN_LSTM_INTERNAL_CALIBRATION_SUPPORT_NOT_MET',
+            reason:args.hurdleInnerOnly
+              ?'HURDLE_INNER_ONLY_MODE_OUTER_VALIDATION_SCORING_SUPPRESSED'
+              :!innerQualified
+                ?'INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED'
+                :selectedFit===null
+                  ?'NO_SELECTED_OR_DIAGNOSTIC_TCN_LSTM_FIT'
+                  :'TCN_LSTM_INTERNAL_CALIBRATION_SUPPORT_NOT_MET',
             inner_qualification_passed:innerQualified,
             outer_validation_opened:false,
             selection_status:selection.status,
@@ -1749,6 +1887,92 @@ async function main(){
       status:'TRAINING_OR_ARTIFACT_FAILED_CLOSED',
       reason:String(error?.message||error)
     };
+  }
+
+  if(args.hurdleInnerOnly){
+    const innerOnlyReport={
+      schema:'RADARX_BUILD224_HURDLE_V2_INNER_TRAINING_REPORT_V1',
+      status:hurdleV2ExportStatus?.artifact_path
+        ?(hurdleV2ExportStatus.inner_qualified
+          ?'INNER_QUALIFIED_FOR_OUTER_REPLAY':'INNER_NOT_QUALIFIED_RETAIN_LOGISTIC')
+        :'HURDLE_V2_TRAINING_OR_EXPORT_FAILED',
+      code_commit_sha:sourceCommitSha,
+      dataset_sha256:datasetSha,input_file_sha256:inputFileSha256,
+      dataset_source_commit_sha:datasetSourceCommitSha,dataset_row_count:rows.length,
+      target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+      target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+      cost_model_id:NEURAL_CLOSURE_COST_MODEL_ID,round_trip_cost_bps:args.roundTripCostBps,
+      split_id:split.schema,split_counts:{train:split.train.length,
+        validation:split.validation.length,holdout:split.holdout.length},
+      hurdle_v2:hurdleV2ExportStatus,
+      tcn_lstm_inner_diagnostics:training.model_internal_diagnostics?.TCN_LSTM_HYBRID??null,
+      logistic_baseline_cv:logisticTuning.report??null,
+      holdout:{status:'LOCKED',opened:false,predictions_generated:false,
+        metrics_read:false,rows_included_in_scored_predictions:0},
+      paper_trading:true,real_order_execution:false,
+      outer_validation_replay_started:false,holdout_values_used:false
+    };
+    await atomicJson(outputPath,innerOnlyReport);
+    const innerDiagnostic=innerOnlyReport.tcn_lstm_inner_diagnostics??{};
+    const executionAblation=innerOnlyReport.hurdle_v2?.execution_ablation??{};
+    const candidateSummary=(innerDiagnostic.candidates??[]).map(candidate=>({
+      name:candidate.name??null,
+      selection_brier:candidate.selection_brier??null,
+      brier_improvement:candidate.brier_improvement??null,
+      pairwise_ranking_improvement:candidate.pairwise_ranking_improvement??null,
+      independent_ranking_signal_passed:
+        candidate.independent_ranking_signal_passed??null,
+      execution_head_context_ablation_passed:
+        candidate.execution_head_context_ablation_passed??null,
+      passed_inner_margin:candidate.passed_inner_margin??null
+    }));
+    console.log(JSON.stringify({
+      schema:innerOnlyReport.schema,
+      status:innerOnlyReport.status,
+      code_commit_sha:innerOnlyReport.code_commit_sha,
+      dataset:{
+        sha256:innerOnlyReport.dataset_sha256,
+        input_file_sha256:innerOnlyReport.input_file_sha256,
+        source_commit_sha:innerOnlyReport.dataset_source_commit_sha,
+        rows:innerOnlyReport.dataset_row_count
+      },
+      split_id:innerOnlyReport.split_id,
+      split_counts:innerOnlyReport.split_counts,
+      hurdle_v2:{
+        qualification_status:innerOnlyReport.hurdle_v2?.qualification_status??'NOT_EXPORTED',
+        selection_status:innerOnlyReport.hurdle_v2?.selection_status??null,
+        inner_qualified:innerOnlyReport.hurdle_v2?.inner_qualified===true,
+        artifact_content_hash:innerOnlyReport.hurdle_v2?.artifact_content_hash??null,
+        artifact_manifest_hash:innerOnlyReport.hurdle_v2?.artifact_manifest_hash??null,
+        fresh_process_reload_verified:
+          innerOnlyReport.hurdle_v2?.fresh_process_reload_verified===true,
+        execution_ablation:{
+          status:executionAblation.status??null,
+          passed:executionAblation.passed===true,
+          reason:executionAblation.reason??null,
+          gates:executionAblation.gates??null,
+          contextual:executionAblation.context_metrics??null,
+          pooled_only:executionAblation.pooled_only_metrics??null
+        }
+      },
+      temporal_inner_selection:{
+        status:innerDiagnostic.status??null,
+        selection_status:innerDiagnostic.selection_status??null,
+        selected_configuration:innerDiagnostic.selected_configuration??null,
+        diagnostic_configuration:innerDiagnostic.diagnostic_configuration??null,
+        baseline_selection_brier:innerDiagnostic.baseline_selection_brier??null,
+        candidate_count:candidateSummary.length,
+        candidates:candidateSummary
+      },
+      holdout:innerOnlyReport.holdout,
+      outer_validation_replay_started:innerOnlyReport.outer_validation_replay_started,
+      holdout_values_used:innerOnlyReport.holdout_values_used,
+      paper_trading:innerOnlyReport.paper_trading,
+      real_order_execution:innerOnlyReport.real_order_execution
+    },null,2));
+    if(!hurdleV2ExportStatus?.artifact_path)
+      throw new Error(hurdleV2ExportStatus?.reason??'HURDLE_V2_INNER_ONLY_EXPORT_FAILED');
+    return;
   }
 
   // Hybrid TCN+Attention: train only on the shared train partition.
@@ -1917,37 +2141,70 @@ async function main(){
       const neural=riskById.get(String(row.id)),logistic=logisticById.get(String(row.id));
       return neural&&logistic&&finite(neural.execution_risk_adjusted_score)&&
         finite(neural.execution_risk_penalty_weight)&&
+        finite(neural.execution_ranking_score_adjustment_weight)&&
+        finite(neural.execution_minimum_positive_net_return_probability)&&
+        finite(neural.predicted_positive_net_return_probability)&&
+        typeof neural.positive_return_probability_eligible==='boolean'&&
+        finite(neural.execution_base_risk_adjusted_expected_net_return_pct)&&
+        typeof neural.execution_base_risk_adjusted_return_positive==='boolean'&&
+        finite(neural.execution_rank_adjusted_selection_score)&&
         finite(neural.execution_risk_abstention_threshold)&&
         finite(neural.execution_risk_abstention_percentile)&&
         finite(neural.pooled_only_execution_risk_adjusted_score)&&
+        finite(neural.pooled_only_execution_base_risk_adjusted_expected_net_return_pct)&&
         finite(neural.pooled_only_execution_risk_penalty_weight)&&
+        finite(neural.pooled_only_execution_ranking_score_adjustment_weight)&&
+        finite(neural.pooled_only_execution_minimum_positive_net_return_probability)&&
         finite(neural.pooled_only_execution_risk_abstention_threshold)&&
         finite(neural.pooled_only_execution_risk_abstention_percentile)&&
         finite(logistic.probability);
     });
     if(complete){
-      const contextScores=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_adjusted_score);
+      const contextScores=alignedRows.map(row=>riskById.get(String(row.id)).execution_rank_adjusted_selection_score);
+      const contextBaseScores=alignedRows.map(row=>
+        riskById.get(String(row.id)).execution_base_risk_adjusted_expected_net_return_pct);
       const pooledScores=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_adjusted_score);
+      const pooledBaseScores=alignedRows.map(row=>
+        riskById.get(String(row.id)).pooled_only_execution_base_risk_adjusted_expected_net_return_pct);
       const logisticScores=alignedRows.map(row=>
         logisticById.get(String(row.id)).calibrated_probability??
         logisticById.get(String(row.id)).probability);
       const contextLambdas=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_penalty_weight);
+      const contextRankWeights=alignedRows.map(row=>
+        riskById.get(String(row.id)).execution_ranking_score_adjustment_weight);
+      const contextPositiveProbabilityThresholds=alignedRows.map(row=>
+        riskById.get(String(row.id)).execution_minimum_positive_net_return_probability);
       const pooledLambdas=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_penalty_weight);
+      const pooledRankWeights=alignedRows.map(row=>
+        riskById.get(String(row.id)).pooled_only_execution_ranking_score_adjustment_weight);
+      const pooledPositiveProbabilityThresholds=alignedRows.map(row=>
+        riskById.get(String(row.id)).pooled_only_execution_minimum_positive_net_return_probability);
       const contextThresholds=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_abstention_threshold);
       const pooledThresholds=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_abstention_threshold);
       const contextPercentiles=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_abstention_percentile);
       const pooledPercentiles=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_abstention_percentile);
       if(new Set(contextThresholds).size!==1||new Set(pooledThresholds).size!==1||
-        new Set(contextPercentiles).size!==1||new Set(pooledPercentiles).size!==1)
+        new Set(contextPercentiles).size!==1||new Set(pooledPercentiles).size!==1||
+        new Set(contextRankWeights).size!==1||new Set(pooledRankWeights).size!==1||
+        new Set(contextPositiveProbabilityThresholds).size!==1||
+        new Set(pooledPositiveProbabilityThresholds).size!==1)
         throw new Error('OUTER_SELECTIVE_EXECUTION_POLICY_NOT_FROZEN');
       externalExecutionRiskTopK=evaluateExternalExecutionRiskTopK(
         alignedRows,contextScores,logisticScores,
-        {riskPenaltyWeights:contextLambdas,topKGrid:[1],roundTripCostBps:args.roundTripCostBps,
+        {riskPenaltyWeights:contextLambdas,
+          baseRiskAdjustedScores:contextBaseScores,
+          rankingScoreAdjustmentWeights:contextRankWeights,
+          minimumPositiveNetReturnProbabilities:contextPositiveProbabilityThresholds,
+          topKGrid:[1],roundTripCostBps:args.roundTripCostBps,
           minimumRiskAdjustedScore:contextThresholds[0],abstentionPercentile:contextPercentiles[0]}
       );
       pooledOnlyExternalExecutionRiskTopK=evaluateExternalExecutionRiskTopK(
         alignedRows,pooledScores,logisticScores,
-        {riskPenaltyWeights:pooledLambdas,topKGrid:[1],roundTripCostBps:args.roundTripCostBps,
+        {riskPenaltyWeights:pooledLambdas,
+          baseRiskAdjustedScores:pooledBaseScores,
+          rankingScoreAdjustmentWeights:pooledRankWeights,
+          minimumPositiveNetReturnProbabilities:pooledPositiveProbabilityThresholds,
+          topKGrid:[1],roundTripCostBps:args.roundTripCostBps,
           minimumRiskAdjustedScore:pooledThresholds[0],abstentionPercentile:pooledPercentiles[0]}
       );
       const contextTrials=new Map(externalExecutionRiskTopK.trials.map(row=>[row.top_k_per_timestamp,row]));
@@ -1982,7 +2239,17 @@ async function main(){
         outer_validation_used_for_lambda_or_top_k_selection:false,
         holdout_rows_or_scores_used:false,
         context_risk_penalty_weight:externalExecutionRiskTopK.risk_penalty_weight,
+        context_ranking_score_adjustment_weight:externalExecutionRiskTopK.ranking_score_adjustment_weight,
+        context_minimum_positive_net_return_probability:
+          externalExecutionRiskTopK.minimum_positive_net_return_probability,
         pooled_only_risk_penalty_weight:pooledOnlyExternalExecutionRiskTopK.risk_penalty_weight,
+        pooled_only_ranking_score_adjustment_weight:
+          pooledOnlyExternalExecutionRiskTopK.ranking_score_adjustment_weight,
+        pooled_only_minimum_positive_net_return_probability:
+          pooledOnlyExternalExecutionRiskTopK.minimum_positive_net_return_probability,
+        positive_base_risk_adjusted_return_gate_enforced:
+          externalExecutionRiskTopK.base_risk_adjusted_return_gate_enforced&&
+          pooledOnlyExternalExecutionRiskTopK.base_risk_adjusted_return_gate_enforced,
         context_abstention_policy:externalExecutionRiskTopK.frozen_abstention_policy,
         pooled_only_abstention_policy:pooledOnlyExternalExecutionRiskTopK.frozen_abstention_policy,
         matched_logistic_trade_counts:externalExecutionRiskTopK.trials.every(row=>
@@ -2024,38 +2291,60 @@ async function main(){
     const riskById=new Map(lstmExternalPredictions.filter(item=>
       bootstrapIds.includes(String(item?.id))).map(item=>[String(item.id),item]));
     const contextComplete=bootstrapIds.every(id=>
-      finite(riskById.get(id)?.execution_risk_adjusted_score)&&
+      finite(riskById.get(id)?.execution_rank_adjusted_selection_score)&&
+      finite(riskById.get(id)?.execution_base_risk_adjusted_expected_net_return_pct)&&
+      finite(riskById.get(id)?.execution_ranking_score_adjustment_weight)&&
+      finite(riskById.get(id)?.execution_minimum_positive_net_return_probability)&&
       finite(riskById.get(id)?.execution_risk_abstention_threshold));
     const pooledComplete=bootstrapIds.every(id=>
       finite(riskById.get(id)?.pooled_only_execution_risk_adjusted_score)&&
+      finite(riskById.get(id)?.pooled_only_execution_base_risk_adjusted_expected_net_return_pct)&&
+      finite(riskById.get(id)?.pooled_only_execution_minimum_positive_net_return_probability)&&
       finite(riskById.get(id)?.pooled_only_execution_risk_abstention_threshold));
     if(contextComplete&&pooledComplete){
       const logisticExecutionById=new Map(predictionsByModel.LOGISTIC_REGRESSION
         .map(item=>[String(item.id),Number(item.calibrated_probability??item.probability)]));
       const contextThresholds=[...new Set(bootstrapIds.map(id=>
         riskById.get(id).execution_risk_abstention_threshold))];
+      const contextPositiveProbabilityThresholds=[...new Set(bootstrapIds.map(id=>
+        riskById.get(id).execution_minimum_positive_net_return_probability))];
+      const pooledPositiveProbabilityThresholds=[...new Set(bootstrapIds.map(id=>
+        riskById.get(id).pooled_only_execution_minimum_positive_net_return_probability))];
       const pooledThresholds=[...new Set(bootstrapIds.map(id=>
         riskById.get(id).pooled_only_execution_risk_abstention_threshold))];
-      if(contextThresholds.length!==1||pooledThresholds.length!==1)
+      if(contextThresholds.length!==1||pooledThresholds.length!==1||
+        contextPositiveProbabilityThresholds.length!==1||
+        pooledPositiveProbabilityThresholds.length!==1)
         throw new Error('BOOTSTRAP_SELECTIVE_EXECUTION_THRESHOLDS_NOT_FROZEN');
       const executionScoresByPolicy={
         LOGIT_CONTEXT_AUGMENTED:bootstrapIds.map(id=>
-          riskById.get(id).execution_risk_adjusted_score),
+          riskById.get(id).execution_rank_adjusted_selection_score),
         POOLED_ONLY:bootstrapIds.map(id=>
           riskById.get(id).pooled_only_execution_risk_adjusted_score),
         LOGISTIC_MATCHED_CONTEXT:bootstrapIds.map(id=>logisticExecutionById.get(id)),
         LOGISTIC_MATCHED_POOLED:bootstrapIds.map(id=>logisticExecutionById.get(id)),
         LOGISTIC_REGRESSION:bootstrapIds.map(id=>logisticExecutionById.get(id))
       };
+      const baseRiskAdjustedScoresByPolicy={
+        LOGIT_CONTEXT_AUGMENTED:bootstrapIds.map(id=>
+          riskById.get(id).execution_base_risk_adjusted_expected_net_return_pct),
+        POOLED_ONLY:bootstrapIds.map(id=>
+          riskById.get(id).pooled_only_execution_base_risk_adjusted_expected_net_return_pct)
+      };
       const executionPolicyConfigurations={
-        LOGIT_CONTEXT_AUGMENTED:{minimum_score:contextThresholds[0]},
-        POOLED_ONLY:{minimum_score:pooledThresholds[0]},
+        LOGIT_CONTEXT_AUGMENTED:{minimum_score:contextThresholds[0],
+          require_positive_base_score:true,
+          minimum_positive_net_return_probability:contextPositiveProbabilityThresholds[0]},
+        POOLED_ONLY:{minimum_score:pooledThresholds[0],
+          require_positive_base_score:true,
+          minimum_positive_net_return_probability:pooledPositiveProbabilityThresholds[0]},
         LOGISTIC_MATCHED_CONTEXT:{match_trade_counts_with:'LOGIT_CONTEXT_AUGMENTED'},
         LOGISTIC_MATCHED_POOLED:{match_trade_counts_with:'POOLED_ONLY'}
       };
       outerValidationUncertaintyBootstrap=bootstrapOuterValidationUncertainty(
         bootstrapRows,bootstrapProbabilityByModel,{
-          executionScoresByPolicy,executionPolicyConfigurations,topKGrid:[1],
+          executionScoresByPolicy,executionPolicyConfigurations,
+          baseRiskAdjustedScoresByPolicy,topKGrid:[1],
           roundTripCostBps:args.roundTripCostBps,
           repetitions:250,blockLengthDays:3,seed:22429,
           maxConcurrentPositions:30
@@ -2147,6 +2436,8 @@ async function main(){
     cost_model_id:NEURAL_CLOSURE_COST_MODEL_ID,
     round_trip_cost_bps:args.roundTripCostBps,
     split_id:split.schema,
+    objective_id:training.model_internal_diagnostics?.TCN_LSTM_HYBRID?.selection_scoring?.method??null,
+    hurdle_v2_artifact:trainingArtifacts.HURDLE_V2??null,
     feature_schema_ids:Object.fromEntries(Object.entries(benchmark.models).map(([name])=>[
       name,modelArtifactsByModel[name]?.feature_schema_id??
         (name==='COGNITIVE_MLP_V5'||name==='MLP_GBDT_HYBRID'?COGNITIVE_FEATURE_SCHEMA:null)
@@ -2211,6 +2502,8 @@ async function main(){
       deployment_triggered:false
     }
   };
+  const experimentManifestBytes=Buffer.from(JSON.stringify(experimentManifest,null,2)+'\n','utf8');
+  const experimentManifestSha256=sha256(experimentManifestBytes);
   const report={
     schema:MODEL_SCHEMA,
     status:benchmark.status,
@@ -2218,6 +2511,7 @@ async function main(){
     integrity:{
       model_source_commit_sha:sourceCommitSha,
       dataset_source_commit_sha:datasetSourceCommitSha,
+      experiment_manifest_sha256:experimentManifestSha256,
       dataset_sha256:datasetSha,input_file_sha256:inputFileSha256,
       fixed_benchmark_sha256:benchmark.integrity.fixed_benchmark_sha256,
       row_count:rows.length

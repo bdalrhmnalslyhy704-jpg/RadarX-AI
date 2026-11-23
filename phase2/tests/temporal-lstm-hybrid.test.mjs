@@ -28,6 +28,7 @@ import {
   predictTcnLstmHybridCalibratedProbability,
   fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
+  splitTcnLstmHurdleProbabilityCalibrationRows,
   splitTcnLstmTrainingRowsForExecutionHead,
   selectTcnLstmExecutionRiskPolicy,
   selectTcnLstmHybridHyperparameters,
@@ -48,7 +49,7 @@ import {
 } from '../core/temporal-lstm-hybrid.mjs';
 import { topKRankingSignals,compareTcnLstmRankingExecutionMetrics,
   evaluateExternalExecutionRiskTopK } from '../core/neural-closure-contracts.mjs';
-import { fitHurdleReturnHead,predictHurdleExpectedNetReturn } from '../core/hurdle-return-head.mjs';
+import { fitHurdleReturnHead,fitHurdlePositiveReturnCalibration,predictHurdleExpectedNetReturn } from '../core/hurdle-return-head.mjs';
 
 const DAY=86400000;
 const BASE=1_780_000_000_000;
@@ -85,6 +86,80 @@ test('hurdle return head learns feature-conditional class means without class re
   assert.ok(low.expected_net_return_pct<0);
   const restored=JSON.parse(JSON.stringify(head));
   assert.deepEqual(predictHurdleExpectedNetReturn([0.9,1],restored),high);
+});
+
+test('Hurdle positive-net-return probability calibration is fitted on its separate calibration block and drives expected value',()=>{
+  const returns=Array.from({length:200},(_,index)=>
+    index%5===0?1.1+(index%7)*0.03:-0.65-(index%9)*0.02
+  );
+  const raw=Array(returns.length).fill(0.70);
+  const calibration=fitHurdlePositiveReturnCalibration(raw,returns,{
+    minimumSamples:30,minimumPositive:8,minimumNegative:8,
+    iterations:800,learningRate:0.03,regularization:0.05
+  });
+  assert.equal(calibration.fitted,true);
+  assert.equal(calibration.schema,'RADARX_HURDLE_POSITIVE_NET_RETURN_PLATT_CALIBRATOR_V1');
+  assert.equal(calibration.fit_boundary,
+    'PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK_ONLY');
+  assert.equal(calibration.positive_rows,40);
+  assert.equal(calibration.negative_rows,160);
+  assert.ok(calibration.slope>=0.05&&calibration.slope<=8);
+  assert.ok(Number.isFinite(calibration.intercept));
+  const head=fitHurdleReturnHead(
+    returns.map((value,index)=>[Math.sin(index*0.13),value>0?1:-1]),returns,
+    {learningRate:0.02,epochs:120,l2:0.05,minimumClassRows:8}
+  );
+  const rawPrediction=predictHurdleExpectedNetReturn([0.4,1],head);
+  head.probability_calibration=calibration;
+  const calibratedPrediction=predictHurdleExpectedNetReturn([0.4,1],head);
+  assert.equal(calibratedPrediction.probability_calibration_applied,true);
+  assert.equal(calibratedPrediction.probability_calibration_schema,calibration.schema);
+  assert.equal(calibratedPrediction.raw_probability_positive_net_return,
+    rawPrediction.raw_probability_positive_net_return);
+  assert.notEqual(calibratedPrediction.probability_positive_net_return,
+    calibratedPrediction.raw_probability_positive_net_return);
+  assert.ok(Math.abs(calibratedPrediction.expected_net_return_pct-
+    (calibratedPrediction.probability_positive_net_return*
+      calibratedPrediction.positive_net_return_mean_pct+
+     (1-calibratedPrediction.probability_positive_net_return)*
+      calibratedPrediction.non_positive_net_return_mean_pct))<1e-10);
+  const restored=JSON.parse(JSON.stringify(head));
+  assert.deepEqual(predictHurdleExpectedNetReturn([0.4,1],restored),calibratedPrediction);
+});
+
+test('Hurdle probability calibration split keeps an earlier training block, four-hour maturity purge, and later calibration block',()=>{
+  const bucketMs=15*60*1000,horizonMs=4*60*60*1000;
+  const rows=[],netReturns=[];
+  for(let group=0;group<50;group++){
+    const at=BASE+group*bucketMs;
+    for(let symbolIndex=0;symbolIndex<4;symbolIndex++){
+      const index=group*4+symbolIndex;
+      rows.push({
+        id:'hurdle-cal-'+index,symbol:'PAIR'+symbolIndex,
+        at,resolved_at:at+((index%16)+1)*bucketMs
+      });
+      netReturns.push(index%5===0?1.0:-0.7);
+    }
+  }
+  const split=splitTcnLstmHurdleProbabilityCalibrationRows(rows,netReturns,{
+    horizonMs,bucketMs,calibrationGroupFraction:0.2,
+    minimumTrainingGroups:20,minimumCalibrationGroups:8,minimumClassRows:8
+  });
+  assert.equal(split.status,'READY');
+  assert.equal(split.diagnostics.training_groups,25);
+  assert.equal(split.diagnostics.purged_groups,15);
+  assert.equal(split.diagnostics.calibration_groups,10);
+  assert.equal(split.diagnostics.training_rows,100);
+  assert.equal(split.diagnostics.purged_rows,60);
+  assert.equal(split.diagnostics.calibration_rows,40);
+  assert.equal(split.diagnostics.chronology_valid,true);
+  assert.equal(split.diagnostics.forward_label_horizon_valid,true);
+  assert.equal(split.diagnostics.complete_decision_groups,true);
+  assert.equal(split.diagnostics.disjoint_sample_identities,true);
+  assert.ok(split.diagnostics.training_max_resolved_at<
+    split.diagnostics.calibration_min_at);
+  assert.ok(split.diagnostics.training_decision_time_gap_ms>=horizonMs);
+  assert.equal(split.diagnostics.validation_or_holdout_used,false);
 });
 
 test('auxiliary raw ranking logits drive deterministic Top-K per 15m bucket',()=>{
@@ -225,6 +300,34 @@ test('external execution-risk Top-K uses one frozen lambda and identical validat
 });
 
 
+test('fresh TCN-LSTM classifier residual is exactly neutral to the matched full-sequence Logistic reference',()=>{
+  const model=createTcnLstmHybridModelForAudit(711);
+  const sequence=makeSequence(1,12);
+  const output=inspectTcnLstmForward(sequence,model,0.173);
+  assert.equal(output.logit,0.173);
+  assert.equal(output.probability,1/(1+Math.exp(-0.173)));
+  const anchor=fitTcnLstmLogisticAnchor(makeRows(0,40,'neutral-anchor'));
+  const externalLogisticModel={
+    training_partition_only:true,
+    standardizer:{means:Array(696).fill(0),scales:Array(696).fill(1)},
+    fit:{weights:Array(696).fill(0),bias:0.173}
+  };
+  const profile={
+    model,baseline_fit:anchor,
+    execution_logistic_context_model:externalLogisticModel,
+    execution_logistic_context_metadata:{
+      logistic_feature_schema_id:'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1'
+    }
+  };
+  assert.ok(Math.abs(predictTcnLstmHybridProbability(sequence,profile)-
+    1/(1+Math.exp(-0.173)))<1e-12,
+    'inference must add the temporal residual to the exact full-sequence Logistic baseline');
+  assert.ok(Math.abs(predictTcnLstmHybridProbability(sequence,profile,{
+    externalLogisticLogit:-0.27
+  })-1/(1+Math.exp(0.27)))<1e-12,
+  'an explicitly aligned raw full-sequence Logistic logit must override the pooled fallback');
+});
+
 test('TCN-LSTM attention forward pass is finite, normalized and exposes sequential memory states',()=>{
   const sequence=makeSequence(1,3);
   const model=createTcnLstmHybridModelForAudit(71);
@@ -301,6 +404,24 @@ test('focal-asymmetric TCN-LSTM fits class weights on the training rows only',()
   assert.equal(profile.real_order_execution,false);
 });
 
+test('pairwise ranking accuracy counts an exact score tie as half-correct',()=>{
+  const rows=makeRankedRows(0,10,'tie-accuracy');
+  const tiedLogits=Array(rows.length).fill(0);
+  const tiedProbabilities=Array(rows.length).fill(0.5);
+  const logitMetrics=summarizeTcnLstmPairwiseLogitRanking(rows,tiedLogits,{
+    roundTripCostBps:30,minimumReturnGapPct:0.5,maxPairsPerTimestamp:4
+  });
+  const probabilityMetrics=summarizeTcnLstmPairwiseReturnRanking(rows,tiedProbabilities,{
+    roundTripCostBps:30,minimumReturnGapPct:0.5,maxPairsPerTimestamp:4
+  });
+  assert.equal(logitMetrics.status,'AVAILABLE');
+  assert.equal(probabilityMetrics.status,'AVAILABLE');
+  assert.equal(logitMetrics.pairwise_accuracy_pct,50);
+  assert.equal(probabilityMetrics.pairwise_accuracy_pct,50);
+  assert.ok(Math.abs(logitMetrics.pairwise_log_loss-Math.log(2))<1e-7);
+  assert.ok(Math.abs(probabilityMetrics.pairwise_log_loss-Math.log(2))<1e-7);
+});
+
 test('TCN-LSTM pairwise return ranking loss orders high-return candidates above low-return candidates',()=>{
   const correct=tcnLstmPairwiseReturnRankingLoss(0.82,0.18);
   const reversed=tcnLstmPairwiseReturnRankingLoss(0.18,0.82);
@@ -313,27 +434,33 @@ test('TCN-LSTM pairwise return ranking loss orders high-return candidates above 
 
 
 test('auxiliary rank head must pass inner-selection Top-K execution gates and beat the Logistic anchor',()=>{
-  const rows=Array.from({length:24*4},(_,index)=>{
-    const group=Math.floor(index/4),rank=index%4;
-    const at=BASE+group*DAY+rank*75;
-    const execution=makeExecutionRow(index,rank<2?'UP':'DOWN',at);
-    return {...execution,sequence:makeSequence(rank<2?1:-1,index*0.01)};
+  const groupCount=50;
+  const rows=Array.from({length:groupCount*2},(_,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    const outcome=group<30&&rank===0?'UP':'DOWN';
+    const at=BASE+group*15*60*1000+rank*75;
+    const execution=makeExecutionRow(index,outcome,at);
+    return {...execution,sequence:makeSequence(outcome==='UP'?1:-1,index*0.01)};
   });
-  const head=rows.map((_,index)=>[4,3,-3,-4][index%4]);
-  const anchor=rows.map((_,index)=>[-4,-3,3,4][index%4]);
+  const head=rows.map((_,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    if(rank===1)return -100-group;
+    return group<30?100-group:20-(group-30)*0.1;
+  });
+  const anchor=rows.map((_,index)=>index%2===1?10:0);
   const passed=summarizeTcnLstmRankingExecutionSelection(rows,head,anchor,{
     roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,maximumDrawdownPct:8
   });
   assert.equal(passed.status,'EVALUATED');
   assert.equal(passed.source_partition,'INNER_SELECTION_ONLY');
   assert.equal(passed.passed,true);
-  assert.ok(passed.top_k_trials.some(item=>item.risk_gates_passed));
+  assert.ok(passed.top_k_trials.some(item=>item.passed));
   const rejected=summarizeTcnLstmRankingExecutionSelection(rows,head,head,{
     roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,maximumDrawdownPct:8
   });
   assert.equal(rejected.passed,false);
   assert.ok(rejected.top_k_trials.every(item=>
-    item.risk_gates.beats_logistic_anchor===false));
+    item.gates.beats_logistic_anchor===false));
   assert.equal(rejected.holdout_values_used,false);
 });
 
@@ -490,6 +617,8 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
     'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V6_TRAIN_ONLY_ZSCORE');
   assert.equal(profile.training.execution_regression_heads.hurdle_return_head.fit_partition,
     'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY');
+  assert.equal(profile.training.execution_regression_heads.hurdle_return_head.probability_calibration_split.status,
+    'UNAVAILABLE');
   assert.equal(profile.training.execution_regression_heads.hurdle_return_head.validation_or_holdout_used,
     false);
   assert.equal(profile.training.execution_regression_heads.hurdle_return_head.logit_context_augmented.fitted,
@@ -613,6 +742,32 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   assert.equal(restoredPooledOnly.variant,'POOLED_ONLY');
   assert.equal(restoredPooledOnly.input_feature_count,TCN_LSTM_HIDDEN);
   assert.equal(restoredScore.risk_penalty_weight,2);
+  profile.execution_ranking_score_adjustment_weight=0.75;
+  const rankAdjusted=predictTcnLstmHybridExecutionScore(
+    evidence[0].sequence,profile,{externalLogisticLogit}
+  );
+  assert.equal(rankAdjusted.ranking_score_adjustment_weight,0.75);
+  assert.ok(Number.isFinite(rankAdjusted.normalized_independent_return_rank_score));
+  profile.execution_minimum_positive_net_return_probability=0.65;
+  const probabilityGated=predictTcnLstmHybridExecutionScore(
+    evidence[0].sequence,profile,{externalLogisticLogit}
+  );
+  assert.equal(probabilityGated.minimum_positive_net_return_probability,0.65);
+  assert.equal(probabilityGated.positive_return_probability_eligible,
+    probabilityGated.predicted_positive_net_return_probability>=0.65);
+  assert.equal(probabilityGated.rank_adjusted_execution_selection_score<=-1e9,
+    probabilityGated.positive_return_probability_eligible===false||
+      probabilityGated.base_risk_adjusted_return_positive===false);
+  assert.ok(Math.abs(rankAdjusted.risk_adjusted_net_return_score-
+    (rankAdjusted.predicted_net_return_pct-
+      2*rankAdjusted.predicted_downside_risk_pct))<1e-10);
+  assert.equal(rankAdjusted.base_risk_adjusted_return_positive,
+    rankAdjusted.base_risk_adjusted_expected_net_return_pct>0);
+  assert.ok(Number.isFinite(rankAdjusted.rank_adjusted_execution_selection_score));
+  assert.ok(Math.abs(rankAdjusted.rank_adjusted_execution_selection_score-
+    (rankAdjusted.base_risk_adjusted_expected_net_return_pct>0
+      ?rankAdjusted.risk_adjusted_net_return_score+
+        0.75*rankAdjusted.normalized_independent_return_rank_score:-1e9))<1e-10);
   assert.equal(restoredScore.risk_adjusted_net_return_score,
     higherPenalty.risk_adjusted_net_return_score);
   assert.equal(profile.real_order_execution,false);
@@ -682,6 +837,128 @@ test('selective execution policy chooses a real abstention threshold only from i
   assert.equal(hurdlePolicy.holdout_values_used,false);
 });
 
+test('independent raw rank score adjusts expected-return ranking without touching classifier probabilities',()=>{
+  const groupCount=40;
+  const rows=Array.from({length:groupCount*2},(_,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    const outcome=group<30&&rank===0?'UP':'DOWN';
+    const at=BASE+group*DAY+rank*75;
+    return makeExecutionRow(index,outcome,at);
+  });
+  const predictions=rows.map((row,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    const normalizedRank=group<30
+      ?(rank===0?0.5:-0.5)
+      :(rank===0?-0.3:-0.4);
+    return {
+      predicted_net_return_pct:group<30
+        ?(rank===0?0.08:0.09)
+        :(rank===0?0.09:0.08),
+      predicted_hurdle_net_return_pct:group<30
+        ?(rank===0?0.08:0.09)
+        :(rank===0?0.09:0.08),
+      predicted_downside_risk_pct:0.01,
+      normalized_independent_return_rank_score:normalizedRank
+    };
+  });
+  const logisticLogits=rows.map((row,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    return group<30?(rank===0?1:3):(rank===0?1:0);
+  });
+  const policy=selectTcnLstmExecutionRiskPolicy(rows,predictions,logisticLogits,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,
+    maximumDrawdownPct:8,abstentionPercentileGrid:[0.2,0.5,0.8],
+    rankingScoreAdjustmentGrid:[0,1]
+  });
+  assert.equal(policy.status,'SELECTIVE_EXECUTION_POLICY_PASSED_INNER_SELECTION');
+  assert.equal(policy.passed,true);
+  assert.equal(policy.selected_ranking_score_adjustment_weight,1);
+  assert.equal(policy.selected_trial.ranking_score_adjustment_weight,1);
+  assert.ok(policy.selected_trial.model_metrics.trade_count>=20);
+  assert.ok(policy.selected_trial.model_metrics.win_rate_pct>=55);
+  assert.ok(policy.selected_trial.model_metrics.net_pnl_pct>0);
+  assert.ok(policy.selected_trial.model_metrics.max_drawdown_pct<=8);
+  assert.equal(policy.selected_trial.gates.beats_matched_logistic_anchor,true);
+  assert.equal(policy.selected_trial.score_formula_id,
+    'POSITIVE_BASE_RISK_ADJUSTED_RETURN_GATE_PLUS_NORMALIZED_INDEPENDENT_RANK_SELECTION_ADJUSTMENT_V2');
+  assert.equal(policy.selected_trial.positive_base_risk_adjusted_return_gate_enforced,true);
+  // A positive rank score may not rescue negative base expectancy after risk.
+  const negativeBase=predictions.map(item=>({
+    ...item,predicted_net_return_pct:-0.2,
+    predicted_hurdle_net_return_pct:-0.2,
+    normalized_independent_return_rank_score:0.99
+  }));
+  const blocked=selectTcnLstmExecutionRiskPolicy(rows,negativeBase,logisticLogits,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,
+    maximumDrawdownPct:8,abstentionPercentileGrid:[0.2,0.5],
+    rankingScoreAdjustmentGrid:[4]
+  });
+  assert.equal(blocked.passed,false);
+  assert.equal(blocked.selected_trade_count,0);
+  assert.equal(blocked.positive_base_risk_adjusted_return_gate_enforced,true);
+  assert.equal(policy.holdout_values_used,false);
+});
+
+test('inner execution policy freezes a positive-return probability floor before risk-score ranking',()=>{
+  const groupCount=40;
+  const rows=Array.from({length:groupCount*2},(_,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    return makeExecutionRow(index,group<30&&rank===0?'UP':'DOWN',
+      BASE+group*DAY+rank*75);
+  });
+  const predictions=rows.map((row,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    return {
+      predicted_net_return_pct:rank===0?0.08:0.20,
+      predicted_hurdle_net_return_pct:rank===0?0.08:0.20,
+      predicted_downside_risk_pct:0.01,
+      predicted_positive_net_return_probability:group<30&&rank===0?0.82:0.35,
+      normalized_independent_return_rank_score:rank===0?0.1:-0.1
+    };
+  });
+  const logisticLogits=rows.map((row,index)=>index%2===0?0:3);
+  const policy=selectTcnLstmExecutionRiskPolicy(rows,predictions,logisticLogits,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,
+    maximumDrawdownPct:8,abstentionPercentileGrid:[0.2,0.5,0.8],
+    riskPenaltyWeightGrid:[0.01],rankingScoreAdjustmentGrid:[0],
+    minimumPositiveNetReturnProbabilityGrid:[0,0.55,0.7]
+  });
+  assert.equal(policy.status,'SELECTIVE_EXECUTION_POLICY_PASSED_INNER_SELECTION');
+  assert.equal(policy.passed,true);
+  assert.ok(policy.selected_minimum_positive_net_return_probability>=0.55);
+  assert.equal(policy.selected_trial.positive_return_probability_gate_enforced,true);
+  assert.ok(policy.selected_trial.model_metrics.trade_count>=20);
+  assert.ok(policy.selected_trial.model_metrics.win_rate_pct>=55);
+  assert.ok(policy.selected_trial.model_metrics.net_pnl_pct>0);
+  assert.ok(policy.selected_trial.model_metrics.max_drawdown_pct<=8);
+  assert.equal(policy.selected_trial.gates.beats_matched_logistic_anchor,true);
+  assert.equal(policy.holdout_values_used,false);
+});
+
+test('selective execution policy accepts a frozen lower positive risk-penalty grid',()=>{
+  const groupCount=30;
+  const rows=Array.from({length:groupCount*2},(_,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    return makeExecutionRow(index,group<25&&rank===0?'UP':'DOWN',
+      BASE+group*DAY+rank*75);
+  });
+  const predictions=rows.map((row,index)=>({
+    predicted_net_return_pct:0.08,
+    predicted_hurdle_net_return_pct:0.08,
+    predicted_downside_risk_pct:0.5,
+    normalized_independent_return_rank_score:index%2===0?0.2:-0.2
+  }));
+  const logisticLogits=rows.map((row,index)=>index%2===0?1:0);
+  const policy=selectTcnLstmExecutionRiskPolicy(rows,predictions,logisticLogits,{
+    minimumTrades:1,minimumWinRatePct:50,maximumDrawdownPct:8,
+    abstentionPercentileGrid:[0.2,0.5],
+    riskPenaltyWeightGrid:[0.01,0.05],
+    rankingScoreAdjustmentGrid:[0]
+  });
+  assert.deepEqual(policy.risk_penalty_weight_grid,[0.01,0.05]);
+  assert.ok(policy.trials.every(item=>item.risk_penalty_weight>0));
+  assert.ok(policy.trials.every(item=>item.risk_penalty_weight<=0.05));
+});
 test('selective execution policy stays abstained when every predicted risk-adjusted net-return score is nonpositive',()=>{
   const groupCount=30;
   const rows=Array.from({length:groupCount*2},(_,index)=>{
@@ -796,6 +1073,49 @@ test('execution-head ablation treats a fully abstaining pooled policy as a zero-
   assert.equal(rejected.gates.drawdown_not_worse,false);
 });
 
+test('rank execution policy selects an inner-only abstention threshold instead of forcing one trade per bucket',()=>{
+  const groupCount=50;
+  const rows=Array.from({length:groupCount*2},(_,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    const winner=group<30&&rank===0;
+    const outcome=winner?'UP':'DOWN';
+    const at=BASE+group*15*60*1000+rank*75;
+    return makeExecutionRow(index,outcome,at);
+  });
+  const rankScores=rows.map((row,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    if(rank===1)return -100-group;
+    return group<30?100-group:20-(group-30)*0.1;
+  });
+  const logisticScores=rows.map((row,index)=>index%2===1?3:0);
+  const policy=summarizeTcnLstmRankingExecutionSelection(rows,rankScores,logisticScores,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,maximumDrawdownPct:8
+  });
+  assert.equal(policy.status,'EVALUATED');
+  assert.equal(policy.source_partition,'INNER_SELECTION_ONLY');
+  assert.equal(policy.threshold_selected_on_inner_selection,true);
+  assert.equal(policy.threshold_frozen_before_outer_validation,true);
+  assert.equal(policy.holdout_values_used,false);
+  assert.equal(policy.top_k_per_timestamp,1);
+  assert.equal(policy.passed,true);
+  assert.equal(policy.selected_trial.threshold_source,
+    'INNER_SELECTION_GROUP_MAX_SCORE_QUANTILE_V1');
+  assert.ok(policy.selected_abstention_percentile>0);
+  assert.ok(policy.selected_trial.selected_trade_count>=20);
+  assert.ok(policy.selected_trial.selected_trade_count<groupCount);
+  assert.ok(policy.selected_trial.model_metrics.win_rate_pct>=55);
+  assert.ok(policy.selected_trial.model_metrics.net_pnl_pct>0);
+  assert.ok(policy.selected_trial.model_metrics.max_drawdown_pct<=8);
+  assert.ok(policy.selected_trial.abstained_decision_group_count>0);
+  assert.equal(policy.selected_trial.logistic_anchor_signal_counts_matched,true);
+  assert.equal(policy.selected_trial.logistic_anchor_trade_counts_matched,true);
+  assert.ok(policy.top_k_trials.every(trial=>
+    trial.threshold_selected_on_inner_selection===true&&
+    trial.threshold_frozen_before_outer_validation===true&&
+    trial.gates.genuine_abstention===true
+  ));
+});
+
 test('TCN-LSTM pairwise ranking updates only the auxiliary head from training returns',()=>{
   const rows=makeRankedRows(0,10,'rank-train');
   const fitRows=rows.map(({realized_return_pct,...row})=>row);
@@ -905,6 +1225,20 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
           selected_configuration:{l2:0.01,learning_rate:0.01},
           calibration:{status:'RAW_FALLBACK'}
         },
+        training_predictions:modelRows.map((row,index)=>({
+          id:String(row.id),at:Number(row.at),
+          raw_logit:(Number(row.at)%997)/997-0.5,
+          oof_fold:(index%3)+1,
+          maximum_training_label_resolved_at:Number(row.at)-1,
+          source_partition:'PURGED_EXPANDING_TRAIN_ONLY_OOF_FOLD'
+        })),
+        training_predictions_are_out_of_fold:true,
+        training_prediction_coverage:{
+          schema:'RADARX_PURGED_EXPANDING_TEMPORAL_LOGISTIC_OOF_PREDICTIONS_V1',
+          total_training_rows:modelRows.length,
+          oof_scored_rows:modelRows.length,
+          outer_validation_or_holdout_used:false
+        },
         predictions:scoringRows.map(row=>({
           id:String(row.id),at:Number(row.at),
           raw_logit:(Number(row.at)%997)/997-0.5,
@@ -936,6 +1270,25 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     'inner selection must compare the neural probability against the raw 696D Logistic scores, not the calibrated context or pooled 58D anchor');
   assert.equal(result.execution_logistic_context.inner_selection_baseline_source,
     'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
+  // The top-level classifier baseline source identifies OOF logits consumed
+  // during neural training. The explicit baseline object identifies the final
+  // Logistic refit used to score the later inner-selection rows.
+  assert.equal(result.classifier_baseline_source,
+    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF');
+  assert.equal(result.baseline.kind,
+    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW',
+    'the explicit baseline result must identify the final-refit Logistic used to score inner-selection rows');
+  const selectedOrDiagnostic=result.selected_fit??result.diagnostic_fit;
+  assert.equal(result.classifier_baseline_feature_count,696);
+  assert.equal(result.classifier_baseline_training_logits_used,true);
+  assert.equal(result.classifier_baseline_training_logits_are_purged_oof,true);
+  assert.equal(result.classifier_baseline_training_rows,
+    selectedOrDiagnostic.training.rows);
+  assert.equal(result.classifier_residual_reference.training_logits_used_for_fit,true);
+  assert.equal(result.classifier_residual_reference.training_logits_are_purged_out_of_fold,true);
+  assert.equal(result.classifier_residual_reference.selection_logits_from_final_train_only_refit,true);
+  assert.equal(result.classifier_residual_reference.same_logistic_feature_schema_and_objective,true);
+  assert.equal(result.classifier_residual_reference.feature_count,696);
   assert.equal(result.selection_scoring.ranking_uses_inner_selection_partition_only,true);
   assert.equal(result.selection_scoring.outer_validation_or_holdout_used,false);
   assert.equal(result.candidates.length,2);
@@ -950,11 +1303,27 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     'score-only rows must not expose target labels or realized execution outcomes');
   assert.equal(result.execution_logistic_context.status,'AVAILABLE');
   assert.equal(result.execution_logistic_context.validation_or_holdout_used,false);
-  const selectedOrDiagnostic=result.selected_fit??result.diagnostic_fit;
   assert.equal(selectedOrDiagnostic.execution_logistic_context_model.kind,
     'TEST_PURGED_TEMPORAL_LOGISTIC');
-  assert.equal(result.candidates.find(item=>item.name==='PAIRWISE_RANK')?.config.rankingWeight,0);
-  assert.equal(result.candidates.find(item=>item.name==='PAIRWISE_RANK')?.config.requested_shared_classifier_ranking_weight,0.02);
+  assert.equal(selectedOrDiagnostic.training.classifier_baseline.source,
+    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF');
+  assert.equal(selectedOrDiagnostic.training.classifier_baseline.feature_count,696);
+  assert.equal(selectedOrDiagnostic.training.classifier_baseline.training_logits_available_rows,
+    selectedOrDiagnostic.training.rows);
+  assert.equal(selectedOrDiagnostic.training.classifier_baseline.source_partition,
+    'PURGED_EXPANDING_TRAIN_ONLY_OOF_FOLDS');
+  assert.equal(selectedOrDiagnostic.training.classifier_baseline.predictions_are_purged_out_of_fold,true);
+  assert.equal(selectedOrDiagnostic.training.classifier_baseline.validation_or_holdout_used,false);
+  const pairwiseCandidate=result.candidates.find(item=>item.name==='PAIRWISE_RANK');
+  assert.equal(pairwiseCandidate?.config.rankingWeight,0.02,
+    'the selected candidate weight must be passed into the actual classifier optimizer');
+  assert.equal(pairwiseCandidate?.config.requested_shared_classifier_ranking_weight,0.02);
+  assert.equal(pairwiseCandidate?.shared_classifier_training?.enabled,true);
+  assert.equal(pairwiseCandidate?.shared_classifier_training?.weight,0.02);
+  assert.ok(pairwiseCandidate?.shared_classifier_training?.gradient_batches_applied>0,
+    'a positive configured ranking weight must apply real classifier-gradient batches');
+  assert.equal(pairwiseCandidate?.shared_classifier_training?.classifier_parameters_updated,true);
+  assert.equal(pairwiseCandidate?.shared_classifier_training?.validation_or_holdout_used,false);
   assert.ok(result.candidates.every(item=>item.pairwise_ranking.status==='AVAILABLE'));
   assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
   assert.ok(result.candidates.every(item=>
@@ -973,11 +1342,19 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.ok(result.candidates.every(item=>item.logistic_pairwise_ranking.holdout_values_used===false));
   assert.ok(result.candidates.every(item=>{
     const stageOnePassed=item.brier_improvement>0.00025&&
-      Number.isFinite(item.pairwise_ranking_improvement)&&item.pairwise_ranking_improvement>0;
-    return stageOnePassed
+      Number.isFinite(item.pairwise_ranking_improvement)&&item.pairwise_ranking_improvement>0&&
+      item.ranking_head?.fitted===true&&item.ranking_head.weight_l2_norm>1e-8&&
+      item.pairwise_ranking.pairwise_accuracy_pct>50&&
+      item.pairwise_ranking.pairwise_accuracy_pct>
+        item.logistic_pairwise_ranking.pairwise_accuracy_pct;
+    const stageTwoAttempted=stageOnePassed||item.stage_two_diagnostic_only===true;
+    return stageTwoAttempted
       ?item.ranking_execution_selection.status!=='DEFERRED_UNTIL_DUAL_INNER_GATE'
       :item.ranking_execution_selection.status==='DEFERRED_UNTIL_DUAL_INNER_GATE';
   }));
+  assert.equal(result.candidates.filter(item=>item.stage_two_diagnostic_only===true).length,
+    result.candidates.length>0&&result.candidates[0].passed_inner_composite_margin!==true?1:0,
+    'only the best non-qualified candidate may enter diagnostic Stage 2');
   assert.equal(result.ranking_head_selection_qualification.qualified,false);
   assert.equal(result.real_order_execution,false);
 });
@@ -1182,11 +1559,19 @@ test('hyper-parameter selection uses only a purged chronological inner-selection
     const dualInnerGatePassed=row.brier_improvement>0.00025&&
       Number.isFinite(row.pairwise_ranking_improvement)&&
       row.pairwise_ranking_improvement>0;
-    return dualInnerGatePassed
-      ?row.return_selection_diagnostics.selection_partition_only===true
-      :row.return_selection_diagnostics.status==='DEFERRED_UNTIL_DUAL_INNER_GATE'&&
-        row.return_selection_diagnostics.selection_partition_only===true;
-  }), 'return/risk stage must remain deferred until both inner gates pass');
+    const diagnosticWinner=row.name===result.diagnostic_configuration;
+    if(dualInnerGatePassed||diagnosticWinner){
+      return row.return_selection_diagnostics.selection_partition_only===true&&
+        row.return_selection_diagnostics.holdout_values_used===false;
+    }
+    return row.return_selection_diagnostics.status==='DEFERRED_UNTIL_DUAL_INNER_GATE'&&
+      row.return_selection_diagnostics.selection_partition_only===true;
+  }), 'only dual-gate candidates and the single diagnostic winner may fit train-only execution heads');
+  assert.equal(result.status,'ABSTAIN_NO_INNER_SELECTION_SUPERIORITY');
+  assert.equal(result.selected_fit,null);
+  assert.ok(result.diagnostic_fit);
+  assert.equal(result.probability_ready,false);
+  assert.equal(result.live_eligibility_ready,false);
   assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);

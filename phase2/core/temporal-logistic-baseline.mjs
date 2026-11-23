@@ -34,7 +34,7 @@ export function buildPurgedExpandingLogisticFolds(rows,{
   minimumValidationRows=50,minimumClassCount=5
 }={}) {
   if(!Array.isArray(rows)||rows.length===0||
-    !Number.isInteger(foldCount)||foldCount<2||foldCount>6||
+    !Number.isInteger(foldCount)||foldCount<2||foldCount>10||
     !finite(purgeMs)||Number(purgeMs)<1||
     !finite(initialTrainingFraction)||Number(initialTrainingFraction)<=0||
     !finite(validationFraction)||Number(validationFraction)<=0||
@@ -444,7 +444,11 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
     foldCount,purgeMs,initialTrainingFraction,validationFraction,
     minimumTrainingRows,minimumValidationRows,minimumClassCount
   });
-  const tuningFolds=folds.folds.slice(0,-2);
+  // Hyperparameters are chosen on the first three early folds only. Any
+  // additional middle folds are reserved for purged OOF baseline generation;
+  // the final two folds remain disjoint calibration fit/check partitions.
+  const tuningFolds=folds.folds.slice(0,3);
+  const oofBaselineFolds=folds.folds.slice(tuningFolds.length,-2);
   const calibrationFitFold=folds.folds.at(-2);
   const calibrationCheckFold=folds.folds.at(-1);
   if(tuningFolds.length<3||!calibrationFitFold||!calibrationCheckFold)
@@ -485,7 +489,13 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
   if(!selected||!Number.isFinite(selected.mean_fold_brier))
     throw new Error('TEMPORAL_LOGISTIC_NO_VALID_CV_CANDIDATE');
 
-  // These two folds are strictly excluded from candidate hyperparameter choice.
+  // Later intermediate folds are not used to select the Logistic hyperparameters.
+  // Fit the selected configuration on each earlier-only fold and retain only
+  // its held-out predictions for downstream residual training.
+  const oofBaselineResults=oofBaselineFolds.map(fold=>
+    fitFoldModel(rows,featureVectors,fold,selected,maxEpochs)
+  );
+  // These two final folds are strictly excluded from candidate hyperparameter choice.
   const calibrationFitResult=fitFoldModel(rows,featureVectors,
     calibrationFitFold,selected,maxEpochs);
   const calibrationCheckResult=fitFoldModel(rows,featureVectors,
@@ -618,9 +628,60 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
   const selectedFoldReports=[
     ...selected.folds.map((result,index)=>
       buildFoldReport(tuningFolds[index],result,'HYPERPARAMETER_SELECTION')),
+    ...oofBaselineResults.map((result,index)=>
+      buildFoldReport(oofBaselineFolds[index],result,'OOF_BASELINE_GENERATION')),
     buildFoldReport(calibrationFitFold,calibrationFitResult,'CALIBRATION_FIT'),
     buildFoldReport(calibrationCheckFold,calibrationCheckResult,'CALIBRATION_CHECK')
   ];
+  // Reconstruct raw, strictly purged out-of-fold predictions for every
+  // validation row scored by the selected expanding-window CV folds. These
+  // predictions are safe residual baselines for training a downstream model:
+  // each row is scored by a Logistic fit whose labels all resolved before it.
+  const oofPredictionByIndex=new Map();
+  const appendOofPredictions=(fold,result)=>{
+    if(!Array.isArray(result?.probabilities)||
+      result.probabilities.length!==fold.validation_indices.length)
+      throw new TypeError('TEMPORAL_LOGISTIC_OOF_FOLD_PREDICTION_LENGTH_MISMATCH:'+fold.fold);
+    for(let offset=0;offset<fold.validation_indices.length;offset++){
+      const rowIndex=fold.validation_indices[offset];
+      const row=rows[rowIndex];
+      const probability=Number(result.probabilities[offset]);
+      if(oofPredictionByIndex.has(rowIndex)||!finite(probability)||
+        probability<0||probability>1||
+        !(Number(fold.maximum_training_label_resolved_at)<Number(row.at)))
+        throw new TypeError('TEMPORAL_LOGISTIC_OOF_PREDICTION_INVALID:'+rowIndex);
+      const bounded=clamp(probability,1e-9,1-1e-9);
+      oofPredictionByIndex.set(rowIndex,{
+        index:rowIndex,id:String(row.id),at:Number(row.at),
+        raw_probability:probability,
+        raw_logit:Math.log(bounded/(1-bounded)),
+        fold:fold.fold,
+        validation_start_at:Number(fold.validation_start_at),
+        maximum_training_label_resolved_at:Number(fold.maximum_training_label_resolved_at),
+        source_partition:'PURGED_EXPANDING_TRAIN_ONLY_OOF_FOLD'
+      });
+    }
+  };
+  for(let foldIndex=0;foldIndex<oofBaselineFolds.length;foldIndex++)
+    appendOofPredictions(oofBaselineFolds[foldIndex],oofBaselineResults[foldIndex]);
+  appendOofPredictions(calibrationFitFold,calibrationFitResult);
+  appendOofPredictions(calibrationCheckFold,calibrationCheckResult);
+  const oofPredictions=[...oofPredictionByIndex.values()]
+    .sort((a,b)=>a.index-b.index);
+  const oofPredictionCoverage={
+    schema:'RADARX_PURGED_EXPANDING_TEMPORAL_LOGISTIC_OOF_PREDICTIONS_V1',
+    source_partition:'PRE_EXECUTION_HEAD_MODEL_TRAINING_ROWS_ONLY',
+    total_training_rows:rows.length,
+    oof_scored_rows:oofPredictions.length,
+    unscored_warmup_or_tail_rows:rows.length-oofPredictions.length,
+    coverage_pct:Number((100*oofPredictions.length/rows.length).toFixed(4)),
+    fold_count:folds.fold_count,
+    hyperparameter_selection_folds:tuningFolds.map(fold=>fold.fold),
+    oof_prediction_folds:[...oofBaselineFolds,calibrationFitFold,calibrationCheckFold]
+      .map(fold=>fold.fold),
+    maximum_training_label_resolution_before_scored_row:true,
+    outer_validation_or_holdout_used:false
+  };
   const publicCandidates=candidateResults.map(candidate=>({
     candidate_index:candidate.candidate_index,l2:candidate.l2,
     learning_rate:candidate.learning_rate,
@@ -648,6 +709,7 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
     fold_schema:folds.schema,
     fold_count:folds.fold_count,
     hyperparameter_selection_folds:tuningFolds.length,
+    oof_baseline_generation_folds:oofBaselineFolds.length,
     calibration_fit_fold:calibrationFitFold.fold,
     calibration_check_fold:calibrationCheckFold.fold,
     folds:selectedFoldReports,
@@ -675,6 +737,7 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
     },
     all_candidate_selection_used_only_early_training_folds:true,
     calibration_fit_and_check_inside_outer_train:true,
+    oof_baseline_generation_uses_only_folds_after_hyperparameter_selection:true,
     outer_validation_used_for_hyperparameter_selection:false,
     outer_validation_used_for_calibrator_selection:false,
     execution_metrics_used_for_hyperparameter_selection:false,
@@ -689,7 +752,11 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
     calibrator:selectedCalibrator,
     training_partition_only:true
   };
-  return {model,report};
+  return {
+    model,report,
+    oof_predictions:oofPredictions,
+    oof_prediction_coverage:oofPredictionCoverage
+  };
 }
 
 /** Predict using the final train-only cross-fitted calibration artifact. */

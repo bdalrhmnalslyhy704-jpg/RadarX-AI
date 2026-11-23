@@ -1312,6 +1312,32 @@ test('score threshold policy abstains per bucket and Logistic matches its trade 
     report.trials[0].logistic_metrics.trade_count);
 });
 
+test('outer execution evaluation applies a frozen positive base-return gate before rank ordering',()=>{
+  const rows=makeRows({days:1,rowsPerDay:30});
+  const scores=rows.map((row,index)=>index%15===0?1.5:0.1);
+  const baseScores=rows.map((row,index)=>index===15?-0.25:0.15);
+  const logistic=rows.map((row,index)=>index%15===1?0.99:0.1);
+  const report=evaluateExternalExecutionRiskTopK(rows,scores,logistic,{
+    riskPenaltyWeights:rows.map(()=>0.05),
+    baseRiskAdjustedScores:baseScores,
+    rankingScoreAdjustmentWeights:rows.map(()=>2),
+    minimumPositiveNetReturnProbabilities:rows.map(()=>0.6),
+    topKGrid:[1],roundTripCostBps:30,
+    minimumRiskAdjustedScore:0.5,abstentionPercentile:0.8
+  });
+  assert.equal(report.status,'AVAILABLE');
+  assert.equal(report.base_risk_adjusted_return_gate_enforced,true);
+  assert.equal(report.ranking_score_adjustment_weight,2);
+  assert.equal(report.minimum_positive_net_return_probability,0.6);
+  assert.equal(report.frozen_abstention_policy.minimum_positive_net_return_probability,0.6);
+  assert.equal(report.frozen_abstention_policy.base_expected_net_return_after_risk_must_be_positive,true);
+  assert.equal(report.trials[0].neural_selected_count,1);
+  assert.equal(report.trials[0].positive_base_risk_adjusted_gate_enforced,true);
+  assert.equal(report.trials[0].positive_base_risk_adjusted_candidate_count,29);
+  assert.equal(report.trials[0].logistic_matched_candidate_signal_counts,true);
+  assert.equal(report.trials[0].neural_metrics.trade_count,1);
+  assert.equal(report.trials[0].logistic_metrics.trade_count,1);
+});
 test('outer-validation moving-block bootstrap returns paired Brier and execution confidence intervals without holdout access',()=>{
   const rows=makeRows({days:60,rowsPerDay:80});
   const sourceCommitSha='9'.repeat(40);
@@ -1330,6 +1356,8 @@ test('outer-validation moving-block bootstrap returns paired Brier and execution
   const pooledScores=validation.map((row,index)=>
     Number((0.2+((index*7)%11)/100).toFixed(5)));
   const logisticScores=probabilityByModel.LOGISTIC_REGRESSION;
+  const contextBaseScores=validation.map((row,index)=>index%13===0?-0.2:0.3);
+  const pooledBaseScores=validation.map((row,index)=>index%17===0?-0.15:0.31);
   const result=bootstrapOuterValidationUncertainty(validation,probabilityByModel,{
     executionScoresByPolicy:{
       LOGIT_CONTEXT_AUGMENTED:contextScores,
@@ -1338,9 +1366,13 @@ test('outer-validation moving-block bootstrap returns paired Brier and execution
       LOGISTIC_MATCHED_POOLED:logisticScores,
       LOGISTIC_REGRESSION:logisticScores
     },
+    baseRiskAdjustedScoresByPolicy:{
+      LOGIT_CONTEXT_AUGMENTED:contextBaseScores,
+      POOLED_ONLY:pooledBaseScores
+    },
     executionPolicyConfigurations:{
-      LOGIT_CONTEXT_AUGMENTED:{minimum_score:0.29},
-      POOLED_ONLY:{minimum_score:0.29},
+      LOGIT_CONTEXT_AUGMENTED:{minimum_score:0.29,require_positive_base_score:true},
+      POOLED_ONLY:{minimum_score:0.29,require_positive_base_score:true},
       LOGISTIC_MATCHED_CONTEXT:{match_trade_counts_with:'LOGIT_CONTEXT_AUGMENTED'},
       LOGISTIC_MATCHED_POOLED:{match_trade_counts_with:'POOLED_ONLY'}
     },
@@ -1376,6 +1408,9 @@ test('outer-validation moving-block bootstrap returns paired Brier and execution
   assert.equal(contextVsMatchedLogistic.valid_repetitions,100);
   assert.equal(result.execution.matched_comparator_trade_counts_by_decision_bucket,true);
   assert.equal(result.execution.selective_policies_use_inner_selection_thresholds_only,true);
+  assert.deepEqual(result.execution.positive_base_return_gate_policies,
+    ['LOGIT_CONTEXT_AUGMENTED','POOLED_ONLY']);
+  assert.equal(result.execution.base_risk_adjusted_scores_are_never_rank_adjusted,true);
   const drawdown=result.execution.strategy_confidence_intervals['1']
     .LOGIT_CONTEXT_AUGMENTED.max_drawdown_pct;
   assert.equal(drawdown.status,'AVAILABLE');

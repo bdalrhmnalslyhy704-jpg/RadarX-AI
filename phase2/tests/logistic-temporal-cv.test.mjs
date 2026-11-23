@@ -82,8 +82,8 @@ test('tuned Logistic selects hyperparameters only on purged train folds then ref
   const {rows,vectors}=cohort();
   const executionCalls=[];
   const result=fitTunedTemporalLogisticBaseline(rows,vectors,{
-    foldCount:5,purgeMs:86_400_000,initialTrainingFraction:0.32,
-    validationFraction:0.12,minimumTrainingRows:100,
+    foldCount:9,purgeMs:86_400_000,initialTrainingFraction:0.15,
+    validationFraction:0.09,minimumTrainingRows:100,
     minimumValidationRows:50,minimumClassCount:5,
     candidateGrid:[
       {l2:0.001,learningRate:0.01},
@@ -97,14 +97,17 @@ test('tuned Logistic selects hyperparameters only on purged train folds then ref
     }
   });
   assert.equal(result.report.status,'COMPLETE');
-  assert.equal(result.report.fold_count,5);
+  assert.equal(result.report.fold_count,9);
   assert.equal(result.report.hyperparameter_selection_folds,3);
+  assert.equal(result.report.oof_baseline_generation_folds,4);
   assert.equal(result.report.folds[0].role,'HYPERPARAMETER_SELECTION');
   assert.equal(result.report.folds[2].role,'HYPERPARAMETER_SELECTION');
-  assert.equal(result.report.folds[3].role,'CALIBRATION_FIT');
-  assert.equal(result.report.folds[4].role,'CALIBRATION_CHECK');
-  assert.equal(result.report.calibration.fit_fold,4);
-  assert.equal(result.report.calibration.check_fold,5);
+  assert.equal(result.report.folds[3].role,'OOF_BASELINE_GENERATION');
+  assert.equal(result.report.folds[6].role,'OOF_BASELINE_GENERATION');
+  assert.equal(result.report.folds[7].role,'CALIBRATION_FIT');
+  assert.equal(result.report.folds[8].role,'CALIBRATION_CHECK');
+  assert.equal(result.report.calibration.fit_fold,8);
+  assert.equal(result.report.calibration.check_fold,9);
   assert.equal(result.report.calibration.training_partition_only,true);
   assert.equal(result.report.calibration.outer_validation_used_for_calibrator_fit,false);
   assert.equal(result.report.calibration.outer_validation_used_for_calibrator_selection,false);
@@ -116,12 +119,29 @@ test('tuned Logistic selects hyperparameters only on purged train folds then ref
   assert.equal(result.report.outer_validation_rows_used,false);
   assert.equal(result.report.holdout_rows_or_labels_used,false);
   assert.equal(result.report.holdout_opened,false);
+  assert.equal(result.oof_prediction_coverage.schema,
+    'RADARX_PURGED_EXPANDING_TEMPORAL_LOGISTIC_OOF_PREDICTIONS_V1');
+  assert.equal(result.oof_prediction_coverage.total_training_rows,rows.length);
+  assert.equal(result.oof_prediction_coverage.oof_scored_rows,result.oof_predictions.length);
+  assert.ok(result.oof_predictions.length>=Math.ceil(rows.length*0.5));
+  assert.ok(result.oof_predictions.length<rows.length,
+    'warmup/tail rows without a forward purged fold must stay unscored');
+  const oofIndices=result.oof_predictions.map(item=>item.index);
+  assert.equal(new Set(oofIndices).size,oofIndices.length);
+  for(const item of result.oof_predictions){
+    assert.equal(item.id,rows[item.index].id);
+    assert.equal(item.at,rows[item.index].at);
+    assert.ok(item.raw_probability>0&&item.raw_probability<1);
+    assert.ok(item.maximum_training_label_resolved_at<item.at);
+    assert.equal(item.source_partition,'PURGED_EXPANDING_TRAIN_ONLY_OOF_FOLD');
+  }
+  assert.equal(result.oof_prediction_coverage.outer_validation_or_holdout_used,false);
   assert.equal(result.report.outer_validation_used_for_hyperparameter_selection,false);
   assert.equal(result.report.execution_metrics_used_for_hyperparameter_selection,false);
   assert.equal(result.report.candidate_results.length,2);
   assert.ok(result.report.selected_configuration.l2===0.001||
     result.report.selected_configuration.l2===0.1);
-  assert.equal(executionCalls.length,5);
+  assert.equal(executionCalls.length,9);
   assert.ok(result.report.folds.every(fold=>fold.execution_metrics!==null));
   assert.equal(result.model.standardizer.fit_partition,'CURRENT_TRAINING_FOLD_ONLY');
   assert.equal(result.model.standardizer.fit_rows,rows.length);
