@@ -258,9 +258,16 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.ok(profile.validation_start_at<profile.holdout_start_at);
   assert.equal(profile.holdout_comparison.sample_count,profile.holdout.sample_count,
     'the model comparison must report the exact number of holdout rows it actually scored');
-  assert.ok(profile.holdout.sample_count>=40,
-    'the holdout block must retain the full research sample count for diagnostics');
-  assert.ok(profile.holdout_comparison.sample_count===profile.holdout.sample_count,
+  if(profile.holdout_access.opened){
+    assert.ok(profile.holdout.sample_count>=40,
+      'an opened research holdout must retain the complete scored sample count');
+  }else{
+    assert.equal(profile.holdout.sample_count,0,
+      'a closed holdout must report zero scored rows');
+    assert.ok(profile.holdout.available_sample_count>=40,
+      'the reserved holdout coverage remains visible without scoring its labels');
+  }
+  assert.equal(profile.holdout_comparison.sample_count,profile.holdout.sample_count,
     'the comparison count must equal the number of rows actually scored');
   assert.equal(profile.live_eligibility_ready,false,
     'a small research holdout must never satisfy the 100-outcome live gate');
