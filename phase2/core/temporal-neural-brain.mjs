@@ -823,12 +823,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     }
     return groups;
   };
-  // Reserve a broad, untouched final block once the historical journal is mature.
-  // The larger holdout must cover both BTC regimes and both outcome classes; it
-  // never relaxes the per-regime sample or performance gates.
-  // Mature datasets reserve a broad untouched holdout of at least twice
-  // the live sample floor, while capping it at 25% so more purged history can
-  // train the shared temporal model. Medium datasets keep a 20%/180-row floor.
+  // Reserve a broad, untouched final block using row counts and chronology only.
+  // No Holdout outcome labels or class balance are inspected during split sizing,
+  // regime support checks, model selection, or outer Validation.
+  // Mature datasets reserve a broad block of at least twice the live sample floor,
+  // capped at 25% so more purged history can train the shared temporal model.
   const holdoutTargetSamples=rows.length>=liveHoldoutSamples*8
     ?Math.max(liveHoldoutSamples*2,Math.ceil(rows.length*0.25))
     :rows.length>=liveHoldoutSamples*4
