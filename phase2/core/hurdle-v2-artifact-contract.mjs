@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { predictHurdleExpectedNetReturn } from './hurdle-return-head.mjs';
 
 export const HURDLE_V2_ARTIFACT_SCHEMA =
-  'RADARX_BUILD224_HURDLE_V2_DUAL_HEAD_ARTIFACT_V1';
+  'RADARX_BUILD224_HURDLE_V2_DUAL_HEAD_ARTIFACT_V2';
 export const HURDLE_V2_CONTEXT_SCHEMA =
   'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_MATCHED_FULL_SEQUENCE_LOGISTIC_CV_OOF_CLASSIFIER_AND_INDEPENDENT_RANK_SCORE_V8';
 export const HURDLE_V2_POOLED_SCHEMA =
@@ -16,7 +16,7 @@ export const HURDLE_V2_FEATURE_SCHEMA =
 export const HURDLE_V2_OBJECTIVE =
   'RADARX_HURDLE_V2_BINARY_LOGISTIC_NLL_PLUS_CLASS_CONDITIONAL_HUBER_V1';
 export const HURDLE_V2_CALIBRATION_ID =
-  'RADARX_HURDLE_V2_RAW_SIGMOID_NO_POSTHOC_CALIBRATION_V1';
+  'RADARX_HURDLE_V2_PURGED_EXECUTION_HEAD_PLATT_CALIBRATION_V1';
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const finite = value => typeof value === 'number' && Number.isFinite(value);
@@ -66,6 +66,33 @@ function validateNormalizer(normalizer, count, name) {
 }
 function validateHead(head, names, name) {
   const count = names.length;
+  const calibration=head?.probability_calibration;
+  const calibrationValid=calibration?.schema===
+      'RADARX_HURDLE_POSITIVE_NET_RETURN_PLATT_CALIBRATOR_V1'&&
+    calibration.fitted===true&&
+    finite(calibration.slope)&&calibration.slope>=0.05&&calibration.slope<=8&&
+    finite(calibration.intercept)&&calibration.intercept>=-8&&calibration.intercept<=8&&
+    calibration.fit_boundary===
+      'PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK_ONLY'&&
+    calibration.training_partition==='PURGED_INNER_TRAINING_EXECUTION_HEAD_TRAINING_BLOCK'&&
+    calibration.calibration_partition==='PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK'&&
+    Number.isInteger(calibration.training_rows)&&calibration.training_rows>=20&&
+    Number.isInteger(calibration.training_positive_rows)&&calibration.training_positive_rows>=8&&
+    Number.isInteger(calibration.training_non_positive_rows)&&calibration.training_non_positive_rows>=8&&
+    Number.isInteger(calibration.calibration_rows)&&calibration.calibration_rows>=30&&
+    Number.isInteger(calibration.calibration_positive_rows)&&calibration.calibration_positive_rows>=8&&
+    Number.isInteger(calibration.calibration_non_positive_rows)&&calibration.calibration_non_positive_rows>=8&&
+    Number.isInteger(calibration.purged_rows)&&calibration.purged_rows>0&&
+    Number.isInteger(calibration.horizon_ms)&&calibration.horizon_ms===14_400_000&&
+    finite(calibration.training_max_at)&&finite(calibration.training_max_resolved_at)&&
+    finite(calibration.calibration_min_at)&&
+    calibration.training_max_resolved_at<calibration.calibration_min_at&&
+    calibration.calibration_min_at-calibration.training_max_at>=calibration.horizon_ms&&
+    finite(calibration.resolved_label_gap_ms)&&calibration.resolved_label_gap_ms>0&&
+    calibration.chronology_valid===true&&
+    calibration.complete_decision_groups===true&&
+    calibration.disjoint_sample_identities===true&&
+    calibration.validation_or_holdout_used===false;
   if (!head || head.schema !== 'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V2' ||
       head.fitted !== true || !Array.isArray(head.weights) ||
       head.weights.length !== count || !head.weights.every(finite) ||
@@ -77,7 +104,8 @@ function validateHead(head, names, name) {
       head.validation_or_holdout_used !== false ||
       head.fit_boundary !== 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY' ||
       !head.positive_conditional_mean_model?.fitted ||
-      !head.non_positive_conditional_mean_model?.fitted) {
+      !head.non_positive_conditional_mean_model?.fitted ||
+      !calibrationValid) {
     throw new TypeError('HURDLE_V2_HEAD_INVALID:' + name);
   }
   for (const [label, model, positive] of [
@@ -235,13 +263,13 @@ export function createHurdleV2Artifact({
   };
   const core = {
     artifact_schema: HURDLE_V2_ARTIFACT_SCHEMA,
-    artifact_schema_version: 1,
+    artifact_schema_version: 2,
     head_parameter_hashes: {
       contextual: hashObject(contextual),
       pooled: hashObject(pooled)
     },
     model_family: 'TCN_LSTM_HURDLE_EXPECTED_NET_RETURN',
-    model_version: 'HURDLE_V2_FEATURE_CONDITIONAL_MEANS_V3_RANK_ADJUSTED_EXECUTION_POLICY',
+    model_version: 'HURDLE_V2_FEATURE_CONDITIONAL_MEANS_V4_PURGED_PLATT_CALIBRATED_EXECUTION_POLICY',
     code_commit_sha: String(codeCommitSha).toLowerCase(),
     dataset_sha256: String(datasetSha256).toLowerCase(),
     input_file_sha256: String(inputFileSha256).toLowerCase(),
@@ -360,7 +388,7 @@ export function createHurdleV2Artifact({
       probability_class_weights: {positive: 1, non_positive: 1}
     },
     calibration_definition:
-      'RAW_SIGMOID_PROBABILITY_NO_POST_HOC_CALIBRATOR_IS_FIT_OR_APPLIED_TO_HURDLE_PROBABILITY',
+      'HURDLE_RAW_SIGMOID_POSITIVE_NET_RETURN_PROBABILITY_IS_PLATT_CALIBRATED_ON_A_LATER_PURGED_EXECUTION_HEAD_BLOCK; THE CALIBRATION BLOCK IS DISJOINT FROM THE EARLIER HURDLE FIT BLOCK AND INNER SELECTION; THE FOUR_HOUR_LABEL_MATURITY_GAP_IS_ENFORCED; OUTER_VALIDATION_AND_HOLDOUT_ARE_NOT_USED',
     calibration_id: HURDLE_V2_CALIBRATION_ID,
     cost_model_id: 'FIXED_LINEAR_ROUND_TRIP_BPS_V1',
     round_trip_cost_bps: roundTripCostBps,
@@ -416,6 +444,28 @@ export function createHurdleV2Artifact({
           non_positive_rows: pooled.non_positive_rows,
           empirical_positive_rate: pooled.empirical_positive_rate,
           class_reweighting_used: pooled.class_reweighting_used
+        },
+        probability_calibration:{
+          contextual:{
+            schema:contextual.probability_calibration.schema,
+            fit_boundary:contextual.probability_calibration.fit_boundary,
+            training_rows:contextual.probability_calibration.training_rows,
+            calibration_rows:contextual.probability_calibration.calibration_rows,
+            purged_rows:contextual.probability_calibration.purged_rows,
+            horizon_ms:contextual.probability_calibration.horizon_ms,
+            resolved_label_gap_ms:contextual.probability_calibration.resolved_label_gap_ms,
+            chronology_valid:contextual.probability_calibration.chronology_valid
+          },
+          pooled:{
+            schema:pooled.probability_calibration.schema,
+            fit_boundary:pooled.probability_calibration.fit_boundary,
+            training_rows:pooled.probability_calibration.training_rows,
+            calibration_rows:pooled.probability_calibration.calibration_rows,
+            purged_rows:pooled.probability_calibration.purged_rows,
+            horizon_ms:pooled.probability_calibration.horizon_ms,
+            resolved_label_gap_ms:pooled.probability_calibration.resolved_label_gap_ms,
+            chronology_valid:pooled.probability_calibration.chronology_valid
+          }
         },
         validation_or_holdout_used: false
       },

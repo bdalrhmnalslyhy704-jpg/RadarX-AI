@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { fitHurdleReturnHead,predictHurdleExpectedNetReturn } from './hurdle-return-head.mjs';
+import { fitHurdleReturnHead,fitHurdlePositiveReturnCalibration,predictHurdleExpectedNetReturn } from './hurdle-return-head.mjs';
 import { predictTemporalLogisticProbability } from './temporal-logistic-baseline.mjs';
 import {
   focalAsymmetricBrierLoss,deriveTrainingClassWeights,
@@ -240,6 +240,157 @@ export function selectChronologicalTcnLstmTrainingRows(
     selected_bucket_max_rows:Math.max(...selectedBuckets.map(([,group])=>group.length))
   }};
 }
+/**
+ * Split an already representation-OOS execution-head cohort into an earlier
+ * Hurdle fit block, a complete forward-label-maturity purge, and a later
+ * probability-calibration block. The returned indexes refer to the original
+ * rows/net-return vectors and are never derived from inner-selection outcomes.
+ */
+export function splitTcnLstmHurdleProbabilityCalibrationRows(rows, netReturns, {
+  horizonMs = 4 * 60 * 60 * 1000,
+  bucketMs = TCN_LSTM_RANKING_BUCKET_MS,
+  calibrationGroupFraction = 0.20,
+  minimumTrainingGroups = 20,
+  minimumCalibrationGroups = 8,
+  minimumClassRows = 8
+} = {}) {
+  if (!Array.isArray(rows) || !Array.isArray(netReturns) ||
+      rows.length !== netReturns.length || !finite(horizonMs) || horizonMs <= 0 ||
+      !finite(bucketMs) || bucketMs <= 0 ||
+      !finite(calibrationGroupFraction) || calibrationGroupFraction <= 0 ||
+      calibrationGroupFraction >= 0.5 ||
+      !Number.isInteger(minimumTrainingGroups) || minimumTrainingGroups < 1 ||
+      !Number.isInteger(minimumCalibrationGroups) || minimumCalibrationGroups < 1 ||
+      !Number.isInteger(minimumClassRows) || minimumClassRows < 1 ||
+      rows.some((row, index) => !row || !finite(row.at) ||
+        !finite(row.resolved_at) || row.resolved_at <= row.at ||
+        !finite(netReturns[index]))) {
+    throw new TypeError('HURDLE_PROBABILITY_CALIBRATION_SPLIT_INPUT_INVALID');
+  }
+  const ordered = rows.map((row, index) => ({row, index, net:Number(netReturns[index])}))
+    .sort((a, b) => Number(a.row.at) - Number(b.row.at) ||
+      String(a.row.symbol ?? a.row.id ?? '').localeCompare(String(b.row.symbol ?? b.row.id ?? '')) ||
+      sampleIdentity(a.row).localeCompare(sampleIdentity(b.row)));
+  const identities = ordered.map(item => sampleIdentity(item.row));
+  if (new Set(identities).size !== identities.length)
+    throw new TypeError('HURDLE_PROBABILITY_CALIBRATION_DUPLICATE_IDENTITY');
+
+  const groupsByBucket = new Map();
+  for (const item of ordered) {
+    const bucketAt = Math.floor(Number(item.row.at) / bucketMs) * bucketMs;
+    if (!groupsByBucket.has(bucketAt)) groupsByBucket.set(bucketAt, []);
+    groupsByBucket.get(bucketAt).push(item);
+  }
+  const groups = [...groupsByBucket.entries()].sort((a, b) => a[0] - b[0])
+    .map(([bucketAt, items]) => ({bucket_at:bucketAt, items}));
+  const diagnosticBase = {
+    schema:'RADARX_HURDLE_PURGED_EXECUTION_HEAD_PROBABILITY_CALIBRATION_SPLIT_V1',
+    source_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
+    horizon_ms:Number(horizonMs),
+    bucket_ms:Number(bucketMs),
+    calibration_group_fraction:Number(calibrationGroupFraction),
+    available_decision_groups:groups.length,
+    validation_or_holdout_used:false
+  };
+  const unavailable = (reason, extra={}) => ({
+    status:'UNAVAILABLE', reason,
+    training_indexes:[], calibration_indexes:[], purged_indexes:[],
+    diagnostics:{...diagnosticBase,status:'UNAVAILABLE',reason,...extra}
+  });
+  if (groups.length < minimumTrainingGroups + minimumCalibrationGroups + 1)
+    return unavailable('INSUFFICIENT_DECISION_GROUPS_FOR_PURGED_HURDLE_CALIBRATION');
+
+  const calibrationGroupCount = Math.max(
+    minimumCalibrationGroups, Math.ceil(groups.length * calibrationGroupFraction)
+  );
+  if (calibrationGroupCount >= groups.length)
+    return unavailable('HURDLE_CALIBRATION_GROUP_ALLOCATION_INVALID');
+  const calibrationGroups = groups.slice(-calibrationGroupCount);
+  const calibrationMinAt = Math.min(...calibrationGroups.flatMap(group =>
+    group.items.map(item => Number(item.row.at))
+  ));
+  const earlierGroups = groups.slice(0, -calibrationGroupCount);
+  const trainingGroups = earlierGroups.filter(group =>
+    group.items.every(item => Number(item.row.resolved_at) < calibrationMinAt)
+  );
+  const purgedGroups = earlierGroups.filter(group =>
+    !group.items.every(item => Number(item.row.resolved_at) < calibrationMinAt)
+  );
+  const trainingItems = trainingGroups.flatMap(group => group.items);
+  const calibrationItems = calibrationGroups.flatMap(group => group.items);
+  const purgedItems = purgedGroups.flatMap(group => group.items);
+  const trainingIndexes = trainingItems.map(item => item.index);
+  const calibrationIndexes = calibrationItems.map(item => item.index);
+  const purgedIndexes = purgedItems.map(item => item.index);
+  const groupSizes = groups.map(group => group.items.length);
+  const completeGroups = groupSizes.every(size => size === groupSizes[0]) &&
+    groups.every(group => {
+      const symbols = group.items.map(item => String(item.row.symbol ?? ''));
+      return symbols.every(Boolean) && new Set(symbols).size === symbols.length;
+    });
+  const exactMaturity = ordered.every(item =>
+    Number(item.row.resolved_at) - Number(item.row.at) === Number(horizonMs)
+  );
+  const support = items => {
+    const positive = items.filter(item => item.net > 0).length;
+    return {rows:items.length,positive,non_positive:items.length-positive};
+  };
+  const trainingSupport = support(trainingItems);
+  const calibrationSupport = support(calibrationItems);
+  const trainingMaxResolvedAt = trainingItems.length
+    ? Math.max(...trainingItems.map(item => Number(item.row.resolved_at))) : null;
+  const trainingMaxAt = trainingItems.length
+    ? Math.max(...trainingItems.map(item => Number(item.row.at))) : null;
+  const calibrationMinRowAt = calibrationItems.length
+    ? Math.min(...calibrationItems.map(item => Number(item.row.at))) : null;
+  const trainingIds = new Set(trainingItems.map(item => sampleIdentity(item.row)));
+  const calibrationIds = new Set(calibrationItems.map(item => sampleIdentity(item.row)));
+  const identitiesDisjoint = [...calibrationIds].every(id => !trainingIds.has(id));
+  const chronologyValid = exactMaturity && completeGroups &&
+    trainingGroups.length >= minimumTrainingGroups &&
+    calibrationGroups.length >= minimumCalibrationGroups &&
+    trainingMaxResolvedAt < calibrationMinRowAt &&
+    calibrationMinRowAt - trainingMaxAt >= horizonMs &&
+    identitiesDisjoint &&
+    trainingSupport.positive >= minimumClassRows &&
+    trainingSupport.non_positive >= minimumClassRows &&
+    calibrationSupport.positive >= minimumClassRows &&
+    calibrationSupport.non_positive >= minimumClassRows;
+  const diagnostics = {
+    ...diagnosticBase,
+    status:chronologyValid?'READY':'UNAVAILABLE',
+    training_groups:trainingGroups.length,
+    purged_groups:purgedGroups.length,
+    calibration_groups:calibrationGroups.length,
+    training_rows:trainingItems.length,
+    purged_rows:purgedItems.length,
+    calibration_rows:calibrationItems.length,
+    training_net_return_support:trainingSupport,
+    calibration_net_return_support:calibrationSupport,
+    training_max_at:trainingMaxAt,
+    training_max_resolved_at:trainingMaxResolvedAt,
+    calibration_min_at:calibrationMinRowAt,
+    resolved_label_gap_ms:trainingMaxResolvedAt===null?null:
+      calibrationMinRowAt-trainingMaxResolvedAt,
+    training_decision_time_gap_ms:trainingMaxAt===null?null:
+      calibrationMinRowAt-trainingMaxAt,
+    exact_four_hour_label_maturity:exactMaturity,
+    complete_decision_groups:completeGroups,
+    chronology_valid:chronologyValid,
+    disjoint_sample_identities:identitiesDisjoint,
+    validation_or_holdout_used:false
+  };
+  if (!chronologyValid)
+    return unavailable('HURDLE_CALIBRATION_SUPPORT_OR_CHRONOLOGY_FAILED',diagnostics);
+  return {
+    status:'READY',reason:null,
+    training_indexes:trainingIndexes,
+    calibration_indexes:calibrationIndexes,
+    purged_indexes:purgedIndexes,
+    diagnostics
+  };
+}
+
 export function splitTcnLstmTrainingRowsForExecutionHead(rows,{
   executionHeadFraction=0.40,minimumModelTrainingRows=20,minimumExecutionHeadRows=20
 }={}){
@@ -1859,6 +2010,9 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
     const downside=Math.max(0,Math.min(30,-Number(item.max_adverse_excursion_pct)));
     return {pooled,contextual,net,downside};
   });
+  const hurdleCalibrationSplit=splitTcnLstmHurdleProbabilityCalibrationRows(
+    rows,vectors.map(item=>item.net),{horizonMs:4*60*60*1000}
+  );
   const fitHead=(targetKey,featureKey,featureCount)=>{
     const rawFeatures=vectors.map(item=>item[featureKey]);
     const rawTargets=vectors.map(item=>Number(item[targetKey]));
@@ -1947,9 +2101,11 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
   model.executionRiskHeadPooledOnlyBias=pooledOnly.downside_risk.bias;
   model.executionHeadInputFeatureSchema=TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA;
   const fitHurdleVariant=featureKey=>{
-    const netReturns=vectors.map(item=>Number(item.net));
-    const positiveCount=netReturns.filter(value=>value>0).length;
-    const nonPositiveCount=netReturns.length-positiveCount;
+    const fitIndexes=hurdleCalibrationSplit.status==='READY'
+      ?hurdleCalibrationSplit.training_indexes:vectors.map((_,index)=>index);
+    const fitReturns=fitIndexes.map(index=>Number(vectors[index].net));
+    const positiveCount=fitReturns.filter(value=>value>0).length;
+    const nonPositiveCount=fitReturns.length-positiveCount;
     if(positiveCount<8||nonPositiveCount<8)return {
       schema:'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V2',fitted:false,
       reason:'HURDLE_RETURN_HEAD_CLASS_SUPPORT_TOO_SMALL',
@@ -1957,10 +2113,52 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
       fit_boundary:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
       validation_or_holdout_used:false
     };
-    return fitHurdleReturnHead(
-      vectors.map(item=>item[featureKey]),netReturns,
+    const head=fitHurdleReturnHead(
+      fitIndexes.map(index=>vectors[index][featureKey]),fitReturns,
       {learningRate:0.02,epochs:200,l2:0.05,minimumClassRows:8}
     );
+    if(hurdleCalibrationSplit.status==='READY'){
+      const calibrationIndexes=hurdleCalibrationSplit.calibration_indexes;
+      const calibrationReturns=calibrationIndexes.map(index=>Number(vectors[index].net));
+      const rawProbabilities=calibrationIndexes.map(index=>
+        predictHurdleExpectedNetReturn(vectors[index][featureKey],head)
+          .raw_probability_positive_net_return
+      );
+      const calibrator=fitHurdlePositiveReturnCalibration(
+        rawProbabilities,calibrationReturns,{
+          minimumSamples:30,minimumPositive:8,minimumNegative:8,
+          iterations:800,learningRate:0.03,regularization:0.05
+        }
+      );
+      if(calibrator.fitted===true){
+        const split=hurdleCalibrationSplit.diagnostics;
+        head.probability_calibration={
+          ...calibrator,
+          training_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_TRAINING_BLOCK',
+          calibration_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK',
+          training_rows:split.training_rows,
+          training_positive_rows:split.training_net_return_support.positive,
+          training_non_positive_rows:split.training_net_return_support.non_positive,
+          training_max_at:split.training_max_at,
+          training_max_resolved_at:split.training_max_resolved_at,
+          calibration_rows:split.calibration_rows,
+          calibration_positive_rows:split.calibration_net_return_support.positive,
+          calibration_non_positive_rows:split.calibration_net_return_support.non_positive,
+          calibration_min_at:split.calibration_min_at,
+          purged_rows:split.purged_rows,
+          purged_groups:split.purged_groups,
+          horizon_ms:split.horizon_ms,
+          resolved_label_gap_ms:split.resolved_label_gap_ms,
+          training_decision_time_gap_ms:split.training_decision_time_gap_ms,
+          chronology_valid:split.chronology_valid,
+          complete_decision_groups:split.complete_decision_groups,
+          disjoint_sample_identities:split.disjoint_sample_identities,
+          source_partition:split.source_partition,
+          validation_or_holdout_used:false
+        };
+      }
+    }
+    return head;
   };
   const hurdleReturnHeads={
     LOGIT_CONTEXT_AUGMENTED:fitHurdleVariant('contextual'),
@@ -2022,6 +2220,13 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
         class_reweighting_used:hurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED?.class_reweighting_used??false
       },
       fit_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
+      probability_calibration_split:hurdleCalibrationSplit.diagnostics,
+      probability_calibration:{
+        contextual_fitted:hurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED?.probability_calibration?.fitted===true,
+        pooled_fitted:hurdleReturnHeads.POOLED_ONLY?.probability_calibration?.fitted===true,
+        contextual_fit_boundary:hurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED?.probability_calibration?.fit_boundary??null,
+        pooled_fit_boundary:hurdleReturnHeads.POOLED_ONLY?.probability_calibration?.fit_boundary??null
+      },
       validation_or_holdout_used:false
     },
     score_context:{

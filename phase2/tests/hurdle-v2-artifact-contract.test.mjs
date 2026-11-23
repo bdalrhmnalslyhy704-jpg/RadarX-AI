@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {fitHurdleReturnHead,predictHurdleExpectedNetReturn} from '../core/hurdle-return-head.mjs';
+import {fitHurdleReturnHead,fitHurdlePositiveReturnCalibration,predictHurdleExpectedNetReturn} from '../core/hurdle-return-head.mjs';
 import {
   HURDLE_V2_CONTEXT_SCHEMA,HURDLE_V2_OBJECTIVE,
   createHurdleV2Artifact,verifyHurdleV2Artifact,
@@ -48,6 +48,30 @@ before(async () => {
   const pooled = fitHurdleReturnHead(rows44.map(row => row.slice(0, 8)), returns, {
     learningRate: 0.02, epochs: 120, l2: 0.05, minimumClassRows: 8
   });
+  const calibration=fitHurdlePositiveReturnCalibration(
+    Array(returns.length).fill(0.65),returns,{
+      minimumSamples:30,minimumPositive:8,minimumNegative:8,
+      iterations:800,learningRate:0.03,regularization:0.05
+    }
+  );
+  const calibrationProvenance={
+    ...calibration,
+    training_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_TRAINING_BLOCK',
+    calibration_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK',
+    training_rows:1800,training_positive_rows:500,training_non_positive_rows:1300,
+    training_max_at:1000,training_max_resolved_at:14_401_000,
+    calibration_rows:returns.length,
+    calibration_positive_rows:returns.filter(value=>value>0).length,
+    calibration_non_positive_rows:returns.filter(value=>value<=0).length,
+    calibration_min_at:15_301_000,
+    purged_rows:480,purged_groups:16,horizon_ms:14_400_000,
+    resolved_label_gap_ms:900_000,training_decision_time_gap_ms:14_400_000,
+    chronology_valid:true,complete_decision_groups:true,
+    disjoint_sample_identities:true,source_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
+    validation_or_holdout_used:false
+  };
+  contextual.probability_calibration={...calibrationProvenance};
+  pooled.probability_calibration={...calibrationProvenance};
   const model = {
     executionRegressionHeadsFitted: true,
     executionHeadInputFeatureSchema: HURDLE_V2_CONTEXT_SCHEMA,
@@ -175,9 +199,21 @@ test('04. artifact records complete code, dataset, target, split and cost proven
 test('05. Hurdle objective and calibration contract are explicit', () => {
   assert.equal(artifact.objective_id, HURDLE_V2_OBJECTIVE);
   assert.equal(artifact.selection_objective_id, fixture.selectionObjectiveId);
-  assert.match(artifact.calibration_definition, /NO_POST_HOC_CALIBRATOR/);
+  assert.match(artifact.calibration_definition, /PURGED_EXECUTION_HEAD_PLATT_CALIBRATION/);
+  assert.equal(artifact.calibration_id,'RADARX_HURDLE_V2_PURGED_EXECUTION_HEAD_PLATT_CALIBRATION_V1');
+  assert.equal(artifact.artifact_schema_version,2);
+  assert.equal(artifact.contextual_head_parameters.probability_calibration.fitted,true);
+  assert.equal(artifact.pooled_head_parameters.probability_calibration.fitted,true);
   assert.ok(artifact.calibration_id);
 });
+test('05b. artifact verifier rejects a head without the purged probability calibrator',()=>{
+  const invalid=JSON.parse(JSON.stringify(artifact));
+  delete invalid.contextual_head_parameters.probability_calibration;
+  const result=verifyHurdleV2Artifact(invalid);
+  assert.equal(result.valid,false);
+  assert.match(result.reason,/HURDLE_V2_HEAD_INVALID:contextual/);
+});
+
 test('06. failed scientific qualification does not prevent artifact creation', () => {
   assert.equal(artifact.training_status, 'TRAINED');
   assert.equal(artifact.scientific_qualification_status, 'NOT_QUALIFIED');

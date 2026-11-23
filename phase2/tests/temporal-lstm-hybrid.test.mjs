@@ -28,6 +28,7 @@ import {
   predictTcnLstmHybridCalibratedProbability,
   fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
+  splitTcnLstmHurdleProbabilityCalibrationRows,
   splitTcnLstmTrainingRowsForExecutionHead,
   selectTcnLstmExecutionRiskPolicy,
   selectTcnLstmHybridHyperparameters,
@@ -48,7 +49,7 @@ import {
 } from '../core/temporal-lstm-hybrid.mjs';
 import { topKRankingSignals,compareTcnLstmRankingExecutionMetrics,
   evaluateExternalExecutionRiskTopK } from '../core/neural-closure-contracts.mjs';
-import { fitHurdleReturnHead,predictHurdleExpectedNetReturn } from '../core/hurdle-return-head.mjs';
+import { fitHurdleReturnHead,fitHurdlePositiveReturnCalibration,predictHurdleExpectedNetReturn } from '../core/hurdle-return-head.mjs';
 
 const DAY=86400000;
 const BASE=1_780_000_000_000;
@@ -85,6 +86,80 @@ test('hurdle return head learns feature-conditional class means without class re
   assert.ok(low.expected_net_return_pct<0);
   const restored=JSON.parse(JSON.stringify(head));
   assert.deepEqual(predictHurdleExpectedNetReturn([0.9,1],restored),high);
+});
+
+test('Hurdle positive-net-return probability calibration is fitted on its separate calibration block and drives expected value',()=>{
+  const returns=Array.from({length:200},(_,index)=>
+    index%5===0?1.1+(index%7)*0.03:-0.65-(index%9)*0.02
+  );
+  const raw=Array(returns.length).fill(0.70);
+  const calibration=fitHurdlePositiveReturnCalibration(raw,returns,{
+    minimumSamples:30,minimumPositive:8,minimumNegative:8,
+    iterations:800,learningRate:0.03,regularization:0.05
+  });
+  assert.equal(calibration.fitted,true);
+  assert.equal(calibration.schema,'RADARX_HURDLE_POSITIVE_NET_RETURN_PLATT_CALIBRATOR_V1');
+  assert.equal(calibration.fit_boundary,
+    'PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK_ONLY');
+  assert.equal(calibration.positive_rows,40);
+  assert.equal(calibration.negative_rows,160);
+  assert.ok(calibration.slope>=0.05&&calibration.slope<=8);
+  assert.ok(Number.isFinite(calibration.intercept));
+  const head=fitHurdleReturnHead(
+    returns.map((value,index)=>[Math.sin(index*0.13),value>0?1:-1]),returns,
+    {learningRate:0.02,epochs:120,l2:0.05,minimumClassRows:8}
+  );
+  const rawPrediction=predictHurdleExpectedNetReturn([0.4,1],head);
+  head.probability_calibration=calibration;
+  const calibratedPrediction=predictHurdleExpectedNetReturn([0.4,1],head);
+  assert.equal(calibratedPrediction.probability_calibration_applied,true);
+  assert.equal(calibratedPrediction.probability_calibration_schema,calibration.schema);
+  assert.equal(calibratedPrediction.raw_probability_positive_net_return,
+    rawPrediction.raw_probability_positive_net_return);
+  assert.notEqual(calibratedPrediction.probability_positive_net_return,
+    calibratedPrediction.raw_probability_positive_net_return);
+  assert.ok(Math.abs(calibratedPrediction.expected_net_return_pct-
+    (calibratedPrediction.probability_positive_net_return*
+      calibratedPrediction.positive_net_return_mean_pct+
+     (1-calibratedPrediction.probability_positive_net_return)*
+      calibratedPrediction.non_positive_net_return_mean_pct))<1e-10);
+  const restored=JSON.parse(JSON.stringify(head));
+  assert.deepEqual(predictHurdleExpectedNetReturn([0.4,1],restored),calibratedPrediction);
+});
+
+test('Hurdle probability calibration split keeps an earlier training block, four-hour maturity purge, and later calibration block',()=>{
+  const bucketMs=15*60*1000,horizonMs=4*60*60*1000;
+  const rows=[],netReturns=[];
+  for(let group=0;group<50;group++){
+    const at=BASE+group*bucketMs;
+    for(let symbolIndex=0;symbolIndex<4;symbolIndex++){
+      const index=group*4+symbolIndex;
+      rows.push({
+        id:'hurdle-cal-'+index,symbol:'PAIR'+symbolIndex,
+        at,resolved_at:at+horizonMs
+      });
+      netReturns.push(index%5===0?1.0:-0.7);
+    }
+  }
+  const split=splitTcnLstmHurdleProbabilityCalibrationRows(rows,netReturns,{
+    horizonMs,bucketMs,calibrationGroupFraction:0.2,
+    minimumTrainingGroups:20,minimumCalibrationGroups:8,minimumClassRows:8
+  });
+  assert.equal(split.status,'READY');
+  assert.equal(split.diagnostics.training_groups,24);
+  assert.equal(split.diagnostics.purged_groups,16);
+  assert.equal(split.diagnostics.calibration_groups,10);
+  assert.equal(split.diagnostics.training_rows,96);
+  assert.equal(split.diagnostics.purged_rows,64);
+  assert.equal(split.diagnostics.calibration_rows,40);
+  assert.equal(split.diagnostics.chronology_valid,true);
+  assert.equal(split.diagnostics.exact_four_hour_label_maturity,true);
+  assert.equal(split.diagnostics.complete_decision_groups,true);
+  assert.equal(split.diagnostics.disjoint_sample_identities,true);
+  assert.ok(split.diagnostics.training_max_resolved_at<
+    split.diagnostics.calibration_min_at);
+  assert.ok(split.diagnostics.training_decision_time_gap_ms>=horizonMs);
+  assert.equal(split.diagnostics.validation_or_holdout_used,false);
 });
 
 test('auxiliary raw ranking logits drive deterministic Top-K per 15m bucket',()=>{
@@ -542,6 +617,8 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
     'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V6_TRAIN_ONLY_ZSCORE');
   assert.equal(profile.training.execution_regression_heads.hurdle_return_head.fit_partition,
     'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY');
+  assert.equal(profile.training.execution_regression_heads.hurdle_return_head.probability_calibration_split.status,
+    'UNAVAILABLE');
   assert.equal(profile.training.execution_regression_heads.hurdle_return_head.validation_or_holdout_used,
     false);
   assert.equal(profile.training.execution_regression_heads.hurdle_return_head.logit_context_augmented.fitted,

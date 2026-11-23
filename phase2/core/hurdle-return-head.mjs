@@ -2,6 +2,170 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
 const sigmoid = value => 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, value))));
 const softplus = value => Math.max(0, value) + Math.log1p(Math.exp(-Math.abs(value)));
 
+
+const clamp = (value, minimum, maximum) =>
+  Math.max(minimum, Math.min(maximum, value));
+
+/**
+ * Fit Platt calibration for the probability that realized net return after
+ * the declared round-trip cost is positive. The caller must supply a later,
+ * purged calibration block that is disjoint from the Hurdle head fit block.
+ */
+export function fitHurdlePositiveReturnCalibration(rawProbabilities, netReturns, {
+  minimumSamples = 30,
+  minimumPositive = 8,
+  minimumNegative = 8,
+  iterations = 800,
+  learningRate = 0.03,
+  regularization = 0.05
+} = {}) {
+  if (!Array.isArray(rawProbabilities) || !Array.isArray(netReturns) ||
+      rawProbabilities.length !== netReturns.length ||
+      !Number.isInteger(minimumSamples) || minimumSamples < 1 ||
+      !Number.isInteger(minimumPositive) || minimumPositive < 1 ||
+      !Number.isInteger(minimumNegative) || minimumNegative < 1 ||
+      !Number.isInteger(iterations) || iterations < 50 || iterations > 4000 ||
+      !finite(learningRate) || learningRate <= 0 || learningRate > 0.15 ||
+      !finite(regularization) || regularization < 0 || regularization > 2 ||
+      rawProbabilities.some(value => !finite(value) || value < 0 || value > 1) ||
+      netReturns.some(value => !finite(value))) {
+    throw new TypeError('HURDLE_POSITIVE_RETURN_CALIBRATION_INPUT_INVALID');
+  }
+  const labels = netReturns.map(value => Number(value) > 0 ? 1 : 0);
+  const positive = labels.reduce((sum, value) => sum + value, 0);
+  const negative = labels.length - positive;
+  const base = {
+    schema: 'RADARX_HURDLE_POSITIVE_NET_RETURN_PLATT_CALIBRATOR_V1',
+    method: 'REGULARIZED_PLATT_LOGISTIC_NLL_ON_LATER_PURGED_EXECUTION_HEAD_BLOCK_V1',
+    fitted: false,
+    samples: labels.length,
+    positive_rows: positive,
+    negative_rows: negative,
+    fit_boundary: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK_ONLY',
+    target_definition: 'REALIZED_FIRST_TOUCH_RETURN_MINUS_FIXED_ROUND_TRIP_COST_GT_ZERO',
+    round_trip_cost_already_applied: true,
+    validation_or_holdout_used: false
+  };
+  if (labels.length < minimumSamples || positive < minimumPositive ||
+      negative < minimumNegative) {
+    return {
+      ...base,
+      reason: 'HURDLE_POSITIVE_RETURN_CALIBRATION_CLASS_SUPPORT_BELOW_MINIMUM',
+      slope: 1,
+      intercept: 0,
+      minimum_samples: minimumSamples,
+      minimum_positive: minimumPositive,
+      minimum_negative: minimumNegative
+    };
+  }
+
+  const logits = rawProbabilities.map(value => {
+    const bounded = clamp(Number(value), 1e-8, 1 - 1e-8);
+    return clamp(Math.log(bounded / (1 - bounded)), -30, 30);
+  });
+  const slopePenalty = Number(regularization);
+  const interceptPenalty = slopePenalty * 0.25;
+  let slope = 1;
+  let intercept = 0;
+  let firstSlope = 0;
+  let secondSlope = 0;
+  let firstIntercept = 0;
+  let secondIntercept = 0;
+  let bestLoss = Infinity;
+  let best = { slope, intercept };
+  let wait = 0;
+  let completed = 0;
+  const beta1 = 0.9;
+  const beta2 = 0.999;
+  const epsilon = 1e-8;
+  const objective = (m, b) => {
+    let total = 0;
+    for (let index = 0; index < logits.length; index++) {
+      const z = clamp(m * logits[index] + b, -30, 30);
+      total += softplus(z) - labels[index] * z;
+    }
+    return total / logits.length +
+      slopePenalty * (m - 1) ** 2 + interceptPenalty * b * b;
+  };
+  const initial = objective(slope, intercept);
+  for (let step = 1; step <= iterations; step++) {
+    let gradientSlope = 0;
+    let gradientIntercept = 0;
+    for (let index = 0; index < logits.length; index++) {
+      const probability = sigmoid(slope * logits[index] + intercept);
+      const error = probability - labels[index];
+      gradientSlope += error * logits[index];
+      gradientIntercept += error;
+    }
+    gradientSlope = gradientSlope / logits.length +
+      2 * slopePenalty * (slope - 1);
+    gradientIntercept = gradientIntercept / logits.length +
+      2 * interceptPenalty * intercept;
+    if (!finite(gradientSlope) || !finite(gradientIntercept))
+      throw new TypeError('HURDLE_POSITIVE_RETURN_CALIBRATION_GRADIENT_NON_FINITE');
+
+    firstSlope = beta1 * firstSlope + (1 - beta1) * gradientSlope;
+    secondSlope = beta2 * secondSlope + (1 - beta2) * gradientSlope * gradientSlope;
+    firstIntercept = beta1 * firstIntercept + (1 - beta1) * gradientIntercept;
+    secondIntercept = beta2 * secondIntercept +
+      (1 - beta2) * gradientIntercept * gradientIntercept;
+    const correctedSlope = firstSlope / (1 - Math.pow(beta1, step));
+    const correctedSlopeVariance = secondSlope / (1 - Math.pow(beta2, step));
+    const correctedIntercept = firstIntercept / (1 - Math.pow(beta1, step));
+    const correctedInterceptVariance = secondIntercept / (1 - Math.pow(beta2, step));
+    const rate = Number(learningRate);
+    slope = clamp(slope - rate * correctedSlope /
+      (Math.sqrt(correctedSlopeVariance) + epsilon), 0.05, 8);
+    intercept = clamp(intercept - rate * correctedIntercept /
+      (Math.sqrt(correctedInterceptVariance) + epsilon), -8, 8);
+
+    const current = objective(slope, intercept);
+    if (!finite(current) || !finite(slope) || !finite(intercept))
+      throw new TypeError('HURDLE_POSITIVE_RETURN_CALIBRATION_STATE_NON_FINITE');
+    completed = step;
+    if (current < bestLoss - 1e-10) {
+      bestLoss = current;
+      best = { slope, intercept };
+      wait = 0;
+    } else if (++wait >= 100) {
+      break;
+    }
+  }
+  return {
+    ...base,
+    fitted: true,
+    slope: Number(best.slope),
+    intercept: Number(best.intercept),
+    initial_objective: Number(initial.toFixed(10)),
+    final_objective: Number(bestLoss.toFixed(10)),
+    iterations_completed: completed,
+    learning_rate: Number(learningRate),
+    regularization: Number(regularization),
+    slope_bounds: [0.05, 8],
+    intercept_bounds: [-8, 8],
+    raw_probability_class_reweighting: false
+  };
+}
+
+function applyHurdleProbabilityCalibration(rawProbability, calibration) {
+  if (!calibration || calibration.schema !==
+      'RADARX_HURDLE_POSITIVE_NET_RETURN_PLATT_CALIBRATOR_V1' ||
+      calibration.fitted !== true || !finite(calibration.slope) ||
+      calibration.slope < 0.05 || calibration.slope > 8 ||
+      !finite(calibration.intercept) || calibration.intercept < -8 ||
+      calibration.intercept > 8 ||
+      calibration.fit_boundary !==
+        'PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK_ONLY' ||
+      calibration.validation_or_holdout_used !== false) {
+    throw new TypeError('HURDLE_POSITIVE_RETURN_CALIBRATION_STATE_INVALID');
+  }
+  const bounded = clamp(Number(rawProbability), 1e-8, 1 - 1e-8);
+  const logit = Math.log(bounded / (1 - bounded));
+  return sigmoid(clamp(
+    Number(calibration.slope) * logit + Number(calibration.intercept), -30, 30
+  ));
+}
+
 export const HURDLE_RETURN_HEAD_SCHEMA =
   'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V2';
 
@@ -358,18 +522,25 @@ export function predictHurdleExpectedNetReturn(features, model) {
   const normalized = features.map((value, index) =>
     (Number(value) - Number(model.feature_mean[index])) / Number(model.feature_std[index])
   );
-  const probability = sigmoid(Number(model.bias) + normalized.reduce(
+  const rawProbability = sigmoid(Number(model.bias) + normalized.reduce(
     (sum, value, index) => sum + value * Number(model.weights[index]), 0
   ));
+  const calibration = model.probability_calibration ?? null;
+  const probability = calibration
+    ? applyHurdleProbabilityCalibration(rawProbability, calibration)
+    : rawProbability;
   const positiveMean = predictConditionalMean(normalized, positiveMeanModel);
   const nonPositiveMean = predictConditionalMean(normalized, nonPositiveMeanModel);
   const expected = probability * positiveMean + (1 - probability) * nonPositiveMean;
-  if (!finite(probability) || !finite(expected) ||
+  if (!finite(rawProbability) || !finite(probability) || !finite(expected) ||
       !finite(positiveMean) || !finite(nonPositiveMean)) {
     throw new TypeError('HURDLE_RETURN_HEAD_EXPECTATION_NON_FINITE');
   }
   return {
+    raw_probability_positive_net_return: Number(rawProbability),
     probability_positive_net_return: Number(probability),
+    probability_calibration_applied: Boolean(calibration),
+    probability_calibration_schema: calibration?.schema ?? null,
     expected_net_return_pct: Number(expected),
     positive_net_return_mean_pct: Number(positiveMean),
     non_positive_net_return_mean_pct: Number(nonPositiveMean),

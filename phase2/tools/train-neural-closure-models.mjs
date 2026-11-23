@@ -1504,7 +1504,9 @@ async function main(){
         const hurdleHeadsAvailable=selectedFit?.model?.executionRegressionHeadsFitted===true&&
           selectedFit?.model?.executionHeadInputFeatureSchema===TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA&&
           selectedFit?.model?.executionHurdleReturnHeads?.LOGIT_CONTEXT_AUGMENTED?.fitted===true&&
-          selectedFit?.model?.executionHurdleReturnHeads?.POOLED_ONLY?.fitted===true;
+          selectedFit?.model?.executionHurdleReturnHeads?.POOLED_ONLY?.fitted===true&&
+          selectedFit?.model?.executionHurdleReturnHeads?.LOGIT_CONTEXT_AUGMENTED?.probability_calibration?.fitted===true&&
+          selectedFit?.model?.executionHurdleReturnHeads?.POOLED_ONLY?.probability_calibration?.fitted===true;
         if(hurdleHeadsAvailable){
           const hurdleArtifact=createHurdleV2Artifact({
             fit:selectedFit,selection,
