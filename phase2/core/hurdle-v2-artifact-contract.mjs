@@ -18,6 +18,16 @@ export const HURDLE_V2_OBJECTIVE =
 export const HURDLE_V2_CALIBRATION_ID =
   'RADARX_HURDLE_V2_PURGED_EXECUTION_HEAD_PLATT_CALIBRATION_V1';
 
+const HURDLE_V2_FIXED_DATASET_ROWS = 32300;
+const HURDLE_V2_FIXED_SPLIT = Object.freeze({
+  schema: 'RADARX_NEURAL_CLOSURE_PURGED_60_20_20_UTC_DAY_SPLIT_V1',
+  purge_ms: 86400000,
+  counts: Object.freeze({
+    train: 19269, validation: 6282, holdout: 6389,
+    purged: 360, total: 32300
+  })
+});
+
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const canonical = value => {
@@ -52,6 +62,29 @@ const contextualFeatureNames = [
   'neural_classifier_logit_tanh_div_4',
   'independent_return_rank_score_tanh_div_4'
 ];
+
+function validateFixedSplit(splitDefinition, datasetRowCount) {
+  const counts = splitDefinition?.counts;
+  const scored = Number(counts?.train) + Number(counts?.validation) +
+    Number(counts?.holdout);
+  const purged = Number(datasetRowCount) - scored;
+  if (datasetRowCount !== HURDLE_V2_FIXED_DATASET_ROWS ||
+      splitDefinition?.schema !== HURDLE_V2_FIXED_SPLIT.schema ||
+      splitDefinition?.purge_ms !== HURDLE_V2_FIXED_SPLIT.purge_ms ||
+      counts?.train !== HURDLE_V2_FIXED_SPLIT.counts.train ||
+      counts?.validation !== HURDLE_V2_FIXED_SPLIT.counts.validation ||
+      counts?.holdout !== HURDLE_V2_FIXED_SPLIT.counts.holdout ||
+      purged !== HURDLE_V2_FIXED_SPLIT.counts.purged) {
+    throw new TypeError('HURDLE_V2_SPLIT_PROVENANCE_INVALID');
+  }
+  return {
+    train: counts.train,
+    validation: counts.validation,
+    holdout: counts.holdout,
+    purged,
+    total: datasetRowCount
+  };
+}
 
 function validateNormalizer(normalizer, count, name) {
   if (!normalizer || !Array.isArray(normalizer.feature_mean) ||
@@ -153,6 +186,8 @@ function manifestFrom(core, contentHash) {
     model_version: core.model_version,
     code_commit_sha: core.code_commit_sha,
     dataset_sha256: core.dataset_sha256,
+    input_file_sha256: core.input_file_sha256,
+    dataset_source_commit_sha: core.dataset_source_commit_sha,
     dataset_row_count: core.dataset_row_count,
     target_definition: core.target_definition,
     target_semantics: core.target_semantics,
@@ -160,6 +195,8 @@ function manifestFrom(core, contentHash) {
     feature_shape: core.feature_shape,
     feature_order: core.feature_order,
     split_id: core.split_id,
+    split_definition: core.split_definition,
+    purge_definition: core.purge_definition,
     objective_id: core.objective_id,
     selection_objective_id: core.selection_objective_id,
     calibration_id: core.calibration_id,
@@ -215,6 +252,7 @@ export function createHurdleV2Artifact({
       splitDefinition.purge_ms <= 0 || !splitDefinition.counts) {
     throw new TypeError('HURDLE_V2_PROVENANCE_INVALID');
   }
+  const fixedSplitCounts = validateFixedSplit(splitDefinition, datasetRowCount);
   const model = fit.model;
   if (model.executionRegressionHeadsFitted !== true ||
       model.executionHeadInputFeatureSchema !== HURDLE_V2_CONTEXT_SCHEMA) {
@@ -404,10 +442,10 @@ export function createHurdleV2Artifact({
     split_definition: {
       schema: splitDefinition.schema,
       purge_ms: splitDefinition.purge_ms,
-      counts: splitDefinition.counts,
-      training_rows: splitDefinition.counts.train,
-      outer_validation_rows: splitDefinition.counts.validation,
-      untouched_holdout_rows: splitDefinition.counts.holdout,
+      counts: fixedSplitCounts,
+      training_rows: fixedSplitCounts.train,
+      outer_validation_rows: fixedSplitCounts.validation,
+      untouched_holdout_rows: fixedSplitCounts.holdout,
       holdout_scored_rows: 0,
       utc_day_boundaries: splitDefinition.boundaries ?? null
     },
@@ -508,8 +546,11 @@ export function verifyHurdleV2Artifact(artifact) {
   try {
     if (!artifact || artifact.artifact_schema !== HURDLE_V2_ARTIFACT_SCHEMA ||
         artifact.artifact_schema_version !== 2) return fail('ARTIFACT_SCHEMA_INVALID');
-    if (artifact.code_commit_sha?.length !== 40 ||
-        artifact.dataset_sha256?.length !== 64 || artifact.dataset_row_count !== 32300)
+    if (!/^[a-f0-9]{40}$/i.test(String(artifact.code_commit_sha || '')) ||
+        !/^[a-f0-9]{64}$/i.test(String(artifact.dataset_sha256 || '')) ||
+        !/^[a-f0-9]{64}$/i.test(String(artifact.input_file_sha256 || '')) ||
+        !/^[a-f0-9]{40}$/i.test(String(artifact.dataset_source_commit_sha || '')) ||
+        artifact.dataset_row_count !== HURDLE_V2_FIXED_DATASET_ROWS)
       return fail('PROVENANCE_INVALID');
     if (!artifact.contextual_head_present || !artifact.pooled_head_present)
       return fail('DUAL_HEAD_MISSING');
@@ -520,6 +561,24 @@ export function verifyHurdleV2Artifact(artifact) {
         artifact.contextual_head_parameters?.weights?.length !== 44 ||
         artifact.pooled_head_parameters?.weights?.length !== 8)
       return fail('FEATURE_SHAPE_MISMATCH');
+    const splitCounts = artifact.split_definition?.counts;
+    if (artifact.split_id !== HURDLE_V2_FIXED_SPLIT.schema ||
+        artifact.split_definition?.schema !== HURDLE_V2_FIXED_SPLIT.schema ||
+        artifact.split_definition?.purge_ms !== HURDLE_V2_FIXED_SPLIT.purge_ms ||
+        splitCounts?.train !== HURDLE_V2_FIXED_SPLIT.counts.train ||
+        splitCounts?.validation !== HURDLE_V2_FIXED_SPLIT.counts.validation ||
+        splitCounts?.holdout !== HURDLE_V2_FIXED_SPLIT.counts.holdout ||
+        splitCounts?.purged !== HURDLE_V2_FIXED_SPLIT.counts.purged ||
+        splitCounts?.total !== HURDLE_V2_FIXED_SPLIT.counts.total ||
+        artifact.split_definition?.training_rows !== splitCounts?.train ||
+        artifact.split_definition?.outer_validation_rows !== splitCounts?.validation ||
+        artifact.split_definition?.untouched_holdout_rows !== splitCounts?.holdout ||
+        artifact.split_definition?.holdout_scored_rows !== 0)
+      return fail('SPLIT_PROVENANCE_INVALID');
+    if (artifact.paper_trading !== true ||
+        artifact.real_order_execution !== false ||
+        artifact.promotion_status !== 'NOT_APPROVED')
+      return fail('EXECUTION_POLICY_MISMATCH');
     if (artifact.target_definition !== 'FIRST_TOUCH_PLUS_3_PCT_BEFORE_MINUS_2_PCT_WITHIN_4H_1M_V1' ||
         artifact.target_semantics !== 'UP_IF_PLUS_3_PCT_FIRST_BEFORE_MINUS_2_PCT_ELSE_NON_SUCCESS_WITHIN_4H_1M_V1')
       return fail('TARGET_PROVENANCE_MISMATCH');
