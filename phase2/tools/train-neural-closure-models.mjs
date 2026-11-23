@@ -1401,11 +1401,10 @@ async function main(){
           minimumReturnWinRatePct:55,
           rankingScoreWeight:0.01,
           rankingMinimumReturnGapPct:0.50,
-          // Increase independent rank supervision after the last run exposed only
-          // 144 training comparisons and 260 selection comparisons at a two-pair cap.
+          // Use every available top-four versus bottom-four extreme comparison per timestamp.
+          // This raises the prior 8-pair budget to the complete 16-pair set where available.
           // The classifier remains pure Brier; ranking scores stay in their own sidecar.
-          // Eight comparisons per timestamp sample half of the available extreme-pair set.
-          rankingPairsPerTimestamp:8,
+          rankingPairsPerTimestamp:16,
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
