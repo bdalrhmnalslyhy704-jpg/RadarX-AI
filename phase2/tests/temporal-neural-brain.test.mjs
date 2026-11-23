@@ -123,9 +123,26 @@ test('temporal boosted trees compete on the same first-passage target with regim
     selection_logistic:expert.selection_logistic_brier,
     validation:expert.validation,validation_logistic:expert.validation_logistic
   }));
-  assert.equal(expert.holdout_passed,true,JSON.stringify({
-    status:expert.status,holdout:expert.holdout,holdout_logistic:expert.holdout_logistic
-  }));
+  assert.ok(['TCN','TEMPORAL_GBDT'].includes(expert.validation_family_winner),
+    'exactly one temporal family must be selected from outer Validation');
+  if(expert.holdout_family_selected){
+    assert.equal(expert.holdout_passed,true,JSON.stringify({
+      status:expert.status,holdout:expert.holdout,holdout_logistic:expert.holdout_logistic
+    }));
+    assert.ok(expert.holdout.sample_count>=150);
+    assert.ok(expert.holdout.model_brier_score+0.003<
+      expert.holdout_logistic.model_brier_score);
+  }else{
+    assert.equal(expert.holdout.evaluated,false,
+      'the temporal tree must stay unopened when TCN wins Validation');
+    assert.equal(expert.holdout.sample_count,0);
+    assert.equal(expert.holdout_logistic.evaluated,false);
+    assert.equal(expert.holdout_passed,false);
+  }
+  assert.equal(profile.holdout_access.tcn_holdout_scored_regimes.includes('BTC_RISK_OFF'),
+    expert.validation_family_winner==='TCN');
+  assert.equal(profile.holdout_access.temporal_tree_holdout_scored_regimes.includes('BTC_RISK_OFF'),
+    expert.validation_family_winner==='TEMPORAL_GBDT');
   assert.ok(expert.max_training_outcome_resolved_at<expert.training_cutoff_at);
   assert.ok(expert.training_cutoff_at<expert.member_selection_cutoff_at);
   assert.ok(expert.member_selection_cutoff_at<expert.calibration_cutoff_at);
@@ -260,14 +277,18 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.ok(profile.validation_start_at<profile.holdout_start_at);
   assert.equal(profile.holdout_comparison.sample_count,profile.holdout.sample_count,
     'the model comparison must report the exact number of holdout rows it actually scored');
-  if(profile.holdout_access.opened){
+  if(profile.holdout_access.tcn_holdout_scored_regimes.length){
     assert.ok(profile.holdout.sample_count>=40,
-      'an opened research holdout must retain the complete scored sample count');
+      'a TCN-selected Holdout must retain the complete scored sample count');
   }else{
     assert.equal(profile.holdout.sample_count,0,
-      'a closed holdout must report zero scored rows');
-    assert.ok(profile.holdout.available_sample_count>=40,
-      'the reserved holdout coverage remains visible without scoring its labels');
+      'TCN Holdout remains closed when another family wins Validation');
+    assert.ok(profile.holdout.available_sample_count>=40);
+  }
+  if(profile.holdout_access.temporal_tree_holdout_scored_regimes.length){
+    assert.ok(profile.temporal_boosted_tree.holdout.sample_count>=40);
+  }else{
+    assert.equal(profile.temporal_boosted_tree.holdout.sample_count,0);
   }
   assert.equal(profile.holdout_comparison.sample_count,profile.holdout.sample_count,
     'the comparison count must equal the number of rows actually scored');
@@ -303,10 +324,22 @@ test('one shared TCN keeps Holdout closed when no supported regime passes outer 
     profile.regime_specialists[regime]?.validation_passed===true);
   const treeValidationSelected=Object.values(profile.temporal_boosted_tree.regime_specialists)
     .some(specialist=>specialist.supported&&specialist.validation_passed);
-  assert.equal(profile.holdout_access.opened,tcnValidationSelected||treeValidationSelected);
-  if(!profile.holdout_access.opened){
+  assert.equal(profile.holdout_access.opened,
+    profile.holdout_access.tcn_holdout_scored_regimes.length>0||
+    profile.holdout_access.temporal_tree_holdout_scored_regimes.length>0);
+  if(profile.holdout_access.tcn_holdout_scored_regimes.length){
+    assert.equal(profile.holdout.evaluated,true);
+  }else{
     assert.equal(profile.holdout.evaluated,false);
     assert.equal(profile.holdout.sample_count,0);
+  }
+  if(profile.holdout_access.temporal_tree_holdout_scored_regimes.length){
+    assert.equal(profile.temporal_boosted_tree.holdout.evaluated,true);
+  }else{
+    assert.equal(profile.temporal_boosted_tree.holdout.evaluated,false);
+    assert.equal(profile.temporal_boosted_tree.holdout.sample_count,0);
+  }
+  if(!profile.holdout_access.opened){
     assert.equal(profile.holdout_comparison.sample_count,0);
   }
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON']);
@@ -368,7 +401,12 @@ test('one shared TCN keeps Holdout closed when no supported regime passes outer 
   assert.ok(expert.validation_start_at<profile.holdout_start_at,
     'final holdout must remain strictly later than all fitting and selection data');
   assert.equal(profile.regime_specialists.BTC_RISK_OFF.status,'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE');
-  assert.ok(profile.regime_specialists.BTC_RISK_OFF.support_gaps.includes('HOLDOUT_SAMPLE_COUNT'));
+  assert.equal(profile.regime_specialists.BTC_RISK_OFF.holdout_positive_samples,null,
+    'Holdout class counts must not decide whether a regime is supported');
+  assert.equal(profile.regime_specialists.BTC_RISK_OFF.holdout_negative_samples,null);
+  assert.equal(profile.regime_data_coverage.holdout.BTC_RISK_OFF.positive,null);
+  assert.equal(profile.regime_data_coverage.holdout.BTC_RISK_OFF.negative,null);
+  assert.equal(profile.regime_data_coverage.holdout.BTC_RISK_OFF.evaluated,false);
   assert.equal(profile.holdout_comparison.sample_count,profile.holdout.sample_count,
     'comparison sample count must describe rows actually evaluated');
   for(const regime of profile.supported_regimes){
