@@ -1,0 +1,66 @@
+name: RadarX Holdout Isolation Gate
+on:
+  push:
+    branches:
+      - fix/418-holdout-isolation-20261123
+    paths:
+      - phase2/core/cognitive-brain.mjs
+      - phase2/core/temporal-neural-brain.mjs
+      - phase2/tests/cognitive-brain.test.mjs
+      - phase2/tests/temporal-neural-brain.test.mjs
+      - .github/workflows/holdout-isolation-gate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: radarx-holdout-isolation-\${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  holdout-isolation:
+    name: Cognitive and temporal holdout isolation regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax checks
+        run: |
+          node --check phase2/core/cognitive-brain.mjs
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/tests/cognitive-brain.test.mjs
+          node --check phase2/tests/temporal-neural-brain.test.mjs
+      - name: Cognitive holdout isolation tests
+        run: node --test phase2/tests/cognitive-brain.test.mjs
+        timeout-minutes: 12
+      - name: Temporal holdout isolation tests
+        run: node --test phase2/tests/temporal-neural-brain.test.mjs
+        timeout-minutes: 18
+      - name: Verify fail-closed holdout source guards
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const cognitive=fs.readFileSync('phase2/core/cognitive-brain.mjs','utf8');
+          const temporal=fs.readFileSync('phase2/core/temporal-neural-brain.mjs','utf8');
+          const guards=[
+            [!cognitive.includes('const neuralHoldout=neuralFit&&'), 'cognitive challenger holdout no longer runs before validation winner selection'],
+            [cognitive.includes('NO_VALIDATION_QUALIFIED_MODEL_HOLDOUT_REMAINS_CLOSED'), 'cognitive fallback remains closed when no validation model qualifies'],
+            [temporal.includes('const holdoutModel=validationPassed'), 'per-regime TCN holdout is validation-gated'],
+            [temporal.includes('if(temporalTreeValidationPassed){'), 'temporal GBDT logistic holdout reference is validation-gated'],
+            [temporal.includes('validationSelectedRegimes.map(regime=>regimeResults[regime]?.holdout_model)'), 'temporal aggregate scores only validation-selected regimes'],
+            [temporal.includes('NO_VALIDATION_SELECTED_REGIME_HOLDOUT_REMAINS_CLOSED'), 'temporal holdout explicitly remains closed without a validation-qualified regime']
+          ];
+          for(const [ok,label] of guards){
+            console.log((ok?'PASS ':'FAIL ')+label);
+            if(!ok)process.exitCode=1;
+          }
+          NODE
