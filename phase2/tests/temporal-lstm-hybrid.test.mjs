@@ -136,7 +136,7 @@ test('Hurdle probability calibration split keeps an earlier training block, four
       const index=group*4+symbolIndex;
       rows.push({
         id:'hurdle-cal-'+index,symbol:'PAIR'+symbolIndex,
-        at,resolved_at:at+horizonMs
+        at,resolved_at:at+((index%16)+1)*bucketMs
       });
       netReturns.push(index%5===0?1.0:-0.7);
     }
@@ -153,7 +153,7 @@ test('Hurdle probability calibration split keeps an earlier training block, four
   assert.equal(split.diagnostics.purged_rows,64);
   assert.equal(split.diagnostics.calibration_rows,40);
   assert.equal(split.diagnostics.chronology_valid,true);
-  assert.equal(split.diagnostics.exact_four_hour_label_maturity,true);
+  assert.equal(split.diagnostics.forward_label_horizon_valid,true);
   assert.equal(split.diagnostics.complete_decision_groups,true);
   assert.equal(split.diagnostics.disjoint_sample_identities,true);
   assert.ok(split.diagnostics.training_max_resolved_at<

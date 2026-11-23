@@ -264,6 +264,7 @@ export function splitTcnLstmHurdleProbabilityCalibrationRows(rows, netReturns, {
       !Number.isInteger(minimumClassRows) || minimumClassRows < 1 ||
       rows.some((row, index) => !row || !finite(row.at) ||
         !finite(row.resolved_at) || row.resolved_at <= row.at ||
+        row.resolved_at > Number(row.at) + Number(horizonMs) ||
         !finite(netReturns[index]))) {
     throw new TypeError('HURDLE_PROBABILITY_CALIBRATION_SPLIT_INPUT_INVALID');
   }
@@ -328,8 +329,9 @@ export function splitTcnLstmHurdleProbabilityCalibrationRows(rows, netReturns, {
       const symbols = group.items.map(item => String(item.row.symbol ?? ''));
       return symbols.every(Boolean) && new Set(symbols).size === symbols.length;
     });
-  const exactMaturity = ordered.every(item =>
-    Number(item.row.resolved_at) - Number(item.row.at) === Number(horizonMs)
+  const forwardHorizonValid = ordered.every(item =>
+    Number(item.row.resolved_at) > Number(item.row.at) &&
+    Number(item.row.resolved_at) <= Number(item.row.at) + Number(horizonMs)
   );
   const support = items => {
     const positive = items.filter(item => item.net > 0).length;
@@ -346,7 +348,7 @@ export function splitTcnLstmHurdleProbabilityCalibrationRows(rows, netReturns, {
   const trainingIds = new Set(trainingItems.map(item => sampleIdentity(item.row)));
   const calibrationIds = new Set(calibrationItems.map(item => sampleIdentity(item.row)));
   const identitiesDisjoint = [...calibrationIds].every(id => !trainingIds.has(id));
-  const chronologyValid = exactMaturity && completeGroups &&
+  const chronologyValid = forwardHorizonValid && completeGroups &&
     trainingGroups.length >= minimumTrainingGroups &&
     calibrationGroups.length >= minimumCalibrationGroups &&
     trainingMaxResolvedAt < calibrationMinRowAt &&
@@ -374,7 +376,7 @@ export function splitTcnLstmHurdleProbabilityCalibrationRows(rows, netReturns, {
       calibrationMinRowAt-trainingMaxResolvedAt,
     training_decision_time_gap_ms:trainingMaxAt===null?null:
       calibrationMinRowAt-trainingMaxAt,
-    exact_four_hour_label_maturity:exactMaturity,
+    forward_label_horizon_valid:forwardHorizonValid,
     complete_decision_groups:completeGroups,
     chronology_valid:chronologyValid,
     disjoint_sample_identities:identitiesDisjoint,
