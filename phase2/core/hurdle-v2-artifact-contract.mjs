@@ -306,11 +306,34 @@ export function createHurdleV2Artifact({
     gate_results: selection.execution_head_context_ablation_qualification ?? null,
     context_ablation: selection.execution_head_context_ablation ??
       selection.execution_head_context_ablation_qualification?.result ?? null,
+    selected_configuration: selection.selected_configuration ?? null,
+    diagnostic_configuration: selection.diagnostic_configuration ?? null,
+    ranking_head_selection_qualification:
+      selection.ranking_head_selection_qualification ?? null,
     candidates: (selection.candidates ?? []).map(candidate => ({
       name: candidate.name ?? null,
       selection_brier: candidate.selection_brier ?? null,
       brier_improvement: candidate.brier_improvement ?? null,
       pairwise_ranking_improvement: candidate.pairwise_ranking_improvement ?? null,
+      independent_ranking_signal_passed:
+        candidate.independent_ranking_signal_passed === true,
+      passed_inner_brier_margin: candidate.passed_inner_brier_margin === true,
+      passed_inner_pairwise_ranking_gate:
+        candidate.passed_inner_pairwise_ranking_gate === true,
+      passed_inner_margin: candidate.passed_inner_margin === true,
+      ranking_head_selection_qualified:
+        candidate.ranking_head_selection_qualified === true,
+      execution_head_context_ablation_passed:
+        candidate.execution_head_context_ablation_passed === true,
+      execution_risk_policy: candidate.execution_risk_policy ? {
+        status: candidate.execution_risk_policy.status ?? null,
+        passed: candidate.execution_risk_policy.passed === true
+      } : null,
+      return_selection_diagnostics: candidate.return_selection_diagnostics ? {
+        status: candidate.return_selection_diagnostics.status ?? null,
+        preliminary_return_screen_candidates:
+          candidate.return_selection_diagnostics.preliminary_return_screen_candidates ?? null
+      } : null,
       execution_head_context_ablation: candidate.execution_head_context_ablation ?? null
     })),
     baseline: selection.baseline ?? null,
@@ -609,6 +632,39 @@ export function verifyHurdleV2Artifact(artifact) {
         artifact.real_order_execution !== false ||
         artifact.promotion_status !== 'NOT_APPROVED')
       return fail('EXECUTION_POLICY_MISMATCH');
+    const qualification = artifact.inner_qualification;
+    const qualified = qualification?.passed === true;
+    const expectedQualificationStatus = qualified
+      ? 'INNER_QUALIFIED_FOR_OUTER_REPLAY' : 'NOT_QUALIFIED';
+    if (typeof qualification?.passed !== 'boolean' ||
+        qualification.status !== expectedQualificationStatus ||
+        artifact.evaluation_status !== expectedQualificationStatus ||
+        artifact.scientific_qualification_status !== expectedQualificationStatus ||
+        artifact.execution_qualification_status !== expectedQualificationStatus ||
+        artifact.training_status !== 'TRAINED')
+      return fail('QUALIFICATION_STATUS_INCONSISTENT');
+    if (qualified) {
+      const selected = qualification.candidates?.find(candidate =>
+        candidate.name === qualification.selected_configuration);
+      if (qualification.selection_status !== 'INNER_SELECTION_QUALIFIED_RESEARCH_ONLY' ||
+          typeof qualification.selected_configuration !== 'string' ||
+          qualification.selected_configuration.length === 0 ||
+          qualification.diagnostic_configuration !== null ||
+          qualification.gate_results?.qualified !== true ||
+          qualification.context_ablation?.passed !== true ||
+          qualification.ranking_head_selection_qualification?.qualified !== true ||
+          selected?.passed_inner_margin !== true ||
+          selected?.passed_inner_brier_margin !== true ||
+          selected?.passed_inner_pairwise_ranking_gate !== true ||
+          selected?.independent_ranking_signal_passed !== true ||
+          selected?.ranking_head_selection_qualified !== true ||
+          selected?.execution_head_context_ablation_passed !== true ||
+          selected?.execution_risk_policy?.passed !== true ||
+          selected?.execution_risk_policy?.status === 'UNAVAILABLE' ||
+          selected?.return_selection_diagnostics?.status !== 'AVAILABLE' ||
+          !(Number(selected?.return_selection_diagnostics?.preliminary_return_screen_candidates) > 0))
+        return fail('QUALIFICATION_GATE_EVIDENCE_INCOMPLETE');
+    }
     if (artifact.target_definition !== 'FIRST_TOUCH_PLUS_3_PCT_BEFORE_MINUS_2_PCT_WITHIN_4H_1M_V1' ||
         artifact.target_semantics !== 'UP_IF_PLUS_3_PCT_FIRST_BEFORE_MINUS_2_PCT_ELSE_NON_SUCCESS_WITHIN_4H_1M_V1')
       return fail('TARGET_PROVENANCE_MISMATCH');
