@@ -490,6 +490,13 @@ export function verifyHurdleV2Artifact(artifact) {
     if (artifact.risk_parameters?.ranking_adjustment_semantics !==
       'FROZEN_WEIGHT_TIMES_TANH_INDEPENDENT_RAW_RETURN_RANK_SCORE_DIV_4; NEVER_ADDED_TO_CLASSIFIER_PROBABILITY')
       return fail('RANKING_SCORE_ADJUSTMENT_SEMANTICS_INVALID');
+    for (const [name,value] of [
+      ['contextual',artifact.abstention_parameters?.contextual?.selected_minimum_positive_net_return_probability],
+      ['pooled',artifact.abstention_parameters?.pooled?.selected_minimum_positive_net_return_probability]
+    ]) {
+      if (!finite(value)||value<0||value>1)
+        return fail('POSITIVE_RETURN_PROBABILITY_THRESHOLD_INVALID:'+name);
+    }
     if (artifact.holdout_status !== 'LOCKED' || artifact.split_definition?.holdout_scored_rows !== 0 ||
         artifact.inner_qualification?.validation_or_holdout_used !== false)
       return fail('HOLDOUT_LOCK_CONTRACT_INVALID');

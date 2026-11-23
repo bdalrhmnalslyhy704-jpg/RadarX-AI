@@ -2286,6 +2286,16 @@ export function predictTcnLstmHybridExecutionScore(sequence,profile,{
     :profile?.pooled_only_execution_ranking_score_adjustment_weight;
   const rankWeight=finite(configuredRankWeight)
     ?clamp(Number(configuredRankWeight),0,8):0;
+  const configuredProbabilityThreshold=contextual
+    ?profile?.execution_minimum_positive_net_return_probability
+    :profile?.pooled_only_execution_minimum_positive_net_return_probability;
+  const minimumPositiveNetReturnProbability=finite(configuredProbabilityThreshold)
+    ?clamp(Number(configuredProbabilityThreshold),0,1):0;
+  const predictedPositiveNetReturnProbability=
+    Number(prediction.predicted_positive_net_return_probability);
+  const positiveReturnProbabilityEligible=minimumPositiveNetReturnProbability===0||
+    (finite(predictedPositiveNetReturnProbability)&&
+      predictedPositiveNetReturnProbability>=minimumPositiveNetReturnProbability);
   if(lambda===null||!finite(predictedNetReturn))
     return {status:'UNAVAILABLE',
       reason:lambda===null?'FROZEN_EXECUTION_RISK_PENALTY_NOT_SELECTED':
@@ -2298,12 +2308,16 @@ export function predictTcnLstmHybridExecutionScore(sequence,profile,{
       predicted_downside_risk_pct:prediction.predicted_downside_risk_pct,
       risk_penalty_weight:lambda,
       ranking_score_adjustment_weight:rankWeight,
+      minimum_positive_net_return_probability:minimumPositiveNetReturnProbability,
+      predicted_positive_net_return_probability:finite(predictedPositiveNetReturnProbability)
+        ?predictedPositiveNetReturnProbability:null,
+      positive_return_probability_eligible:positiveReturnProbabilityEligible,
       normalized_independent_return_rank_score:prediction.normalized_independent_return_rank_score,
       risk_adjusted_net_return_score:null};
   const baseRiskAdjustedScore=Number(predictedNetReturn)-
     lambda*prediction.predicted_downside_risk_pct;
   const normalizedRank=Number(prediction.normalized_independent_return_rank_score??0);
-  const rankAdjustedSelectionScore=baseRiskAdjustedScore>0
+  const rankAdjustedSelectionScore=baseRiskAdjustedScore>0&&positiveReturnProbabilityEligible
     ?baseRiskAdjustedScore+rankWeight*normalizedRank
     :-1e9;
   if(!finite(baseRiskAdjustedScore)||!finite(rankAdjustedSelectionScore))
@@ -2313,8 +2327,10 @@ export function predictTcnLstmHybridExecutionScore(sequence,profile,{
       risk_penalty_weight:lambda,ranking_score_adjustment_weight:rankWeight,
       risk_adjusted_net_return_score:null,rank_adjusted_execution_selection_score:null};
   return {status:'AVAILABLE',
-    score_semantics:rankWeight>0
-      ?'POSITIVE_BASE_RISK_ADJUSTED_RETURN_REQUIRED; RANK_ADJUSTMENT_ONLY_SORTS_ELIGIBLE_CANDIDATES_V2'
+    score_semantics:minimumPositiveNetReturnProbability>0
+      ?'POSITIVE_BASE_RISK_ADJUSTED_RETURN_AND_HURDLE_POSITIVE_RETURN_PROBABILITY_GATES; RANK_ADJUSTMENT_ONLY_SORTS_ELIGIBLE_CANDIDATES_V3'
+      :rankWeight>0
+        ?'POSITIVE_BASE_RISK_ADJUSTED_RETURN_REQUIRED; RANK_ADJUSTMENT_ONLY_SORTS_ELIGIBLE_CANDIDATES_V2'
       :returnEstimator==='HURDLE_EXPECTED_VALUE'
         ?'HURDLE_EXPECTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK'
         :'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
@@ -2328,6 +2344,10 @@ export function predictTcnLstmHybridExecutionScore(sequence,profile,{
     normalized_independent_return_rank_score:Number(prediction.normalized_independent_return_rank_score),
     risk_penalty_weight:lambda,
     ranking_score_adjustment_weight:rankWeight,
+    minimum_positive_net_return_probability:minimumPositiveNetReturnProbability,
+    predicted_positive_net_return_probability:finite(predictedPositiveNetReturnProbability)
+      ?predictedPositiveNetReturnProbability:null,
+    positive_return_probability_eligible:positiveReturnProbabilityEligible,
     base_risk_adjusted_expected_net_return_pct:Number(baseRiskAdjustedScore),
     base_risk_adjusted_return_positive:baseRiskAdjustedScore>0,
     risk_adjusted_net_return_score:Number(baseRiskAdjustedScore),
@@ -2338,7 +2358,8 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
   roundTripCostBps=30,minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8,
   abstentionPercentileGrid=[0.20,0.35,0.50,0.65,0.80,0.825,0.85,0.875,0.90],
   riskPenaltyWeightGrid=[0.01,0.025,0.05,0.1,0.25,0.5,1,2,4,8],
-  rankingScoreAdjustmentGrid=[0]
+  rankingScoreAdjustmentGrid=[0],
+  minimumPositiveNetReturnProbabilityGrid=[0]
 }={}) {
   const unavailable=reason=>({
     schema:'RADARX_TCN_LSTM_SELECTIVE_EXECUTION_POLICY_V2',
@@ -2355,6 +2376,10 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
         x?.predicted_hurdle_net_return_pct!==undefined&&
         !finite(x.predicted_hurdle_net_return_pct))||
       !finite(x?.predicted_downside_risk_pct)||x.predicted_downside_risk_pct<0)||
+    (minimumPositiveNetReturnProbabilityGrid.some(value=>Number(value)>0)&&
+      executionPredictions.some(x=>!finite(x?.predicted_positive_net_return_probability)||
+        x.predicted_positive_net_return_probability<0||
+        x.predicted_positive_net_return_probability>1))||
     logisticLogits.some(x=>!finite(x)))
     return unavailable('INNER_SELECTION_EXECUTION_EVIDENCE_INVALID');
   if(!finite(roundTripCostBps)||roundTripCostBps<0||
@@ -2367,6 +2392,10 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
     !Array.isArray(riskPenaltyWeightGrid)||!riskPenaltyWeightGrid.length||
     riskPenaltyWeightGrid.some(value=>!finite(value)||value<=0||value>8)||
     new Set(riskPenaltyWeightGrid).size!==riskPenaltyWeightGrid.length||
+    !Array.isArray(minimumPositiveNetReturnProbabilityGrid)||
+    !minimumPositiveNetReturnProbabilityGrid.length||
+    minimumPositiveNetReturnProbabilityGrid.some(value=>!finite(value)||value<0||value>1)||
+    new Set(minimumPositiveNetReturnProbabilityGrid).size!==minimumPositiveNetReturnProbabilityGrid.length||
     !Array.isArray(rankingScoreAdjustmentGrid)||!rankingScoreAdjustmentGrid.length||
     rankingScoreAdjustmentGrid.some(value=>!finite(value)||value<0||value>8)||
     new Set(rankingScoreAdjustmentGrid).size!==rankingScoreAdjustmentGrid.length)
@@ -2396,19 +2425,25 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
         const baseRiskAdjustedScores=executionPredictions.map(item=>
           Number(item[returnEstimator.field])-
             lambda*Number(item.predicted_downside_risk_pct));
-        const riskScores=executionPredictions.map((item,index)=>{
-          const normalizedRank=finite(item?.normalized_independent_return_rank_score)
-            ?Number(item.normalized_independent_return_rank_score):0;
-          // Rank adjustment sorts only candidates whose base risk-adjusted
-          // expected net return is already strictly positive.
-          return baseRiskAdjustedScores[index]>0
-            ?baseRiskAdjustedScores[index]+Number(rankAdjustmentWeight)*normalizedRank
-            :-1e9;
-        });
-        const bestScoreByGroup=eligible.map(indices=>
-          Math.max(...indices.map(index=>riskScores[index])));
-        const sortedBestScores=[...bestScoreByGroup].sort((a,b)=>a-b);
-        for(const percentile of abstentionPercentileGrid){
+        for(const minimumPositiveNetReturnProbability of minimumPositiveNetReturnProbabilityGrid){
+          const probabilityEligible=executionPredictions.map(item=>
+            Number(minimumPositiveNetReturnProbability)===0||
+            (finite(item?.predicted_positive_net_return_probability)&&
+              Number(item.predicted_positive_net_return_probability)>=
+                Number(minimumPositiveNetReturnProbability)));
+          const riskScores=executionPredictions.map((item,index)=>{
+            const normalizedRank=finite(item?.normalized_independent_return_rank_score)
+              ?Number(item.normalized_independent_return_rank_score):0;
+            // Base expected net return and Hurdle positive-return probability
+            // are separate eligibility gates; rank only orders eligible rows.
+            return baseRiskAdjustedScores[index]>0&&probabilityEligible[index]
+              ?baseRiskAdjustedScores[index]+Number(rankAdjustmentWeight)*normalizedRank
+              :-1e9;
+          });
+          const bestScoreByGroup=eligible.map(indices=>
+            Math.max(...indices.map(index=>riskScores[index])));
+          const sortedBestScores=[...bestScoreByGroup].sort((a,b)=>a-b);
+          for(const percentile of abstentionPercentileGrid){
           const position=(sortedBestScores.length-1)*Number(percentile);
           const lower=Math.floor(position),upper=Math.ceil(position);
           const innerQuantileThreshold=lower===upper?sortedBestScores[lower]:
@@ -2465,6 +2500,9 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
             positive_base_risk_adjusted_candidate_count:
               baseRiskAdjustedScores.filter(value=>value>0).length,
             positive_base_risk_adjusted_return_gate_enforced:true,
+            minimum_positive_net_return_probability:Number(minimumPositiveNetReturnProbability),
+            positive_return_probability_candidate_count:probabilityEligible.filter(Boolean).length,
+            positive_return_probability_gate_enforced:Number(minimumPositiveNetReturnProbability)>0,
             top_k_per_timestamp:1,
             minimum_risk_adjusted_score:Number(threshold),
             inner_quantile_score_threshold:Number(innerQuantileThreshold),
@@ -2484,6 +2522,7 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
               ?Number((modelMetrics.net_pnl_pct-anchorMetrics.net_pnl_pct).toFixed(6)):null,
             gates,passed:Object.values(gates).every(Boolean)
           });
+          }
         }
       }
     }
@@ -2517,6 +2556,9 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
     selected_return_estimator:best?.return_estimator??'POINTWISE_HUBER',
     risk_penalty_weight_grid:[...riskPenaltyWeightGrid],
     ranking_score_adjustment_weight_grid:[...rankingScoreAdjustmentGrid],
+    minimum_positive_net_return_probability_grid:[...minimumPositiveNetReturnProbabilityGrid],
+    selected_minimum_positive_net_return_probability:
+      best?.minimum_positive_net_return_probability??0,
     selected_risk_penalty_weight:best?.risk_penalty_weight??null,
     selected_ranking_score_adjustment_weight:best?.ranking_score_adjustment_weight??0,
     selected_score_formula_id:best?.score_formula_id??
@@ -3884,7 +3926,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         ?selectTcnLstmExecutionRiskPolicy(selectionRows,contextPredictions,baselineLogits,{
           roundTripCostBps,minimumTrades:minimumReturnTrades,
           minimumWinRatePct:minimumReturnWinRatePct,maximumDrawdownPct:8,
-          rankingScoreAdjustmentGrid:[0,0.5,1,2,4]
+          rankingScoreAdjustmentGrid:[0,0.5,1,2,4],
+          minimumPositiveNetReturnProbabilityGrid:[0,0.45,0.50,0.55,0.60]
         }):unavailable;
       item.pooled_only_execution_risk_policy=item.execution_heads_fitted
         ?selectTcnLstmExecutionRiskPolicy(selectionRows,pooledPredictions,baselineLogits,{
@@ -3905,6 +3948,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         item.fit.execution_risk_penalty_weight=item.execution_risk_policy.selected_risk_penalty_weight;
         item.fit.execution_ranking_score_adjustment_weight=
           item.execution_ranking_score_adjustment_weight;
+        item.fit.execution_minimum_positive_net_return_probability=
+          Number(item.execution_risk_policy.selected_minimum_positive_net_return_probability??0);
         item.fit.execution_return_estimator=item.execution_risk_policy.selected_return_estimator??'POINTWISE_HUBER';
         item.fit.execution_risk_policy=item.execution_risk_policy;
       }
@@ -3914,6 +3959,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         item.fit.pooled_only_execution_risk_penalty_weight=
           item.pooled_only_execution_risk_policy.selected_risk_penalty_weight;
         item.fit.pooled_only_execution_ranking_score_adjustment_weight=0;
+        item.fit.pooled_only_execution_minimum_positive_net_return_probability=
+          Number(item.pooled_only_execution_risk_policy.selected_minimum_positive_net_return_probability??0);
         item.fit.pooled_only_execution_return_estimator=
           item.pooled_only_execution_risk_policy.selected_return_estimator??'POINTWISE_HUBER';
         item.fit.pooled_only_execution_risk_policy=item.pooled_only_execution_risk_policy;

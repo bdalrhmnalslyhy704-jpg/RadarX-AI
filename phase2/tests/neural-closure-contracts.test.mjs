@@ -1321,12 +1321,15 @@ test('outer execution evaluation applies a frozen positive base-return gate befo
     riskPenaltyWeights:rows.map(()=>0.05),
     baseRiskAdjustedScores:baseScores,
     rankingScoreAdjustmentWeights:rows.map(()=>2),
+    minimumPositiveNetReturnProbabilities:rows.map(()=>0.6),
     topKGrid:[1],roundTripCostBps:30,
     minimumRiskAdjustedScore:0.5,abstentionPercentile:0.8
   });
   assert.equal(report.status,'AVAILABLE');
   assert.equal(report.base_risk_adjusted_return_gate_enforced,true);
   assert.equal(report.ranking_score_adjustment_weight,2);
+  assert.equal(report.minimum_positive_net_return_probability,0.6);
+  assert.equal(report.frozen_abstention_policy.minimum_positive_net_return_probability,0.6);
   assert.equal(report.frozen_abstention_policy.base_expected_net_return_after_risk_must_be_positive,true);
   assert.equal(report.trials[0].neural_selected_count,1);
   assert.equal(report.trials[0].positive_base_risk_adjusted_gate_enforced,true);

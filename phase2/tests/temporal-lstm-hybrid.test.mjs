@@ -671,6 +671,16 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   );
   assert.equal(rankAdjusted.ranking_score_adjustment_weight,0.75);
   assert.ok(Number.isFinite(rankAdjusted.normalized_independent_return_rank_score));
+  profile.execution_minimum_positive_net_return_probability=0.65;
+  const probabilityGated=predictTcnLstmHybridExecutionScore(
+    evidence[0].sequence,profile,{externalLogisticLogit}
+  );
+  assert.equal(probabilityGated.minimum_positive_net_return_probability,0.65);
+  assert.equal(probabilityGated.positive_return_probability_eligible,
+    probabilityGated.predicted_positive_net_return_probability>=0.65);
+  assert.equal(probabilityGated.rank_adjusted_execution_selection_score<=-1e9,
+    probabilityGated.positive_return_probability_eligible===false||
+      probabilityGated.base_risk_adjusted_return_positive===false);
   assert.ok(Math.abs(rankAdjusted.risk_adjusted_net_return_score-
     (rankAdjusted.predicted_net_return_pct-
       2*rankAdjusted.predicted_downside_risk_pct))<1e-10);
@@ -809,6 +819,42 @@ test('independent raw rank score adjusts expected-return ranking without touchin
   assert.equal(blocked.passed,false);
   assert.equal(blocked.selected_trade_count,0);
   assert.equal(blocked.positive_base_risk_adjusted_return_gate_enforced,true);
+  assert.equal(policy.holdout_values_used,false);
+});
+
+test('inner execution policy freezes a positive-return probability floor before risk-score ranking',()=>{
+  const groupCount=40;
+  const rows=Array.from({length:groupCount*2},(_,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    return makeExecutionRow(index,group<30&&rank===0?'UP':'DOWN',
+      BASE+group*DAY+rank*75);
+  });
+  const predictions=rows.map((row,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    return {
+      predicted_net_return_pct:rank===0?0.08:0.20,
+      predicted_hurdle_net_return_pct:rank===0?0.08:0.20,
+      predicted_downside_risk_pct:0.01,
+      predicted_positive_net_return_probability:group<30&&rank===0?0.82:0.35,
+      normalized_independent_return_rank_score:rank===0?0.1:-0.1
+    };
+  });
+  const logisticLogits=rows.map((row,index)=>index%2===0?0:3);
+  const policy=selectTcnLstmExecutionRiskPolicy(rows,predictions,logisticLogits,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,
+    maximumDrawdownPct:8,abstentionPercentileGrid:[0.2,0.5,0.8],
+    riskPenaltyWeightGrid:[0.01],rankingScoreAdjustmentGrid:[0],
+    minimumPositiveNetReturnProbabilityGrid:[0,0.55,0.7]
+  });
+  assert.equal(policy.status,'SELECTIVE_EXECUTION_POLICY_PASSED_INNER_SELECTION');
+  assert.equal(policy.passed,true);
+  assert.ok(policy.selected_minimum_positive_net_return_probability>=0.55);
+  assert.equal(policy.selected_trial.positive_return_probability_gate_enforced,true);
+  assert.ok(policy.selected_trial.model_metrics.trade_count>=20);
+  assert.ok(policy.selected_trial.model_metrics.win_rate_pct>=55);
+  assert.ok(policy.selected_trial.model_metrics.net_pnl_pct>0);
+  assert.ok(policy.selected_trial.model_metrics.max_drawdown_pct<=8);
+  assert.equal(policy.selected_trial.gates.beats_matched_logistic_anchor,true);
   assert.equal(policy.holdout_values_used,false);
 });
 

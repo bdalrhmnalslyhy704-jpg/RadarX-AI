@@ -359,6 +359,12 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
   assert.match(temporal,/execution_ranking_score_adjustment_weight/,
     'the selected rank adjustment must be frozen into inference and output provenance');
   assert.match(temporal,/rankingScoreAdjustmentGrid:\[0,0\.5,1,2,4\]/);
+  assert.match(temporal,/minimumPositiveNetReturnProbabilityGrid:\[0,0\.45,0\.50,0\.55,0\.60\]/);
+  assert.match(temporal,/execution_minimum_positive_net_return_probability/);
+  assert.match(trainer,/minimumPositiveNetReturnProbabilities:contextPositiveProbabilityThresholds/);
+  assert.match(trainer,/minimum_positive_net_return_probability:contextPositiveProbabilityThresholds\[0\]/);
+  assert.match(trainer,/execution_minimum_positive_net_return_probability/);
+  assert.match(contracts,/EXTERNAL_EXECUTION_POSITIVE_RETURN_PROBABILITY_THRESHOLD_NOT_FROZEN/);
   assert.match(temporal,/Number\(rankAdjustmentWeight\)\*normalizedRank/);
   assert.match(temporal,/baseRiskAdjustedScores\[index\]>0/,
     'rank adjustment must never make a non-positive base expected return eligible');

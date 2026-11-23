@@ -1619,8 +1619,12 @@ async function main(){
               execution_risk_policy:selectedFit.execution_risk_policy??null,
               execution_ranking_score_adjustment_weight:
                 Number(selectedFit.execution_ranking_score_adjustment_weight??0),
+              execution_minimum_positive_net_return_probability:
+                Number(selectedFit.execution_minimum_positive_net_return_probability??0),
               pooled_only_execution_ranking_score_adjustment_weight:
                 Number(selectedFit.pooled_only_execution_ranking_score_adjustment_weight??0),
+              pooled_only_execution_minimum_positive_net_return_probability:
+                Number(selectedFit.pooled_only_execution_minimum_positive_net_return_probability??0),
               execution_risk_score_semantics:
                 Number(selectedFit.execution_ranking_score_adjustment_weight??0)>0
                   ?'POSITIVE_BASE_RISK_ADJUSTED_RETURN_REQUIRED; RANK_ADJUSTMENT_ONLY_SORTS_ELIGIBLE_CANDIDATES_V2'
@@ -1750,6 +1754,12 @@ async function main(){
               execution_risk_penalty_weight:Number(executionScore.risk_penalty_weight),
               execution_ranking_score_adjustment_weight:
                 Number(executionScore.ranking_score_adjustment_weight),
+              execution_minimum_positive_net_return_probability:
+                Number(executionScore.minimum_positive_net_return_probability),
+              predicted_positive_net_return_probability:
+                Number(executionScore.predicted_positive_net_return_probability),
+              positive_return_probability_eligible:
+                executionScore.positive_return_probability_eligible===true,
               normalized_independent_return_rank_score:
                 Number(executionScore.normalized_independent_return_rank_score),
               execution_base_risk_adjusted_expected_net_return_pct:
@@ -1778,6 +1788,8 @@ async function main(){
               pooled_only_execution_risk_adjusted_score:Number(pooledOnlyRiskAdjustedScore),
               pooled_only_execution_risk_penalty_weight:Number(pooledOnlyRiskPenaltyWeight),
               pooled_only_execution_ranking_score_adjustment_weight:Number(pooledOnlyRankAdjustmentWeight),
+              pooled_only_execution_minimum_positive_net_return_probability:
+                Number(pooledOnlyExecution.minimum_positive_net_return_probability??0),
               pooled_only_execution_risk_abstention_threshold:Number(
                 pooledOnlyRiskPolicy.selected_minimum_risk_adjusted_score
               ),
@@ -2072,6 +2084,9 @@ async function main(){
       return neural&&logistic&&finite(neural.execution_risk_adjusted_score)&&
         finite(neural.execution_risk_penalty_weight)&&
         finite(neural.execution_ranking_score_adjustment_weight)&&
+        finite(neural.execution_minimum_positive_net_return_probability)&&
+        finite(neural.predicted_positive_net_return_probability)&&
+        typeof neural.positive_return_probability_eligible==='boolean'&&
         finite(neural.execution_base_risk_adjusted_expected_net_return_pct)&&
         typeof neural.execution_base_risk_adjusted_return_positive==='boolean'&&
         finite(neural.execution_rank_adjusted_selection_score)&&
@@ -2081,6 +2096,7 @@ async function main(){
         finite(neural.pooled_only_execution_base_risk_adjusted_expected_net_return_pct)&&
         finite(neural.pooled_only_execution_risk_penalty_weight)&&
         finite(neural.pooled_only_execution_ranking_score_adjustment_weight)&&
+        finite(neural.pooled_only_execution_minimum_positive_net_return_probability)&&
         finite(neural.pooled_only_execution_risk_abstention_threshold)&&
         finite(neural.pooled_only_execution_risk_abstention_percentile)&&
         finite(logistic.probability);
@@ -2098,22 +2114,29 @@ async function main(){
       const contextLambdas=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_penalty_weight);
       const contextRankWeights=alignedRows.map(row=>
         riskById.get(String(row.id)).execution_ranking_score_adjustment_weight);
+      const contextPositiveProbabilityThresholds=alignedRows.map(row=>
+        riskById.get(String(row.id)).execution_minimum_positive_net_return_probability);
       const pooledLambdas=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_penalty_weight);
       const pooledRankWeights=alignedRows.map(row=>
         riskById.get(String(row.id)).pooled_only_execution_ranking_score_adjustment_weight);
+      const pooledPositiveProbabilityThresholds=alignedRows.map(row=>
+        riskById.get(String(row.id)).pooled_only_execution_minimum_positive_net_return_probability);
       const contextThresholds=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_abstention_threshold);
       const pooledThresholds=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_abstention_threshold);
       const contextPercentiles=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_abstention_percentile);
       const pooledPercentiles=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_abstention_percentile);
       if(new Set(contextThresholds).size!==1||new Set(pooledThresholds).size!==1||
         new Set(contextPercentiles).size!==1||new Set(pooledPercentiles).size!==1||
-        new Set(contextRankWeights).size!==1||new Set(pooledRankWeights).size!==1)
+        new Set(contextRankWeights).size!==1||new Set(pooledRankWeights).size!==1||
+        new Set(contextPositiveProbabilityThresholds).size!==1||
+        new Set(pooledPositiveProbabilityThresholds).size!==1)
         throw new Error('OUTER_SELECTIVE_EXECUTION_POLICY_NOT_FROZEN');
       externalExecutionRiskTopK=evaluateExternalExecutionRiskTopK(
         alignedRows,contextScores,logisticScores,
         {riskPenaltyWeights:contextLambdas,
           baseRiskAdjustedScores:contextBaseScores,
           rankingScoreAdjustmentWeights:contextRankWeights,
+          minimumPositiveNetReturnProbabilities:contextPositiveProbabilityThresholds,
           topKGrid:[1],roundTripCostBps:args.roundTripCostBps,
           minimumRiskAdjustedScore:contextThresholds[0],abstentionPercentile:contextPercentiles[0]}
       );
@@ -2122,6 +2145,7 @@ async function main(){
         {riskPenaltyWeights:pooledLambdas,
           baseRiskAdjustedScores:pooledBaseScores,
           rankingScoreAdjustmentWeights:pooledRankWeights,
+          minimumPositiveNetReturnProbabilities:pooledPositiveProbabilityThresholds,
           topKGrid:[1],roundTripCostBps:args.roundTripCostBps,
           minimumRiskAdjustedScore:pooledThresholds[0],abstentionPercentile:pooledPercentiles[0]}
       );
@@ -2158,9 +2182,13 @@ async function main(){
         holdout_rows_or_scores_used:false,
         context_risk_penalty_weight:externalExecutionRiskTopK.risk_penalty_weight,
         context_ranking_score_adjustment_weight:externalExecutionRiskTopK.ranking_score_adjustment_weight,
+        context_minimum_positive_net_return_probability:
+          externalExecutionRiskTopK.minimum_positive_net_return_probability,
         pooled_only_risk_penalty_weight:pooledOnlyExternalExecutionRiskTopK.risk_penalty_weight,
         pooled_only_ranking_score_adjustment_weight:
           pooledOnlyExternalExecutionRiskTopK.ranking_score_adjustment_weight,
+        pooled_only_minimum_positive_net_return_probability:
+          pooledOnlyExternalExecutionRiskTopK.minimum_positive_net_return_probability,
         positive_base_risk_adjusted_return_gate_enforced:
           externalExecutionRiskTopK.base_risk_adjusted_return_gate_enforced&&
           pooledOnlyExternalExecutionRiskTopK.base_risk_adjusted_return_gate_enforced,
@@ -2208,19 +2236,27 @@ async function main(){
       finite(riskById.get(id)?.execution_rank_adjusted_selection_score)&&
       finite(riskById.get(id)?.execution_base_risk_adjusted_expected_net_return_pct)&&
       finite(riskById.get(id)?.execution_ranking_score_adjustment_weight)&&
+      finite(riskById.get(id)?.execution_minimum_positive_net_return_probability)&&
       finite(riskById.get(id)?.execution_risk_abstention_threshold));
     const pooledComplete=bootstrapIds.every(id=>
       finite(riskById.get(id)?.pooled_only_execution_risk_adjusted_score)&&
       finite(riskById.get(id)?.pooled_only_execution_base_risk_adjusted_expected_net_return_pct)&&
+      finite(riskById.get(id)?.pooled_only_execution_minimum_positive_net_return_probability)&&
       finite(riskById.get(id)?.pooled_only_execution_risk_abstention_threshold));
     if(contextComplete&&pooledComplete){
       const logisticExecutionById=new Map(predictionsByModel.LOGISTIC_REGRESSION
         .map(item=>[String(item.id),Number(item.calibrated_probability??item.probability)]));
       const contextThresholds=[...new Set(bootstrapIds.map(id=>
         riskById.get(id).execution_risk_abstention_threshold))];
+      const contextPositiveProbabilityThresholds=[...new Set(bootstrapIds.map(id=>
+        riskById.get(id).execution_minimum_positive_net_return_probability))];
+      const pooledPositiveProbabilityThresholds=[...new Set(bootstrapIds.map(id=>
+        riskById.get(id).pooled_only_execution_minimum_positive_net_return_probability))];
       const pooledThresholds=[...new Set(bootstrapIds.map(id=>
         riskById.get(id).pooled_only_execution_risk_abstention_threshold))];
-      if(contextThresholds.length!==1||pooledThresholds.length!==1)
+      if(contextThresholds.length!==1||pooledThresholds.length!==1||
+        contextPositiveProbabilityThresholds.length!==1||
+        pooledPositiveProbabilityThresholds.length!==1)
         throw new Error('BOOTSTRAP_SELECTIVE_EXECUTION_THRESHOLDS_NOT_FROZEN');
       const executionScoresByPolicy={
         LOGIT_CONTEXT_AUGMENTED:bootstrapIds.map(id=>
@@ -2239,9 +2275,11 @@ async function main(){
       };
       const executionPolicyConfigurations={
         LOGIT_CONTEXT_AUGMENTED:{minimum_score:contextThresholds[0],
-          require_positive_base_score:true},
+          require_positive_base_score:true,
+          minimum_positive_net_return_probability:contextPositiveProbabilityThresholds[0]},
         POOLED_ONLY:{minimum_score:pooledThresholds[0],
-          require_positive_base_score:true},
+          require_positive_base_score:true,
+          minimum_positive_net_return_probability:pooledPositiveProbabilityThresholds[0]},
         LOGISTIC_MATCHED_CONTEXT:{match_trade_counts_with:'LOGIT_CONTEXT_AUGMENTED'},
         LOGISTIC_MATCHED_POOLED:{match_trade_counts_with:'POOLED_ONLY'}
       };

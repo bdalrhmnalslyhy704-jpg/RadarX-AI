@@ -2333,7 +2333,8 @@ export function topKMatchedCountSignals(rows,scores,targetSelection){
  */
 export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logisticProbabilities,{
   riskPenaltyWeights,rankingScoreAdjustmentWeights=null,
-  baseRiskAdjustedScores=null,topKGrid=[1,2,3],roundTripCostBps=30,
+  baseRiskAdjustedScores=null,minimumPositiveNetReturnProbabilities=null,
+  topKGrid=[1,2,3],roundTripCostBps=30,
   minimumRiskAdjustedScore=null,abstentionPercentile=null
 }={}){
   if(!Array.isArray(rows)||!rows.length||
@@ -2370,6 +2371,14 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
     ?[...new Set(rankingScoreAdjustmentWeights.map(Number))]:[];
   if(baseGateEnabled&&rankWeights.length!==1)
     throw new TypeError('EXTERNAL_EXECUTION_RANK_ADJUSTMENT_WEIGHT_NOT_FROZEN');
+  const positiveProbabilityThresholds=Array.isArray(minimumPositiveNetReturnProbabilities)
+    ?[...new Set(minimumPositiveNetReturnProbabilities.map(Number))]:[];
+  if(minimumPositiveNetReturnProbabilities!==null&&
+    (!Array.isArray(minimumPositiveNetReturnProbabilities)||
+      minimumPositiveNetReturnProbabilities.length!==rows.length||
+      minimumPositiveNetReturnProbabilities.some(value=>!finite(value)||value<0||value>1)||
+      positiveProbabilityThresholds.length!==1))
+    throw new TypeError('EXTERNAL_EXECUTION_POSITIVE_RETURN_PROBABILITY_THRESHOLD_NOT_FROZEN');
   if(new Set(rows.map(row=>String(row.id))).size!==rows.length)
     throw new TypeError('EXTERNAL_EXECUTION_RISK_TOP_K_DUPLICATE_ROW_ID');
   if(minimumRiskAdjustedScore!==null&&
@@ -2435,6 +2444,9 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
       :'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
     risk_penalty_weight:lambdas[0],
     ranking_score_adjustment_weight:baseGateEnabled?rankWeights[0]:null,
+    minimum_positive_net_return_probability:positiveProbabilityThresholds.length
+      ?positiveProbabilityThresholds[0]:null,
+    positive_return_probability_threshold_refitted_on_outer_validation:false,
     base_risk_adjusted_return_gate_enforced:baseGateEnabled,
     baseline:'LOGISTIC_REGRESSION_SAME_TRAINING_PARTITION',
     ranking:'TOP_K_PER_IDENTICAL_CLOSED_15M_DECISION_TIMESTAMP',
@@ -2448,6 +2460,8 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
       threshold_refitted_on_outer_validation:false,
       strictly_positive_score_required:frozenThreshold!==null,
       base_expected_net_return_after_risk_must_be_positive:baseGateEnabled,
+      minimum_positive_net_return_probability:positiveProbabilityThresholds.length
+        ?positiveProbabilityThresholds[0]:0,
       score_floor_rule:frozenThreshold===null?null:
         'INNER_SELECTION_QUANTILE_CLAMPED_AT_ZERO_WITH_STRICT_GREATER_THAN',
       baseline_signal_counts_matched:trials.every(row=>
@@ -2539,6 +2553,11 @@ export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
     const config=executionPolicyConfigurations[name]??{};
     if(config.minimum_score!==undefined&&!finite(config.minimum_score))
       return unavailable('BOOTSTRAP_EXECUTION_POLICY_THRESHOLD_INVALID',{policy:name});
+    if(config.minimum_positive_net_return_probability!==undefined&&
+      (!finite(config.minimum_positive_net_return_probability)||
+        config.minimum_positive_net_return_probability<0||
+        config.minimum_positive_net_return_probability>1))
+      return unavailable('BOOTSTRAP_POSITIVE_RETURN_PROBABILITY_THRESHOLD_INVALID',{policy:name});
     if(config.require_positive_base_score!==undefined&&
       typeof config.require_positive_base_score!=='boolean')
       return unavailable('BOOTSTRAP_EXECUTION_BASE_GATE_CONFIGURATION_INVALID',{policy:name});
