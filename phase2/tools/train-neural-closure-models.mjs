@@ -1948,8 +1948,11 @@ async function main(){
           innerOnlyReport.hurdle_v2?.fresh_process_reload_verified===true,
         execution_ablation:{
           status:executionAblation.status??null,
-          contextual:executionAblation.contextual??null,
-          pooled_only:executionAblation.pooled_only??null
+          passed:executionAblation.passed===true,
+          reason:executionAblation.reason??null,
+          gates:executionAblation.gates??null,
+          contextual:executionAblation.context_metrics??null,
+          pooled_only:executionAblation.pooled_only_metrics??null
         }
       },
       temporal_inner_selection:{
