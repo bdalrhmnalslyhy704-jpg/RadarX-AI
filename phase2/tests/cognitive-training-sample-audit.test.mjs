@@ -38,6 +38,15 @@ test('a complete first-passage sample with a finite 24x29 tensor is accepted',()
   assert.equal(isValidCognitiveTrainingSample(row),true);
 });
 
+test('audit preserves the original numeric-coercion rule for resolved horizon',()=>{
+  const row=validSample({at:null,resolved_at:FOUR_HOURS});
+  assert.equal(isValidCognitiveTrainingSample(row),true,
+    'the audit must preserve the original Number(null) === 0 behavior');
+  const audit=auditCognitiveTrainingSamples([row]);
+  assert.equal(audit.valid_samples,1);
+  assert.equal(audit.invalid_samples,0);
+});
+
 test('sample rejection audit identifies target, source, outcome and timestamp failures independently',()=>{
   const row=validSample({
     training_eligible:false,
@@ -90,8 +99,10 @@ test('audit separates valid, invalid, missing-id and duplicate-id rows without c
   const audit=auditCognitiveTrainingSamples([good,bad,duplicate,missingId]);
   assert.equal(audit.observed_rows,4);
   assert.equal(audit.valid_samples,1);
-  assert.equal(audit.invalid_samples,2);
-  assert.equal(audit.duplicate_ids,1);
+  assert.equal(audit.invalid_samples,1,
+    'missing and duplicate identifiers remain identity exclusions, not invalid feature/label samples');
+  assert.equal(audit.duplicate_ids,2,
+    'the historical audit counts missing and duplicate IDs in the identity-exclusion total');
   assert.equal(audit.missing_ids,1);
   assert.equal(audit.valid_temporal_sequences,1);
   assert.equal(audit.rejection_reason_counts.TEMPORAL_SEQUENCE_MISSING,2);
