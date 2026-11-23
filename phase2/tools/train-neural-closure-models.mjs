@@ -1617,7 +1617,16 @@ async function main(){
               execution_logistic_context_metadata:
                 selectedFit.execution_logistic_context_metadata??null,
               execution_risk_policy:selectedFit.execution_risk_policy??null,
-              execution_risk_score_semantics:'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
+              execution_ranking_score_adjustment_weight:
+                Number(selectedFit.execution_ranking_score_adjustment_weight??0),
+              pooled_only_execution_ranking_score_adjustment_weight:
+                Number(selectedFit.pooled_only_execution_ranking_score_adjustment_weight??0),
+              execution_risk_score_semantics:
+                Number(selectedFit.execution_ranking_score_adjustment_weight??0)>0
+                  ?'EXPECTED_NET_RETURN_MINUS_FROZEN_DOWNSIDE_PENALTY_PLUS_FROZEN_INDEPENDENT_RANK_ADJUSTMENT_V1'
+                  :selectedFit.execution_return_estimator==='HURDLE_EXPECTED_VALUE'
+                    ?'HURDLE_EXPECTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK'
+                    :'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
               target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
               outcome_horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
               fit_partition:'FIXED_SHA_OUTER_TRAIN_INTERNAL_TRAIN_ONLY'
