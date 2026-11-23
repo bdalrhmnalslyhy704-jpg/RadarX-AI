@@ -673,8 +673,14 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   assert.ok(Number.isFinite(rankAdjusted.normalized_independent_return_rank_score));
   assert.ok(Math.abs(rankAdjusted.risk_adjusted_net_return_score-
     (rankAdjusted.predicted_net_return_pct-
-      2*rankAdjusted.predicted_downside_risk_pct+
-      0.75*rankAdjusted.normalized_independent_return_rank_score))<1e-10);
+      2*rankAdjusted.predicted_downside_risk_pct))<1e-10);
+  assert.equal(rankAdjusted.base_risk_adjusted_return_positive,
+    rankAdjusted.base_risk_adjusted_expected_net_return_pct>0);
+  assert.ok(Number.isFinite(rankAdjusted.rank_adjusted_execution_selection_score));
+  assert.ok(Math.abs(rankAdjusted.rank_adjusted_execution_selection_score-
+    (rankAdjusted.base_risk_adjusted_expected_net_return_pct>0
+      ?rankAdjusted.risk_adjusted_net_return_score+
+        0.75*rankAdjusted.normalized_independent_return_rank_score:-1e9))<1e-10);
   assert.equal(restoredScore.risk_adjusted_net_return_score,
     higherPenalty.risk_adjusted_net_return_score);
   assert.equal(profile.real_order_execution,false);
@@ -758,8 +764,12 @@ test('independent raw rank score adjusts expected-return ranking without touchin
       ?(rank===0?0.5:-0.5)
       :(rank===0?-0.3:-0.4);
     return {
-      predicted_net_return_pct:-0.2,
-      predicted_hurdle_net_return_pct:-0.2,
+      predicted_net_return_pct:group<30
+        ?(rank===0?0.08:0.09)
+        :(rank===0?0.09:0.08),
+      predicted_hurdle_net_return_pct:group<30
+        ?(rank===0?0.08:0.09)
+        :(rank===0?0.09:0.08),
       predicted_downside_risk_pct:0.01,
       normalized_independent_return_rank_score:normalizedRank
     };
@@ -782,6 +792,23 @@ test('independent raw rank score adjusts expected-return ranking without touchin
   assert.ok(policy.selected_trial.model_metrics.net_pnl_pct>0);
   assert.ok(policy.selected_trial.model_metrics.max_drawdown_pct<=8);
   assert.equal(policy.selected_trial.gates.beats_matched_logistic_anchor,true);
+  assert.equal(policy.selected_trial.score_formula_id,
+    'POSITIVE_BASE_RISK_ADJUSTED_RETURN_GATE_PLUS_NORMALIZED_INDEPENDENT_RANK_SELECTION_ADJUSTMENT_V2');
+  assert.equal(policy.selected_trial.positive_base_risk_adjusted_return_gate_enforced,true);
+  // A positive rank score may not rescue negative base expectancy after risk.
+  const negativeBase=predictions.map(item=>({
+    ...item,predicted_net_return_pct:-0.2,
+    predicted_hurdle_net_return_pct:-0.2,
+    normalized_independent_return_rank_score:0.99
+  }));
+  const blocked=selectTcnLstmExecutionRiskPolicy(rows,negativeBase,logisticLogits,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,
+    maximumDrawdownPct:8,abstentionPercentileGrid:[0.2,0.5],
+    rankingScoreAdjustmentGrid:[4]
+  });
+  assert.equal(blocked.passed,false);
+  assert.equal(blocked.selected_trade_count,0);
+  assert.equal(blocked.positive_base_risk_adjusted_return_gate_enforced,true);
   assert.equal(policy.holdout_values_used,false);
 });
 

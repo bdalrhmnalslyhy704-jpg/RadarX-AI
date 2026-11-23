@@ -360,6 +360,10 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the selected rank adjustment must be frozen into inference and output provenance');
   assert.match(temporal,/rankingScoreAdjustmentGrid:\[0,0\.5,1,2,4\]/);
   assert.match(temporal,/Number\(rankAdjustmentWeight\)\*normalizedRank/);
+  assert.match(temporal,/baseRiskAdjustedScores\[index\]>0/,
+    'rank adjustment must never make a non-positive base expected return eligible');
+  assert.match(temporal,/rank_adjusted_execution_selection_score/,
+    'outer validation must receive the frozen rank-adjusted ordering score');
   assert.match(temporal,/execution_ranking_score_adjustment_weight/);
   assert.match(trainer,/execution_risk_score_semantics:[\s\S]{0,600}FROZEN_INDEPENDENT_RANK_ADJUSTMENT_V1/,
     'the exported TCN-LSTM artifact must describe the exact frozen rank-adjusted execution score');

@@ -2300,17 +2300,21 @@ export function predictTcnLstmHybridExecutionScore(sequence,profile,{
       ranking_score_adjustment_weight:rankWeight,
       normalized_independent_return_rank_score:prediction.normalized_independent_return_rank_score,
       risk_adjusted_net_return_score:null};
-  const score=Number(predictedNetReturn)-lambda*prediction.predicted_downside_risk_pct+
-    rankWeight*Number(prediction.normalized_independent_return_rank_score??0);
-  if(!finite(score))
+  const baseRiskAdjustedScore=Number(predictedNetReturn)-
+    lambda*prediction.predicted_downside_risk_pct;
+  const normalizedRank=Number(prediction.normalized_independent_return_rank_score??0);
+  const rankAdjustedSelectionScore=baseRiskAdjustedScore>0
+    ?baseRiskAdjustedScore+rankWeight*normalizedRank
+    :-1e9;
+  if(!finite(baseRiskAdjustedScore)||!finite(rankAdjustedSelectionScore))
     return {status:'UNAVAILABLE',reason:'EXECUTION_RISK_ADJUSTED_SCORE_NON_FINITE',
       return_estimator:returnEstimator,predicted_net_return_pct:Number(predictedNetReturn),
       predicted_downside_risk_pct:prediction.predicted_downside_risk_pct,
       risk_penalty_weight:lambda,ranking_score_adjustment_weight:rankWeight,
-      risk_adjusted_net_return_score:null};
+      risk_adjusted_net_return_score:null,rank_adjusted_execution_selection_score:null};
   return {status:'AVAILABLE',
     score_semantics:rankWeight>0
-      ?'EXPECTED_NET_RETURN_MINUS_FROZEN_DOWNSIDE_PENALTY_PLUS_FROZEN_INDEPENDENT_RANK_ADJUSTMENT_V1'
+      ?'POSITIVE_BASE_RISK_ADJUSTED_RETURN_REQUIRED; RANK_ADJUSTMENT_ONLY_SORTS_ELIGIBLE_CANDIDATES_V2'
       :returnEstimator==='HURDLE_EXPECTED_VALUE'
         ?'HURDLE_EXPECTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK'
         :'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
@@ -2324,7 +2328,10 @@ export function predictTcnLstmHybridExecutionScore(sequence,profile,{
     normalized_independent_return_rank_score:Number(prediction.normalized_independent_return_rank_score),
     risk_penalty_weight:lambda,
     ranking_score_adjustment_weight:rankWeight,
-    risk_adjusted_net_return_score:Number(score)};
+    base_risk_adjusted_expected_net_return_pct:Number(baseRiskAdjustedScore),
+    base_risk_adjusted_return_positive:baseRiskAdjustedScore>0,
+    risk_adjusted_net_return_score:Number(baseRiskAdjustedScore),
+    rank_adjusted_execution_selection_score:Number(rankAdjustedSelectionScore)};
 }
 
 export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logisticLogits,{
@@ -2382,12 +2389,17 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
   for(const returnEstimator of returnEstimators){
     for(const lambda of [0.1,0.25,0.5,1,2,4,8]){
       for(const rankAdjustmentWeight of rankingScoreAdjustmentGrid){
-        const riskScores=executionPredictions.map(item=>{
+        const baseRiskAdjustedScores=executionPredictions.map(item=>
+          Number(item[returnEstimator.field])-
+            lambda*Number(item.predicted_downside_risk_pct));
+        const riskScores=executionPredictions.map((item,index)=>{
           const normalizedRank=finite(item?.normalized_independent_return_rank_score)
             ?Number(item.normalized_independent_return_rank_score):0;
-          return Number(item[returnEstimator.field])-
-            lambda*Number(item.predicted_downside_risk_pct)+
-            Number(rankAdjustmentWeight)*normalizedRank;
+          // Rank adjustment sorts only candidates whose base risk-adjusted
+          // expected net return is already strictly positive.
+          return baseRiskAdjustedScores[index]>0
+            ?baseRiskAdjustedScores[index]+Number(rankAdjustmentWeight)*normalizedRank
+            :-1e9;
         });
         const bestScoreByGroup=eligible.map(indices=>
           Math.max(...indices.map(index=>riskScores[index])));
@@ -2443,7 +2455,12 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
             return_estimator:returnEstimator.name,
             risk_penalty_weight:lambda,
             ranking_score_adjustment_weight:Number(rankAdjustmentWeight),
-            score_formula_id:'EXPECTED_NET_RETURN_MINUS_DOWNSIDE_PENALTY_PLUS_NORMALIZED_INDEPENDENT_RANK_ADJUSTMENT_V1',
+            score_formula_id:'POSITIVE_BASE_RISK_ADJUSTED_RETURN_GATE_PLUS_NORMALIZED_INDEPENDENT_RANK_SELECTION_ADJUSTMENT_V2',
+            base_risk_adjusted_expected_net_return_pct:Number(baseRiskAdjustedScores.reduce(
+              (sum,value)=>sum+value,0)/baseRiskAdjustedScores.length),
+            positive_base_risk_adjusted_candidate_count:
+              baseRiskAdjustedScores.filter(value=>value>0).length,
+            positive_base_risk_adjusted_return_gate_enforced:true,
             top_k_per_timestamp:1,
             minimum_risk_adjusted_score:Number(threshold),
             inner_quantile_score_threshold:Number(innerQuantileThreshold),
@@ -2496,7 +2513,9 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
     selected_return_estimator:best?.return_estimator??'POINTWISE_HUBER',
     selected_risk_penalty_weight:best?.risk_penalty_weight??null,
     selected_ranking_score_adjustment_weight:best?.ranking_score_adjustment_weight??0,
-    selected_score_formula_id:best?.score_formula_id??'EXPECTED_NET_RETURN_MINUS_DOWNSIDE_PENALTY_V1',
+    selected_score_formula_id:best?.score_formula_id??
+      'POSITIVE_BASE_RISK_ADJUSTED_RETURN_GATE_PLUS_NORMALIZED_INDEPENDENT_RANK_SELECTION_ADJUSTMENT_V2',
+    positive_base_risk_adjusted_return_gate_enforced:true,
     selected_top_k_per_timestamp:1,
     selected_minimum_risk_adjusted_score:best?.minimum_risk_adjusted_score??null,
     selected_inner_quantile_score_threshold:best?.inner_quantile_score_threshold??null,

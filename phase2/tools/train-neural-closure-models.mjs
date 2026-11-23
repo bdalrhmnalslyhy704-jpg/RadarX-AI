@@ -1623,7 +1623,7 @@ async function main(){
                 Number(selectedFit.pooled_only_execution_ranking_score_adjustment_weight??0),
               execution_risk_score_semantics:
                 Number(selectedFit.execution_ranking_score_adjustment_weight??0)>0
-                  ?'EXPECTED_NET_RETURN_MINUS_FROZEN_DOWNSIDE_PENALTY_PLUS_FROZEN_INDEPENDENT_RANK_ADJUSTMENT_V1'
+                  ?'POSITIVE_BASE_RISK_ADJUSTED_RETURN_REQUIRED; RANK_ADJUSTMENT_ONLY_SORTS_ELIGIBLE_CANDIDATES_V2'
                   :selectedFit.execution_return_estimator==='HURDLE_EXPECTED_VALUE'
                     ?'HURDLE_EXPECTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK'
                     :'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
@@ -1752,7 +1752,14 @@ async function main(){
                 Number(executionScore.ranking_score_adjustment_weight),
               normalized_independent_return_rank_score:
                 Number(executionScore.normalized_independent_return_rank_score),
-              execution_risk_adjusted_score:Number(executionScore.risk_adjusted_net_return_score),
+              execution_base_risk_adjusted_expected_net_return_pct:
+                Number(executionScore.base_risk_adjusted_expected_net_return_pct),
+              execution_base_risk_adjusted_return_positive:
+                executionScore.base_risk_adjusted_return_positive===true,
+              execution_rank_adjusted_selection_score:
+                Number(executionScore.rank_adjusted_execution_selection_score),
+              execution_risk_adjusted_score:
+                Number(executionScore.rank_adjusted_execution_selection_score),
               execution_risk_abstention_threshold:Number(contextRiskPolicy.selected_minimum_risk_adjusted_score),
               execution_risk_abstention_percentile:Number(contextRiskPolicy.selected_abstention_percentile),
               execution_risk_abstention_source_partition:'INNER_SELECTION_ONLY',
