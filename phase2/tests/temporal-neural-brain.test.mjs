@@ -148,15 +148,19 @@ test('temporal boosted trees compete on the same first-passage target with regim
   assert.ok(expert.member_selection_cutoff_at<expert.calibration_cutoff_at);
   assert.ok(expert.calibration_cutoff_at<=expert.validation_start_at);
   assert.ok(expert.validation_start_at<profile.holdout_start_at);
-  assert.ok(expert.holdout.sample_count>=150);
   assert.ok(expert.validation.model_brier_score+0.003<
     expert.validation_logistic.model_brier_score);
-  assert.ok(expert.holdout.model_brier_score+0.003<
-    expert.holdout_logistic.model_brier_score);
+  if(expert.holdout_family_selected){
+    assert.ok(expert.holdout.model_brier_score+0.003<
+      expert.holdout_logistic.model_brier_score);
+    assert.equal(tree.holdout_comparison.passed,true);
+  }else{
+    assert.equal(tree.holdout_comparison.passed,false,
+      'the tree must remain unscored when TCN wins the family selection');
+  }
   assert.ok(expert.feature_importance.length>0);
   assert.ok(Math.abs(expert.feature_importance.reduce((sum,row)=>
     sum+row.gain_share_pct,0)-100)<0.1);
-  assert.ok(tree.holdout_comparison.passed);
 });
 
 test('temporal network trains only on valid tensors and keeps chronological validation and holdout separate',()=>{
@@ -244,17 +248,24 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   }
   assert.ok(profile.validation.positive_rate_pct>=0&&profile.validation.positive_rate_pct<=100);
   assert.equal(profile.holdout_access.opened,
-    profile.holdout_access.tcn_validation_selected_regimes.length>0||
-    profile.holdout_access.temporal_tree_validation_selected_regimes.length>0);
-  if(profile.holdout_access.opened){
+    profile.holdout_access.tcn_holdout_scored_regimes.length>0||
+    profile.holdout_access.temporal_tree_holdout_scored_regimes.length>0);
+  if(profile.holdout_access.tcn_holdout_scored_regimes.length){
     assert.ok(profile.holdout.positive_rate_pct>=0&&profile.holdout.positive_rate_pct<=100);
     assert.ok(profile.holdout.sample_count>=40);
   }else{
     assert.equal(profile.holdout.evaluated,false);
     assert.equal(profile.holdout.sample_count,0);
+  }
+  if(profile.holdout_access.temporal_tree_holdout_scored_regimes.length){
+    assert.ok(profile.temporal_boosted_tree.holdout.sample_count>=40);
+  }else{
+    assert.equal(profile.temporal_boosted_tree.holdout.sample_count,0);
+  }
+  if(!profile.holdout_access.opened){
     assert.equal(profile.holdout_comparison.sample_count,0);
     assert.equal(profile.holdout_access.reason,
-      'NO_TEMPORAL_FAMILY_PASSED_VALIDATION_HOLDOUT_REMAINS_CLOSED');
+      'NO_VALIDATION_FAMILY_WINNER_HOLDOUT_REMAINS_CLOSED');
   }
   for(const regime of profile.supported_regimes){
     const specialist=profile.regime_specialists[regime];
@@ -454,8 +465,13 @@ test('mature history reserves a broad untouched holdout and a wider regime-suppo
     const expert=profile.regime_specialists[regime];
     assert.ok(expert.holdout_samples>=20);
     assert.ok([0,0.1,0.25,0.5,1].includes(expert.selected_residual_scale));
-    assert.ok(expert.holdout_positive_samples>=5);
-    assert.ok(expert.holdout_negative_samples>=20);
+    if(expert.holdout_family_selected){
+      assert.ok(expert.holdout_positive_samples>=5);
+      assert.ok(expert.holdout_negative_samples>=20);
+    }else{
+      assert.equal(expert.holdout_positive_samples,null);
+      assert.equal(expert.holdout_negative_samples,null);
+    }
     assert.ok(expert.validation_start_at<profile.holdout_start_at);
   }
 });
