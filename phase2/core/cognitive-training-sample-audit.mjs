@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {TEMPORAL_TARGET_DEFINITION} from './temporal-neural-brain.mjs';
 
 export const COGNITIVE_TRAINING_SEQUENCE_STEPS=24;
@@ -158,4 +159,23 @@ export function auditCognitiveTrainingSamples(rows){
 export function buildCognitiveTrainingRejectionJsonl(audit){
   const rows=Array.isArray(audit?.rejected_samples)?audit.rejected_samples:[];
   return rows.map(row=>JSON.stringify(row)).join('\n')+(rows.length?'\n':'');
+}
+
+export function buildCognitiveTrainingTensorJsonl(rows){
+  const valid=(Array.isArray(rows)?rows:[]).filter(isValidCognitiveTrainingSample);
+  return valid.map(row=>{
+    const sequenceJson=JSON.stringify(row.temporal_sequence);
+    return JSON.stringify({
+      id:String(row.id),
+      symbol:String(row.symbol),
+      at:Number(row.at),
+      resolved_at:Number(row.resolved_at),
+      target_definition:row.target_definition,
+      outcome:row.outcome,
+      sequence_steps:COGNITIVE_TRAINING_SEQUENCE_STEPS,
+      sequence_channels:COGNITIVE_TRAINING_SEQUENCE_CHANNELS,
+      temporal_sequence_sha256:createHash('sha256').update(sequenceJson).digest('hex'),
+      temporal_sequence:row.temporal_sequence
+    });
+  }).join('\n')+(valid.length?'\n':'');
 }
