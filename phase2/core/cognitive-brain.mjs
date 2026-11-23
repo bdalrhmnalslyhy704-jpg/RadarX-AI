@@ -1158,7 +1158,6 @@ export function buildCognitiveLearningProfile(samples = [], {
   const upEventTraining=asUpEventRows(training);
   const upEventRecentTraining=asUpEventRows(recentTraining);
   const upEventValidation=asUpEventRows(validation);
-  const upEventHoldout=asUpEventRows(holdout);
   // All neural/challenger comparisons use identical binary UP-event labels.
   const neuralGlobalLogisticFit=upEventTraining.length>=minTrainingSamples
     ?fitLogisticModel(upEventTraining,{l2,iterations,learningRate}):null;
@@ -1336,7 +1335,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   // Holdout is a one-shot acceptance set. Keep every challenger and reference
   // unopened until a single candidate has qualified on chronological validation.
   const closedUpEventHoldout=(reason)=>({
-    sample_count:0,available_sample_count:upEventHoldout.length,evaluated:false,
+    sample_count:0,available_sample_count:holdout.length,evaluated:false,
     model_brier_score:null,base_rate_brier_score:null,log_loss:null,
     beat_base_rate:false,reason
   });
@@ -1346,7 +1345,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   let neuralRecentLogisticHoldout=closedUpEventHoldout('REFERENCE_NOT_NEEDED_BEFORE_VALIDATION_SELECTION');
   let neuralHoldoutReady=false;
   let neuralHoldoutComparison={
-    sample_count:0,available_sample_count:upEventHoldout.length,
+    sample_count:0,available_sample_count:holdout.length,
     required_live_holdout_samples:100,required_brier_margin:comparisonMargin,
     opened:false,evaluated:false,reason:'NO_VALIDATION_SELECTED_NEURAL_CHALLENGER',
     base_rate_used:neuralFit?.base_rate??null,neural_brier_score:null,
@@ -1536,6 +1535,9 @@ export function buildCognitiveLearningProfile(samples = [], {
     reason:'NO_VALIDATION_WINNER_HOLDOUT_REMAINS_CLOSED'};
   let activeChallenger=null;
   if(validationWinner){
+    // Do not even derive UP/DOWN Holdout labels until one family has won the
+    // chronological Validation comparison.
+    const upEventHoldout=asUpEventRows(holdout);
     // Open the final block only after Validation has selected exactly one
     // challenger. Score that winner and its predeclared logistic references;
     // never score losing neural/tree/hybrid candidates on the final block.
@@ -1567,7 +1569,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         challengerHoldout.model_brier_score+comparisonMargin<reference.model_brier_score);
     challengerHoldoutComparison={
       sample_count:challengerHoldout.sample_count,
-      available_sample_count:upEventHoldout.length,
+      available_sample_count:holdout.length,
       required_brier_margin:comparisonMargin,
       opened:true,evaluated:challengerHoldout.evaluated===true,
       model_brier_score:challengerHoldout.model_brier_score??null,
@@ -1595,7 +1597,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         challengerHoldout.beat_base_rate===true&&beatsReferences;
       neuralHoldoutComparison={
         sample_count:challengerHoldout.sample_count,
-        available_sample_count:upEventHoldout.length,
+        available_sample_count:holdout.length,
         required_live_holdout_samples:100,required_brier_margin:comparisonMargin,
         opened:true,evaluated:challengerHoldout.evaluated===true,
         base_rate_used:neuralFit?.base_rate??null,
