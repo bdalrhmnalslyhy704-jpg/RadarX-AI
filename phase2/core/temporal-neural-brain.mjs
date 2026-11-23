@@ -1383,11 +1383,23 @@ export function buildTemporalNeuralProfile(samples = [], {
       validationModel.evaluated&&validationLogistic.evaluated&&
       validationModel.beat_base_rate===true&&
       validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
-    const holdoutModel=selectedMemberIndex>=0
-      ?evaluate(regimeHoldout,sequence=>predict(sequence,fitted),regimePrior)
-      :evaluate(regimeHoldout,diagnosticPrediction,regimePrior);
-    const holdoutLogistic=evaluate(regimeHoldout,
-      predictCalibratedLogistic,regimeBaseline.base_rate);
+    // The final holdout is opened for a regime only after its own
+    // chronological validation gate passes. Diagnostic members and regimes
+    // that fail Validation must not consume final-block labels.
+    const holdoutModel=validationPassed
+      ?(selectedMemberIndex>=0
+        ?evaluate(regimeHoldout,sequence=>predict(sequence,fitted),regimePrior)
+        :{evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
+          model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+          reason:'REGIME_TCN_MEMBER_NOT_SELECTED_HOLDOUT_REMAINS_CLOSED'})
+      :{evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
+        model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+        reason:'REGIME_TCN_DID_NOT_PASS_CHRONOLOGICAL_VALIDATION'};
+    const holdoutLogistic=validationPassed
+      ?evaluate(regimeHoldout,predictCalibratedLogistic,regimeBaseline.base_rate)
+      :{evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
+        model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+        reason:'REGIME_TCN_DID_NOT_PASS_CHRONOLOGICAL_VALIDATION'};
     const predictCalibratedTemporalTree=sequence=>calibratedProbability(
       temporalTreeFit&&temporalTreeWinner
         ?predictTemporalResidualTrees(sequence,temporalTreeFit,
@@ -1401,7 +1413,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     const predictCalibratedTreeLogistic=sequence=>calibratedProbability(
       predictLogistic(sequence,regimeBaseline),treeLogisticCalibrator);
     const temporalTreeValidationLogistic=evaluate(regimeValidation,predictCalibratedTreeLogistic,regimePrior);
-    const temporalTreeHoldoutLogistic=evaluate(regimeHoldout,predictCalibratedTreeLogistic,regimePrior);
+    let temporalTreeHoldoutLogistic={
+      evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
+      model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+      reason:'TEMPORAL_TREE_NOT_VALIDATED_HOLDOUT_REMAINS_CLOSED'
+    };
     const temporalTreeValidation=temporalTreeFit&&temporalTreeWinner
       ?evaluate(regimeValidation,predictCalibratedTemporalTree,regimePrior)
       :{evaluated:false,sample_count:regimeValidation.length,model_brier_score:null,
@@ -1412,12 +1428,18 @@ export function buildTemporalNeuralProfile(samples = [], {
       temporalTreeValidation.beat_base_rate===true&&
       temporalTreeValidation.model_brier_score+comparisonMargin<
         temporalTreeValidationLogistic.model_brier_score;
+    // Score the tree's logistic reference on the final block only when the
+    // tree itself has already cleared every earlier validation requirement.
+    if(temporalTreeValidationPassed){
+      temporalTreeHoldoutLogistic=evaluate(regimeHoldout,
+        predictCalibratedTreeLogistic,regimePrior);
+    }
     // Do not even score the untouched holdout for a tree that failed the
     // earlier validation gate. This keeps the final block out of model review.
     const temporalTreeHoldout=temporalTreeValidationPassed
       ?evaluate(regimeHoldout,predictCalibratedTemporalTree,regimePrior)
-      :{evaluated:false,sample_count:regimeHoldout.length,model_brier_score:null,
-        base_rate_brier_score:null,beat_base_rate:false,
+      :{evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
+        model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
         reason:'TEMPORAL_TREE_DID_NOT_PASS_CHRONOLOGICAL_VALIDATION'};
     const temporalTreeHoldoutPassed=temporalTreeValidationPassed&&
       temporalTreeHoldout.evaluated===true&&temporalTreeHoldoutLogistic.evaluated===true&&
@@ -1509,12 +1531,20 @@ export function buildTemporalNeuralProfile(samples = [], {
     temporalBoostedTreeResults[regime]?.holdout_passed===true);
   const temporalTreeValidation=aggregateEvaluations(temporalTreeSupportedRegimes.map(regime=>
     temporalBoostedTreeResults[regime]?.validation));
-  const temporalTreeHoldout=aggregateEvaluations(temporalTreeSupportedRegimes.map(regime=>
-    temporalBoostedTreeResults[regime]?.holdout));
+  const temporalTreeHoldout=temporalTreeValidationRegimes.length
+    ?aggregateEvaluations(temporalTreeValidationRegimes.map(regime=>
+      temporalBoostedTreeResults[regime]?.holdout))
+    :{evaluated:false,sample_count:0,available_sample_count:holdout.length,
+      model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+      reason:'NO_VALIDATION_SELECTED_TEMPORAL_TREE_HOLDOUT_REMAINS_CLOSED'};
   const temporalTreeValidationLogistic=aggregateEvaluations(temporalTreeSupportedRegimes.map(regime=>
     temporalBoostedTreeResults[regime]?.validation_logistic));
-  const temporalTreeHoldoutLogistic=aggregateEvaluations(temporalTreeSupportedRegimes.map(regime=>
-    temporalBoostedTreeResults[regime]?.holdout_logistic));
+  const temporalTreeHoldoutLogistic=temporalTreeValidationRegimes.length
+    ?aggregateEvaluations(temporalTreeValidationRegimes.map(regime=>
+      temporalBoostedTreeResults[regime]?.holdout_logistic))
+    :{evaluated:false,sample_count:0,available_sample_count:holdout.length,
+      model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+      reason:'NO_VALIDATION_SELECTED_TEMPORAL_TREE_HOLDOUT_REMAINS_CLOSED'};
   const temporalTreeHoldoutCount=temporalTreeSelectedRegimes.reduce((sum,regime)=>
     sum+Number(temporalBoostedTreeResults[regime]?.holdout?.sample_count||0),0);
   const temporalTreeAllSupportedValidated=temporalTreeSupportedRegimes.length>0&&
@@ -1599,8 +1629,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   const supportedRegimes=regimes.filter(regime=>regimeResults[regime]?.supported===true);
   const validationSelectedRegimes=regimes.filter(regime=>regimeResults[regime]?.validation_passed===true);
   const selectedRegimes=regimes.filter(regime=>regimeResults[regime]?.holdout_passed===true);
-  // Report only validated regime slices when at least one is eligible. When
-  // none passes, retain supported/validation slices for honest diagnostics.
+  // Use diagnostic regimes for Validation summaries only. Final holdout
+  // aggregation is deliberately restricted to regimes that passed Validation.
   const diagnosticRegimes=selectedRegimes.length?selectedRegimes:
     validationSelectedRegimes.length?validationSelectedRegimes:supportedRegimes;
   // Keep global block metrics visible when no regime has enough class support.
@@ -1612,12 +1642,18 @@ export function buildTemporalNeuralProfile(samples = [], {
   const validationLogistic=hasDiagnosticRegimes
     ?aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.validation_logistic))
     :evaluate(validation,sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
-  const holdoutModel=hasDiagnosticRegimes
-    ?aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.holdout_model))
-    :evaluate(holdout,sequence=>predict(sequence,fitted),baseRate);
-  const holdoutLogistic=hasDiagnosticRegimes
-    ?aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.holdout_logistic))
-    :evaluate(holdout,sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
+  // Aggregate only regimes that passed their own outer Validation gate.
+  // If no regime qualified, do not score the final holdout at all.
+  const holdoutModel=validationSelectedRegimes.length
+    ?aggregateEvaluations(validationSelectedRegimes.map(regime=>regimeResults[regime]?.holdout_model))
+    :{evaluated:false,sample_count:0,available_sample_count:holdout.length,
+      model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+      reason:'NO_VALIDATION_SELECTED_REGIME_HOLDOUT_REMAINS_CLOSED'};
+  const holdoutLogistic=validationSelectedRegimes.length
+    ?aggregateEvaluations(validationSelectedRegimes.map(regime=>regimeResults[regime]?.holdout_logistic))
+    :{evaluated:false,sample_count:0,available_sample_count:holdout.length,
+      model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+      reason:'NO_VALIDATION_SELECTED_REGIME_HOLDOUT_REMAINS_CLOSED'};
   // Each BTC regime has already been compared with its own training-only
   // logistic anchor on disjoint chronological validation and untouched holdout
   // rows. The deployable predictor is conditional: it must return null in any
@@ -1850,6 +1886,14 @@ export function buildTemporalNeuralProfile(samples = [], {
       ...validationModel,selected_over_pooled_logistic:selected,
       pooled_logistic_brier_score:validationLogistic.model_brier_score,
       reason:validationReason
+    },
+    holdout_access:{
+      opened:validationSelectedRegimes.length>0||temporalTreeValidationRegimes.length>0,
+      tcn_validation_selected_regimes:validationSelectedRegimes,
+      temporal_tree_validation_selected_regimes:temporalTreeValidationRegimes,
+      reason:validationSelectedRegimes.length>0||temporalTreeValidationRegimes.length>0
+        ?'ONLY_VALIDATION_SELECTED_TEMPORAL_FAMILY_SLICES_SCORED_ON_FINAL_HOLDOUT'
+        :'NO_TEMPORAL_FAMILY_PASSED_VALIDATION_HOLDOUT_REMAINS_CLOSED'
     },
     holdout:{
       ...holdoutModel,
