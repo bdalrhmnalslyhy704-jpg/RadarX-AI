@@ -241,7 +241,7 @@ export function createHurdleV2Artifact({
       pooled: hashObject(pooled)
     },
     model_family: 'TCN_LSTM_HURDLE_EXPECTED_NET_RETURN',
-    model_version: 'HURDLE_V2_FEATURE_CONDITIONAL_MEANS_V2',
+    model_version: 'HURDLE_V2_FEATURE_CONDITIONAL_MEANS_V3_RANK_ADJUSTED_EXECUTION_POLICY',
     code_commit_sha: String(codeCommitSha).toLowerCase(),
     dataset_sha256: String(datasetSha256).toLowerCase(),
     input_file_sha256: String(inputFileSha256).toLowerCase(),
@@ -310,22 +310,28 @@ export function createHurdleV2Artifact({
     },
     risk_parameters: {
       adjustment_semantics: 'MAX(0,PREDICTED_DOWNSIDE_RISK_PCT)',
+      ranking_adjustment_semantics:
+        'FROZEN_WEIGHT_TIMES_TANH_INDEPENDENT_RAW_RETURN_RANK_SCORE_DIV_4; NEVER_ADDED_TO_CLASSIFIER_PROBABILITY',
       contextual: {
         schema: 'RADARX_TCN_LSTM_EXECUTION_RISK_HEAD_V1',
         head_type: 'CONTEXTUAL',
         weights: model.executionRiskHeadWeights,
         bias: model.executionRiskHeadBias,
-        normalization: normalizers.LOGIT_CONTEXT_AUGMENTED.downside_risk
+        normalization: normalizers.LOGIT_CONTEXT_AUGMENTED.downside_risk,
+        ranking_score_adjustment_weight:
+          Number(contextPolicy.selected_ranking_score_adjustment_weight??0)
       },
       pooled: {
         schema: 'RADARX_TCN_LSTM_EXECUTION_RISK_HEAD_V1',
         head_type: 'POOLED',
         weights: model.executionRiskHeadPooledOnlyWeights,
         bias: model.executionRiskHeadPooledOnlyBias,
-        normalization: normalizers.POOLED_ONLY.downside_risk
+        normalization: normalizers.POOLED_ONLY.downside_risk,
+        ranking_score_adjustment_weight:
+          Number(pooledPolicy.selected_ranking_score_adjustment_weight??0)
       },
       risk_adjusted_expected_return_formula:
-        'SELECTED_RETURN_ESTIMATOR_PREDICTION_PCT - FROZEN_RISK_PENALTY_WEIGHT * MAX(0,PREDICTED_DOWNSIDE_RISK_PCT)',
+        'SELECTED_RETURN_ESTIMATOR_PREDICTION_PCT - FROZEN_RISK_PENALTY_WEIGHT * MAX(0,PREDICTED_DOWNSIDE_RISK_PCT) + FROZEN_RANK_ADJUSTMENT_WEIGHT * TANH(INDEPENDENT_RAW_RETURN_RANK_SCORE/4)',
       selected_estimator_semantics:
         'USE_FROZEN_POLICY_SELECTED_RETURN_ESTIMATOR; HURDLE_EXPECTED_VALUE_ONLY_WHEN_INNER_POLICY_SELECTED_IT'
     },
@@ -474,6 +480,16 @@ export function verifyHurdleV2Artifact(artifact) {
       return fail('COST_PROVENANCE_MISMATCH');
     if (artifact.objective_id !== HURDLE_V2_OBJECTIVE ||
         artifact.calibration_id !== HURDLE_V2_CALIBRATION_ID) return fail('OBJECTIVE_OR_CALIBRATION_MISSING');
+    for (const [name,value] of [
+      ['contextual',artifact.risk_parameters?.contextual?.ranking_score_adjustment_weight],
+      ['pooled',artifact.risk_parameters?.pooled?.ranking_score_adjustment_weight]
+    ]) {
+      if (!finite(value)||value<0||value>8)
+        return fail('RANKING_SCORE_ADJUSTMENT_WEIGHT_INVALID:'+name);
+    }
+    if (artifact.risk_parameters?.ranking_adjustment_semantics !==
+      'FROZEN_WEIGHT_TIMES_TANH_INDEPENDENT_RAW_RETURN_RANK_SCORE_DIV_4; NEVER_ADDED_TO_CLASSIFIER_PROBABILITY')
+      return fail('RANKING_SCORE_ADJUSTMENT_SEMANTICS_INVALID');
     if (artifact.holdout_status !== 'LOCKED' || artifact.split_definition?.holdout_scored_rows !== 0 ||
         artifact.inner_qualification?.validation_or_holdout_used !== false)
       return fail('HOLDOUT_LOCK_CONTRACT_INVALID');

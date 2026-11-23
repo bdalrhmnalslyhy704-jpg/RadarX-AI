@@ -77,6 +77,7 @@ before(async () => {
     status: 'EVALUATED',
     passed: false,
     selected_risk_penalty_weight: 0.1,
+    selected_ranking_score_adjustment_weight: 0.5,
     selected_minimum_risk_adjusted_score: 0.2,
     selected_return_estimator: 'HURDLE_EXPECTED_VALUE',
     selected_abstention_percentile: 0.2,
@@ -87,7 +88,8 @@ before(async () => {
     fit: {
       model,
       execution_risk_policy: policy,
-      pooled_only_execution_risk_policy: {...policy, selected_risk_penalty_weight: 0.12},
+      pooled_only_execution_risk_policy: {...policy, selected_risk_penalty_weight: 0.12,
+        selected_ranking_score_adjustment_weight: 0},
       training: {
         execution_regression_heads: {
           training_rows: 1800,
@@ -213,7 +215,11 @@ test('12. risk parameters and the inner-selected policies are persisted', () => 
   assert.equal(artifact.risk_parameters.pooled.weights.length, 8);
   assert.equal(artifact.abstention_parameters.policy_selection_partition, 'INNER_SELECTION_ONLY');
   assert.equal(artifact.abstention_parameters.contextual.selected_risk_penalty_weight, 0.1);
+  assert.equal(artifact.abstention_parameters.contextual.selected_ranking_score_adjustment_weight, 0.5);
   assert.equal(artifact.abstention_parameters.pooled.selected_risk_penalty_weight, 0.12);
+  assert.equal(artifact.risk_parameters.contextual.ranking_score_adjustment_weight, 0.5);
+  assert.equal(artifact.risk_parameters.pooled.ranking_score_adjustment_weight, 0);
+  assert.match(artifact.risk_parameters.ranking_adjustment_semantics,/NEVER_ADDED_TO_CLASSIFIER_PROBABILITY/);
 });
 test('13. declared 30 bps cost is applied once and never subtracted again at inference', () => {
   assert.equal(artifact.cost_application.applied_exactly_once, true);

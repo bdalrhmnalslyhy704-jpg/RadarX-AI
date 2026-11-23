@@ -1699,9 +1699,12 @@ async function main(){
               pooledOnlyReturnEstimator==='HURDLE_EXPECTED_VALUE'
                 ?pooledOnlyExecution.predicted_hurdle_net_return_pct
                 :pooledOnlyExecution.predicted_net_return_pct;
+            const pooledOnlyRankAdjustmentWeight=0;
             const pooledOnlyRiskAdjustedScore=
               pooledOnlyExpectedNetReturnPct-
-              pooledOnlyRiskPenaltyWeight*pooledOnlyExecution.predicted_downside_risk_pct;
+              pooledOnlyRiskPenaltyWeight*pooledOnlyExecution.predicted_downside_risk_pct+
+              pooledOnlyRankAdjustmentWeight*
+                Number(pooledOnlyExecution.normalized_independent_return_rank_score??0);
             if(!finite(pooledOnlyRiskAdjustedScore)||
               !finite(pooledOnlyExpectedNetReturnPct)||
               !finite(pooledOnlyExecution.predicted_downside_risk_pct))
@@ -1736,6 +1739,10 @@ async function main(){
               execution_return_estimator:executionScore.return_estimator,
               predicted_downside_risk_pct:Number(executionScore.predicted_downside_risk_pct),
               execution_risk_penalty_weight:Number(executionScore.risk_penalty_weight),
+              execution_ranking_score_adjustment_weight:
+                Number(executionScore.ranking_score_adjustment_weight),
+              normalized_independent_return_rank_score:
+                Number(executionScore.normalized_independent_return_rank_score),
               execution_risk_adjusted_score:Number(executionScore.risk_adjusted_net_return_score),
               execution_risk_abstention_threshold:Number(contextRiskPolicy.selected_minimum_risk_adjusted_score),
               execution_risk_abstention_percentile:Number(contextRiskPolicy.selected_abstention_percentile),
@@ -1752,6 +1759,7 @@ async function main(){
               pooled_only_predicted_downside_risk_pct:Number(pooledOnlyExecution.predicted_downside_risk_pct),
               pooled_only_execution_risk_adjusted_score:Number(pooledOnlyRiskAdjustedScore),
               pooled_only_execution_risk_penalty_weight:Number(pooledOnlyRiskPenaltyWeight),
+              pooled_only_execution_ranking_score_adjustment_weight:Number(pooledOnlyRankAdjustmentWeight),
               pooled_only_execution_risk_abstention_threshold:Number(
                 pooledOnlyRiskPolicy.selected_minimum_risk_adjusted_score
               ),
@@ -2045,10 +2053,12 @@ async function main(){
       const neural=riskById.get(String(row.id)),logistic=logisticById.get(String(row.id));
       return neural&&logistic&&finite(neural.execution_risk_adjusted_score)&&
         finite(neural.execution_risk_penalty_weight)&&
+        finite(neural.execution_ranking_score_adjustment_weight)&&
         finite(neural.execution_risk_abstention_threshold)&&
         finite(neural.execution_risk_abstention_percentile)&&
         finite(neural.pooled_only_execution_risk_adjusted_score)&&
         finite(neural.pooled_only_execution_risk_penalty_weight)&&
+        finite(neural.pooled_only_execution_ranking_score_adjustment_weight)&&
         finite(neural.pooled_only_execution_risk_abstention_threshold)&&
         finite(neural.pooled_only_execution_risk_abstention_percentile)&&
         finite(logistic.probability);
@@ -2060,13 +2070,18 @@ async function main(){
         logisticById.get(String(row.id)).calibrated_probability??
         logisticById.get(String(row.id)).probability);
       const contextLambdas=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_penalty_weight);
+      const contextRankWeights=alignedRows.map(row=>
+        riskById.get(String(row.id)).execution_ranking_score_adjustment_weight);
       const pooledLambdas=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_penalty_weight);
+      const pooledRankWeights=alignedRows.map(row=>
+        riskById.get(String(row.id)).pooled_only_execution_ranking_score_adjustment_weight);
       const contextThresholds=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_abstention_threshold);
       const pooledThresholds=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_abstention_threshold);
       const contextPercentiles=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_abstention_percentile);
       const pooledPercentiles=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_abstention_percentile);
       if(new Set(contextThresholds).size!==1||new Set(pooledThresholds).size!==1||
-        new Set(contextPercentiles).size!==1||new Set(pooledPercentiles).size!==1)
+        new Set(contextPercentiles).size!==1||new Set(pooledPercentiles).size!==1||
+        new Set(contextRankWeights).size!==1||new Set(pooledRankWeights).size!==1)
         throw new Error('OUTER_SELECTIVE_EXECUTION_POLICY_NOT_FROZEN');
       externalExecutionRiskTopK=evaluateExternalExecutionRiskTopK(
         alignedRows,contextScores,logisticScores,

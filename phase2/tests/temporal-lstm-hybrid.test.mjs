@@ -665,6 +665,16 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   assert.equal(restoredPooledOnly.variant,'POOLED_ONLY');
   assert.equal(restoredPooledOnly.input_feature_count,TCN_LSTM_HIDDEN);
   assert.equal(restoredScore.risk_penalty_weight,2);
+  profile.execution_ranking_score_adjustment_weight=0.75;
+  const rankAdjusted=predictTcnLstmHybridExecutionScore(
+    evidence[0].sequence,profile,{externalLogisticLogit}
+  );
+  assert.equal(rankAdjusted.ranking_score_adjustment_weight,0.75);
+  assert.ok(Number.isFinite(rankAdjusted.normalized_independent_return_rank_score));
+  assert.ok(Math.abs(rankAdjusted.risk_adjusted_net_return_score-
+    (rankAdjusted.predicted_net_return_pct-
+      2*rankAdjusted.predicted_downside_risk_pct+
+      0.75*rankAdjusted.normalized_independent_return_rank_score))<1e-10);
   assert.equal(restoredScore.risk_adjusted_net_return_score,
     higherPenalty.risk_adjusted_net_return_score);
   assert.equal(profile.real_order_execution,false);
@@ -732,6 +742,47 @@ test('selective execution policy chooses a real abstention threshold only from i
   assert.equal(hurdlePolicy.selected_trial.return_estimator,'HURDLE_EXPECTED_VALUE');
   assert.equal(hurdlePolicy.selection_partition_only,true);
   assert.equal(hurdlePolicy.holdout_values_used,false);
+});
+
+test('independent raw rank score adjusts expected-return ranking without touching classifier probabilities',()=>{
+  const groupCount=40;
+  const rows=Array.from({length:groupCount*2},(_,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    const outcome=group<30&&rank===0?'UP':'DOWN';
+    const at=BASE+group*DAY+rank*75;
+    return makeExecutionRow(index,outcome,at);
+  });
+  const predictions=rows.map((row,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    const normalizedRank=group<30
+      ?(rank===0?0.5:-0.5)
+      :(rank===0?-0.3:-0.4);
+    return {
+      predicted_net_return_pct:-0.2,
+      predicted_hurdle_net_return_pct:-0.2,
+      predicted_downside_risk_pct:0.01,
+      normalized_independent_return_rank_score:normalizedRank
+    };
+  });
+  const logisticLogits=rows.map((row,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    return group<30?(rank===0?1:3):(rank===0?1:0);
+  });
+  const policy=selectTcnLstmExecutionRiskPolicy(rows,predictions,logisticLogits,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,
+    maximumDrawdownPct:8,abstentionPercentileGrid:[0.2,0.5,0.8],
+    rankingScoreAdjustmentGrid:[0,1]
+  });
+  assert.equal(policy.status,'SELECTIVE_EXECUTION_POLICY_PASSED_INNER_SELECTION');
+  assert.equal(policy.passed,true);
+  assert.equal(policy.selected_ranking_score_adjustment_weight,1);
+  assert.equal(policy.selected_trial.ranking_score_adjustment_weight,1);
+  assert.ok(policy.selected_trial.model_metrics.trade_count>=20);
+  assert.ok(policy.selected_trial.model_metrics.win_rate_pct>=55);
+  assert.ok(policy.selected_trial.model_metrics.net_pnl_pct>0);
+  assert.ok(policy.selected_trial.model_metrics.max_drawdown_pct<=8);
+  assert.equal(policy.selected_trial.gates.beats_matched_logistic_anchor,true);
+  assert.equal(policy.holdout_values_used,false);
 });
 
 test('selective execution policy stays abstained when every predicted risk-adjusted net-return score is nonpositive',()=>{

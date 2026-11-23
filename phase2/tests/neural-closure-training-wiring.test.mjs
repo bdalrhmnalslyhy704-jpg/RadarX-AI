@@ -352,6 +352,15 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'each pooled channel must also receive the train-only independent raw ranking score');
   assert.match(temporal,/POOLED_ONLY/,
     'the pooled-only head must be retained as a matched ablation control');
+  assert.match(temporal,/rankingScoreAdjustmentGrid:\[0,0\.5,1,2,4\]/,
+    'the contextual execution policy must select its rank-score adjustment on inner data only');
+  assert.match(temporal,/normalized_independent_return_rank_score/,
+    'the independent rank score must remain separate from classifier probabilities');
+  assert.match(temporal,/execution_ranking_score_adjustment_weight/,
+    'the selected rank adjustment must be frozen into inference and output provenance');
+  assert.match(temporal,/rankingScoreAdjustmentGrid:\[0,0\.5,1,2,4\]/);
+  assert.match(temporal,/rankAdjustmentWeight\*normalizedRank/);
+  assert.match(temporal,/execution_ranking_score_adjustment_weight/);
   assert.match(temporal,/execution_head_context_ablation\?\.passed===true/,
     'inner qualification must require a matched execution-head ablation pass');
   assert.match(temporal,/splitTcnLstmTrainingRowsForExecutionHead/,
