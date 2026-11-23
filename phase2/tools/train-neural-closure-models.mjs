@@ -1401,9 +1401,11 @@ async function main(){
           minimumReturnWinRatePct:55,
           rankingScoreWeight:0.01,
           rankingMinimumReturnGapPct:0.50,
-          // Bound the independent training-only return-ranker pair budget.
-          // Classifier Brier gradients stay separate from ranking gradients in this sweep.
-          rankingPairsPerTimestamp:2,
+          // Increase independent rank supervision after the last run exposed only
+          // 144 training comparisons and 260 selection comparisons at a two-pair cap.
+          // The classifier remains pure Brier; ranking scores stay in their own sidecar.
+          // Eight comparisons per timestamp sample half of the available extreme-pair set.
+          rankingPairsPerTimestamp:8,
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
