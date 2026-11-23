@@ -1637,7 +1637,9 @@ export function buildCognitiveLearningProfile(samples = [], {
       model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
       reason:'NO_VALIDATION_QUALIFIED_MODEL_HOLDOUT_REMAINS_CLOSED'
     };
-  const holdoutMetrics=validationWinner?challengerHoldout:fallbackHoldout;
+  const holdoutMetrics=validationWinner
+    ?(challengerHoldoutComparison.passed?challengerHoldout:neuralGlobalLogisticHoldout)
+    :fallbackHoldout;
   const holdoutAccessOpened=validationWinner!==null||fallbackValidationQualified;
   const evidence = factorEvidence(selectedTraining, { minimumBucket });
   const rankingReady = training.length >= minTrainingSamples &&
