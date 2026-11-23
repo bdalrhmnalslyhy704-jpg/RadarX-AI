@@ -507,7 +507,7 @@ export function verifyHurdleV2Artifact(artifact) {
   const fail = reason => ({valid: false, reason});
   try {
     if (!artifact || artifact.artifact_schema !== HURDLE_V2_ARTIFACT_SCHEMA ||
-        artifact.artifact_schema_version !== 1) return fail('ARTIFACT_SCHEMA_INVALID');
+        artifact.artifact_schema_version !== 2) return fail('ARTIFACT_SCHEMA_INVALID');
     if (artifact.code_commit_sha?.length !== 40 ||
         artifact.dataset_sha256?.length !== 64 || artifact.dataset_row_count !== 32300)
       return fail('PROVENANCE_INVALID');
