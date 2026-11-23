@@ -188,7 +188,13 @@ before(async () => {
     splitDefinition: {
       schema: 'RADARX_NEURAL_CLOSURE_PURGED_60_20_20_UTC_DAY_SPLIT_V1',
       purge_ms: 86400000,
-      counts: {train:19269, validation:6282, holdout:6389}
+      counts: {train:19269, validation:6282, holdout:6389},
+      boundaries: {
+        train_last_at: 1767225599000,
+        validation_first_at: 1767312000001,
+        validation_last_at: 1767398399000,
+        holdout_first_at: 1767484800001
+      }
     },
     codeCommitSha: '1f845f944b0f5119a2bb6b08aeeaf1d48178f1ec',
     roundTripCostBps: 30,
@@ -428,4 +434,13 @@ test('31. verifier rejects a different but well-formed source commit after resea
   const result = verifyHurdleV2Artifact(tampered);
   assert.equal(result.valid, false);
   assert.equal(result.reason, 'PROVENANCE_INVALID');
+});
+test('32. verifier rejects a broken UTC purge boundary after resealing', () => {
+  const tampered = structuredClone(artifact);
+  tampered.split_definition.utc_day_boundaries.validation_first_at =
+    tampered.split_definition.utc_day_boundaries.train_last_at + 86400000;
+  const resealed = resealArtifact(tampered);
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'SPLIT_PROVENANCE_INVALID');
 });
