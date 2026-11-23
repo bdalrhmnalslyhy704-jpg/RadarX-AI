@@ -2309,7 +2309,11 @@ export function predictTcnLstmHybridExecutionScore(sequence,profile,{
       risk_penalty_weight:lambda,ranking_score_adjustment_weight:rankWeight,
       risk_adjusted_net_return_score:null};
   return {status:'AVAILABLE',
-    score_semantics:'EXPECTED_NET_RETURN_MINUS_FROZEN_DOWNSIDE_PENALTY_PLUS_FROZEN_INDEPENDENT_RANK_ADJUSTMENT_V1',
+    score_semantics:rankWeight>0
+      ?'EXPECTED_NET_RETURN_MINUS_FROZEN_DOWNSIDE_PENALTY_PLUS_FROZEN_INDEPENDENT_RANK_ADJUSTMENT_V1'
+      :returnEstimator==='HURDLE_EXPECTED_VALUE'
+        ?'HURDLE_EXPECTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK'
+        :'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
     return_estimator:returnEstimator,
     predicted_net_return_pct:Number(predictedNetReturn),
     predicted_pointwise_net_return_pct:Number(prediction.predicted_net_return_pct),
