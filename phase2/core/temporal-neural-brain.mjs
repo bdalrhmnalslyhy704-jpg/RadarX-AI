@@ -1501,7 +1501,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       selection_positive_samples:memberSelectionTargets.positive,
       calibration_positive_samples:calibrationTargets.positive,
       validation_positive_samples:validTargets.positive,
-      holdout_positive_samples:holdTargets.positive,
+      holdout_positive_samples:holdoutTargetsForReport.positive,
       training_cutoff_at:regimeSplit.trainingCutoffAt,
       member_selection_cutoff_at:regimeSplit.memberSelectionCutoffAt,
       calibration_cutoff_at:regimeSplit.calibrationCutoffAt,
@@ -1526,10 +1526,6 @@ export function buildTemporalNeuralProfile(samples = [], {
       feature_importance:temporalTreeFit?.feature_importance||[],
       feature_importance_total_gain:temporalTreeFit?.feature_importance_total_gain??0
     };
-    const holdoutPassed=selectedMemberIndex>=0&&validationPassed&&neuralResidualContributes&&
-      holdoutModel.evaluated&&holdoutLogistic.evaluated&&
-      holdoutModel.beat_base_rate===true&&
-      holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
     regimeResults[regime]={supported:true,prior:regimePrior,
       training_start_at:sharedTrainingRows[0]?.at??null,
       training_cutoff_at:sharedTrainingCutoffAt,
@@ -1555,6 +1551,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       logistic_calibration_samples:logisticProbabilityCalibrator.sample_count,
       validation_samples:regimeValidation.length,holdout_samples:regimeHoldout.length,
       validation_passed:validationPassed,holdout_passed:holdoutPassed,
+      validation_family_winner:holdoutFamilySelected,
+      holdout_family_selected:holdoutFamilySelected==='TCN',
       validation_model:validationModel,validation_logistic:validationLogistic,
       holdout_model:holdoutModel,holdout_logistic:holdoutLogistic,
       member_selection_scores:memberSelectionScores,
