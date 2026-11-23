@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {createHash} from 'node:crypto';
+import {gzipSync} from 'node:zlib';
 import {execFile as execFileCallback} from 'node:child_process';
 import {promisify} from 'node:util';
 import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
@@ -26,6 +27,7 @@ import {TEMPORAL_TARGET_DEFINITION} from '../core/temporal-neural-brain.mjs';
 import {
   auditCognitiveTrainingSamples,
   buildCognitiveTrainingRejectionJsonl,
+  buildCognitiveTrainingTensorJsonl,
   isValidCognitiveTrainingSample
 } from '../core/cognitive-training-sample-audit.mjs';
 import {evaluateExistingEngineBaselines} from '../core/cognitive-benchmark-metrics.mjs';
@@ -46,6 +48,8 @@ const OUTPUT_PATH=resolve(process.env.RADARX_COGNITIVE_BENCHMARK_REPORT||
   'artifacts/cognitive-market-wide-historical-benchmark.json');
 const SAMPLE_PATH=resolve(process.env.RADARX_COGNITIVE_BENCHMARK_SAMPLES||
   'artifacts/cognitive-market-wide-historical-samples.jsonl');
+const TENSOR_PATH=resolve(process.env.RADARX_COGNITIVE_BENCHMARK_TENSORS||
+  'artifacts/cognitive-market-wide-historical-tensors.jsonl.gz');
 const REJECTION_PATH=resolve(process.env.RADARX_COGNITIVE_BENCHMARK_REJECTIONS||
   'artifacts/cognitive-market-wide-historical-rejections.jsonl');
 const delay=ms=>new Promise(resolveDelay=>setTimeout(resolveDelay,ms));
@@ -586,10 +590,14 @@ async function main(){
       archiveCoverageAfterListing>=0.995&&symbolFailures.length===0;
     const samplesJsonl=writeSampleJsonl(samples);
     const rejectionJsonl=buildCognitiveTrainingRejectionJsonl(audit);
+    const tensorJsonl=buildCognitiveTrainingTensorJsonl(samples);
+    const tensorGzip=gzipSync(Buffer.from(tensorJsonl,'utf8'),{level:9,mtime:0});
     await mkdir(resolve(sampleOutput,'..'),{recursive:true});
     await mkdir(resolve(REJECTION_PATH,'..'),{recursive:true});
+    await mkdir(resolve(TENSOR_PATH,'..'),{recursive:true});
     await writeFile(sampleOutput,samplesJsonl,'utf8');
     await writeFile(REJECTION_PATH,rejectionJsonl,'utf8');
+    await writeFile(TENSOR_PATH,tensorGzip);
     console.log('[COGNITIVE_PROFILE_START] '+JSON.stringify({samples:samples.length,symbols:symbolsWithSamples,temporal_sequences:sequenceCount}));
     const profileStartedAt=Date.now();
     const profile=buildCognitiveLearningProfile(samples,{
@@ -743,6 +751,12 @@ async function main(){
     baseReport.dataset={
       sample_file:sampleOutput,
       sample_file_sha256:sha256(samplesJsonl),
+      tensor_file:TENSOR_PATH,
+      tensor_file_sha256:sha256(tensorGzip),
+      tensor_file_bytes:tensorGzip.length,
+      tensor_file_encoding:'GZIP_JSONL_FULL_24X29_SEQUENCE_V1',
+      tensor_rows:sequenceCount,
+      tensor_payload_includes_values:true,
       symbols_with_samples:symbolsWithSamples,
       sample_rows:samples.length,
       sequence_rows:sequenceCount,
@@ -793,6 +807,8 @@ async function main(){
         profitability_verified:false
       },
       output,samples_output:sampleOutput,rejection_audit_output:REJECTION_PATH,
+      tensor_output:TENSOR_PATH,tensor_sha256:sha256(tensorGzip),
+      tensor_bytes:tensorGzip.length,tensor_rows:sequenceCount,
       rejection_audit_rows:audit.rejected_samples.length,elapsed_ms:baseReport.elapsed_ms
     },null,2));
     if(!qualityReady)process.exitCode=1;
