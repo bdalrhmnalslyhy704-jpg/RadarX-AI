@@ -218,7 +218,10 @@ test('nested chronological validation purges labels crossing both validation and
   assert.equal(profile.validation_purged_samples, 16);
   assert.ok(profile.max_training_outcome_resolved_at < profile.validation_start_at);
   assert.ok(profile.validation_start_at < profile.holdout_start_at);
-  assert.equal(profile.holdout.evaluated, true);
+  assert.equal(profile.holdout_access.opened,false,
+    'the final holdout must remain closed when no model passes outer Validation');
+  assert.equal(profile.holdout.evaluated,false);
+  assert.equal(profile.holdout.reason,'NO_VALIDATION_QUALIFIED_MODEL_HOLDOUT_REMAINS_CLOSED');
   assert.equal(profile.method, 'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5');
 });
 
@@ -226,6 +229,8 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
   for (const seed of [0, 3, 7]) {
     const profile = buildCognitiveLearningProfile(behavioralSamples({ seed }));
     assert.equal(profile.ranking_ready, true, 'both present and absent evidence buckets must be covered');
+    assert.equal(profile.holdout_access.opened,true,
+      'only one validation-qualified model may open the final holdout');
     assert.equal(profile.holdout.evaluated, true);
     assert.equal(profile.probability_ready, true,
       'the model must beat the chronological baseline before publishing probabilities');
