@@ -413,3 +413,19 @@ test('29. verifier rejects enabling real orders even after valid hashes are rebu
   assert.equal(result.valid, false);
   assert.equal(result.reason, 'EXECUTION_POLICY_MISMATCH');
 });
+test('30. verifier rejects a different but well-formed dataset SHA after resealing', () => {
+  const tampered = resealArtifact(artifact, {
+    dataset_sha256: 'a'.repeat(64)
+  });
+  const result = verifyHurdleV2Artifact(tampered);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'PROVENANCE_INVALID');
+});
+test('31. verifier rejects a different but well-formed source commit after resealing', () => {
+  const tampered = resealArtifact(artifact, {
+    dataset_source_commit_sha: 'b'.repeat(40)
+  });
+  const result = verifyHurdleV2Artifact(tampered);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'PROVENANCE_INVALID');
+});
