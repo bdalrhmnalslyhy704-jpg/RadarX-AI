@@ -1193,7 +1193,6 @@ export function buildTemporalNeuralProfile(samples = [], {
     const trainTargets=targetsOf(regimeTraining);
     const selectTargets=targetsOf(regimeMemberSelection);
     const validTargets=targetsOf(regimeValidation);
-    const holdTargets=targetsOf(regimeHoldout);
     const localSelectionTargets=selectTargets;
     const localSelectionSupported=localSelectionTargets.samples>=minSelectionSamples&&
       localSelectionTargets.positive>=minSelectionPositive&&
@@ -1217,7 +1216,9 @@ export function buildTemporalNeuralProfile(samples = [], {
     trainingTargets[regime]=targetsOf(sharedRegimeTraining);
     selectionTargets[regime]=localSelectionTargets;
     validationTargets[regime]=validTargets;
-    holdoutTargets[regime]=holdTargets;
+    holdoutTargets[regime]={
+      samples:regimeHoldout.length,positive:null,negative:null,evaluated:false
+    };
 
     // Resolve the training-only regime baseline before evaluating specialist support.
     // Keeping this above the support checks avoids a temporal-dead-zone ReferenceError.
@@ -1229,7 +1230,6 @@ export function buildTemporalNeuralProfile(samples = [], {
     if(!memberSelectionSupported)supportGaps.push('SHARED_TCN_SELECTION_BLOCK_UNSUPPORTED');
     if(!sharedTcnCalibrationSupported)supportGaps.push('SHARED_TCN_CALIBRATION_BLOCK_UNSUPPORTED');
     if(regimeValidation.length<minRegimeValidation)supportGaps.push('VALIDATION_SAMPLE_COUNT');
-    if(regimeHoldout.length<minRegimeHoldout)supportGaps.push('HOLDOUT_SAMPLE_COUNT');
     if(sharedTrainingTargets.negative<minRegimeNegative)supportGaps.push('SHARED_TRAINING_NEGATIVE_CLASS');
     if(sharedTrainingTargets.positive<minRegimeTrainingPositive)supportGaps.push('SHARED_TRAINING_POSITIVE_CLASS');
     if(calibrationTargets.samples<30)supportGaps.push('SHARED_CALIBRATION_SAMPLE_COUNT');
@@ -1237,8 +1237,6 @@ export function buildTemporalNeuralProfile(samples = [], {
     if(calibrationTargets.negative<20)supportGaps.push('SHARED_CALIBRATION_NEGATIVE_CLASS');
     if(validTargets.positive<minRegimePositive)supportGaps.push('VALIDATION_POSITIVE_CLASS');
     if(validTargets.negative<minRegimeNegative)supportGaps.push('VALIDATION_NEGATIVE_CLASS');
-    if(holdTargets.positive<minRegimePositive)supportGaps.push('HOLDOUT_POSITIVE_CLASS');
-    if(holdTargets.negative<minRegimeNegative)supportGaps.push('HOLDOUT_NEGATIVE_CLASS');
     const supported=supportGaps.length===0;
     if(!supported){
       temporalBoostedTreeResults[regime]={
@@ -1247,7 +1245,8 @@ export function buildTemporalNeuralProfile(samples = [], {
         selection_samples:memberSelectionRows.length,calibration_samples:calibrationRows.length,
         validation_samples:regimeValidation.length,holdout_samples:regimeHoldout.length,
         validation:{evaluated:false,sample_count:regimeValidation.length},
-        holdout:{evaluated:false,sample_count:regimeHoldout.length}
+        holdout:{evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
+          reason:'REGIME_NOT_SUPPORTED_BEFORE_VALIDATION_HOLDOUT_REMAINS_CLOSED'}
       };
       regimeResults[regime]={supported:false,support_gaps:supportGaps,
         training_start_at:sharedTrainingRows[0]?.at??null,
@@ -1268,12 +1267,15 @@ export function buildTemporalNeuralProfile(samples = [], {
         regime_training_samples:sharedRegimeTraining.length,
         training_targets:targetsOf(sharedRegimeTraining),selection_targets:selectTargets,
         member_selection_targets:memberSelectionTargets,
-        validation_targets:validTargets,holdout_targets:holdTargets,
+        validation_targets:validTargets,
+        holdout_targets:{samples:regimeHoldout.length,positive:null,negative:null,evaluated:false},
         validation_passed:false,holdout_passed:false,
         validation_model:{evaluated:false,sample_count:regimeValidation.length},
         validation_logistic:{evaluated:false,sample_count:regimeValidation.length},
-        holdout_model:{evaluated:false,sample_count:regimeHoldout.length},
-        holdout_logistic:{evaluated:false,sample_count:regimeHoldout.length},
+        holdout_model:{evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
+          reason:'REGIME_NOT_SUPPORTED_BEFORE_VALIDATION_HOLDOUT_REMAINS_CLOSED'},
+        holdout_logistic:{evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
+          reason:'REGIME_NOT_SUPPORTED_BEFORE_VALIDATION_HOLDOUT_REMAINS_CLOSED'},
         member_selection_samples:memberSelectionRows.length,
         shared_member_selection_samples:memberSelectionRows.length,
         member_selection_source:memberSelectionSource,
@@ -1386,23 +1388,18 @@ export function buildTemporalNeuralProfile(samples = [], {
       validationModel.evaluated&&validationLogistic.evaluated&&
       validationModel.beat_base_rate===true&&
       validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
-    // The final holdout is opened for a regime only after its own
-    // chronological validation gate passes. Diagnostic members and regimes
-    // that fail Validation must not consume final-block labels.
-    const holdoutModel=validationPassed
-      ?(selectedMemberIndex>=0
-        ?evaluate(regimeHoldout,sequence=>predict(sequence,fitted),regimePrior)
-        :{evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
-          model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
-          reason:'REGIME_TCN_MEMBER_NOT_SELECTED_HOLDOUT_REMAINS_CLOSED'})
-      :{evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
-        model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
-        reason:'REGIME_TCN_DID_NOT_PASS_CHRONOLOGICAL_VALIDATION'};
-    const holdoutLogistic=validationPassed
-      ?evaluate(regimeHoldout,predictCalibratedLogistic,regimeBaseline.base_rate)
-      :{evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
-        model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
-        reason:'REGIME_TCN_DID_NOT_PASS_CHRONOLOGICAL_VALIDATION'};
+    // Do not score the TCN on final Holdout until it wins the single
+    // per-regime Validation-family selection against the temporal tree.
+    let holdoutModel={
+      evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
+      model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+      reason:'NO_TCN_VALIDATION_FAMILY_WINNER_HOLDOUT_REMAINS_CLOSED'
+    };
+    let holdoutLogistic={
+      evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
+      model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+      reason:'NO_TCN_VALIDATION_FAMILY_WINNER_HOLDOUT_REMAINS_CLOSED'
+    };
     const predictCalibratedTemporalTree=sequence=>calibratedProbability(
       temporalTreeFit&&temporalTreeWinner
         ?predictTemporalResidualTrees(sequence,temporalTreeFit,
@@ -1431,20 +1428,58 @@ export function buildTemporalNeuralProfile(samples = [], {
       temporalTreeValidation.beat_base_rate===true&&
       temporalTreeValidation.model_brier_score+comparisonMargin<
         temporalTreeValidationLogistic.model_brier_score;
-    // Score the tree's logistic reference on the final block only when the
-    // tree itself has already cleared every earlier validation requirement.
-    if(temporalTreeValidationPassed){
-      temporalTreeHoldoutLogistic=evaluate(regimeHoldout,
-        predictCalibratedTreeLogistic,regimePrior);
+    // Select exactly one family per BTC regime using outer Validation only.
+    // A candidate that loses this comparison never reads final Holdout labels.
+    const validationFamilyCandidates=[
+      ...(validationPassed?[{
+        family:'TCN',validation:validationModel,logistic:validationLogistic
+      }]:[]),
+      ...(temporalTreeValidationPassed?[{
+        family:'TEMPORAL_GBDT',validation:temporalTreeValidation,
+        logistic:temporalTreeValidationLogistic
+      }]:[])
+    ].sort((a,b)=>a.validation.model_brier_score-b.validation.model_brier_score||
+      a.family.localeCompare(b.family));
+    const validationFamilyWinner=validationFamilyCandidates[0]||null;
+    const holdoutFamilySelected=validationFamilyWinner?.family||null;
+    let temporalTreeHoldout={
+      evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
+      model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+      reason:holdoutFamilySelected
+        ?'TEMPORAL_TREE_NOT_SELECTED_BY_VALIDATION_HOLDOUT_REMAINS_CLOSED'
+        :'NO_VALIDATION_FAMILY_WINNER_HOLDOUT_REMAINS_CLOSED'
+    };
+    let temporalTreeHoldoutLogistic={
+      evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
+      model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+      reason:holdoutFamilySelected
+        ?'TEMPORAL_TREE_NOT_SELECTED_BY_VALIDATION_HOLDOUT_REMAINS_CLOSED'
+        :'NO_VALIDATION_FAMILY_WINNER_HOLDOUT_REMAINS_CLOSED'
+    };
+    let holdoutTargetsForReport={
+      samples:regimeHoldout.length,positive:null,negative:null,evaluated:false
+    };
+    if(holdoutFamilySelected){
+      // This is the first point where Holdout labels are inspected, after one
+      // frozen family has won the same per-regime outer Validation block.
+      const holdTargets=targetsOf(regimeHoldout);
+      holdoutTargetsForReport={...holdTargets,evaluated:true,selected_family:holdoutFamilySelected};
+      holdoutTargets[regime]=holdoutTargetsForReport;
+      if(holdoutFamilySelected==='TCN'&&selectedMemberIndex>=0){
+        holdoutModel=evaluate(regimeHoldout,sequence=>predict(sequence,fitted),regimePrior);
+        holdoutLogistic=evaluate(regimeHoldout,predictCalibratedLogistic,regimeBaseline.base_rate);
+      }else if(holdoutFamilySelected==='TEMPORAL_GBDT'){
+        temporalTreeHoldout=evaluate(regimeHoldout,predictCalibratedTemporalTree,regimePrior);
+        temporalTreeHoldoutLogistic=evaluate(regimeHoldout,predictCalibratedTreeLogistic,regimePrior);
+      }
+    }else{
+      holdoutTargets[regime]=holdoutTargetsForReport;
     }
-    // Do not even score the untouched holdout for a tree that failed the
-    // earlier validation gate. This keeps the final block out of model review.
-    const temporalTreeHoldout=temporalTreeValidationPassed
-      ?evaluate(regimeHoldout,predictCalibratedTemporalTree,regimePrior)
-      :{evaluated:false,sample_count:0,available_sample_count:regimeHoldout.length,
-        model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
-        reason:'TEMPORAL_TREE_DID_NOT_PASS_CHRONOLOGICAL_VALIDATION'};
-    const temporalTreeHoldoutPassed=temporalTreeValidationPassed&&
+    const holdoutPassed=holdoutFamilySelected==='TCN'&&
+      holdoutModel.evaluated===true&&holdoutLogistic.evaluated===true&&
+      holdoutModel.beat_base_rate===true&&
+      holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
+    const temporalTreeHoldoutPassed=holdoutFamilySelected==='TEMPORAL_GBDT'&&
       temporalTreeHoldout.evaluated===true&&temporalTreeHoldoutLogistic.evaluated===true&&
       temporalTreeHoldout.beat_base_rate===true&&
       temporalTreeHoldout.model_brier_score+comparisonMargin<
@@ -1483,6 +1518,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       validation:temporalTreeValidation,
       validation_logistic:temporalTreeValidationLogistic,
       validation_passed:temporalTreeValidationPassed,
+      validation_family_winner:holdoutFamilySelected,
+      holdout_family_selected:holdoutFamilySelected==='TEMPORAL_GBDT',
       holdout:temporalTreeHoldout,
       holdout_logistic:temporalTreeHoldoutLogistic,
       holdout_passed:temporalTreeHoldoutPassed,
@@ -1530,24 +1567,26 @@ export function buildTemporalNeuralProfile(samples = [], {
     temporalBoostedTreeResults[regime]?.supported===true);
   const temporalTreeValidationRegimes=regimes.filter(regime=>
     temporalBoostedTreeResults[regime]?.validation_passed===true);
+  const temporalTreeHoldoutRegimes=regimes.filter(regime=>
+    temporalBoostedTreeResults[regime]?.holdout_family_selected===true);
   const temporalTreeSelectedRegimes=regimes.filter(regime=>
     temporalBoostedTreeResults[regime]?.holdout_passed===true);
   const temporalTreeValidation=aggregateEvaluations(temporalTreeSupportedRegimes.map(regime=>
     temporalBoostedTreeResults[regime]?.validation));
-  const temporalTreeHoldout=temporalTreeValidationRegimes.length
-    ?aggregateEvaluations(temporalTreeValidationRegimes.map(regime=>
+  const temporalTreeHoldout=temporalTreeHoldoutRegimes.length
+    ?aggregateEvaluations(temporalTreeHoldoutRegimes.map(regime=>
       temporalBoostedTreeResults[regime]?.holdout))
     :{evaluated:false,sample_count:0,available_sample_count:holdout.length,
       model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
-      reason:'NO_VALIDATION_SELECTED_TEMPORAL_TREE_HOLDOUT_REMAINS_CLOSED'};
+      reason:'NO_TEMPORAL_GBDT_VALIDATION_FAMILY_WINNER_HOLDOUT_REMAINS_CLOSED'};
   const temporalTreeValidationLogistic=aggregateEvaluations(temporalTreeSupportedRegimes.map(regime=>
     temporalBoostedTreeResults[regime]?.validation_logistic));
-  const temporalTreeHoldoutLogistic=temporalTreeValidationRegimes.length
-    ?aggregateEvaluations(temporalTreeValidationRegimes.map(regime=>
+  const temporalTreeHoldoutLogistic=temporalTreeHoldoutRegimes.length
+    ?aggregateEvaluations(temporalTreeHoldoutRegimes.map(regime=>
       temporalBoostedTreeResults[regime]?.holdout_logistic))
     :{evaluated:false,sample_count:0,available_sample_count:holdout.length,
       model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
-      reason:'NO_VALIDATION_SELECTED_TEMPORAL_TREE_HOLDOUT_REMAINS_CLOSED'};
+      reason:'NO_TEMPORAL_GBDT_VALIDATION_FAMILY_WINNER_HOLDOUT_REMAINS_CLOSED'};
   const temporalTreeHoldoutCount=temporalTreeSelectedRegimes.reduce((sum,regime)=>
     sum+Number(temporalBoostedTreeResults[regime]?.holdout?.sample_count||0),0);
   const temporalTreeAllSupportedValidated=temporalTreeSupportedRegimes.length>0&&
@@ -1647,13 +1686,15 @@ export function buildTemporalNeuralProfile(samples = [], {
     :evaluate(validation,sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
   // Aggregate only regimes that passed their own outer Validation gate.
   // If no regime qualified, do not score the final holdout at all.
-  const holdoutModel=validationSelectedRegimes.length
-    ?aggregateEvaluations(validationSelectedRegimes.map(regime=>regimeResults[regime]?.holdout_model))
+  const tcnHoldoutRegimes=regimes.filter(regime=>
+    regimeResults[regime]?.holdout_family_selected===true);
+  const holdoutModel=tcnHoldoutRegimes.length
+    ?aggregateEvaluations(tcnHoldoutRegimes.map(regime=>regimeResults[regime]?.holdout_model))
     :{evaluated:false,sample_count:0,available_sample_count:holdout.length,
       model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
       reason:'NO_VALIDATION_SELECTED_REGIME_HOLDOUT_REMAINS_CLOSED'};
-  const holdoutLogistic=validationSelectedRegimes.length
-    ?aggregateEvaluations(validationSelectedRegimes.map(regime=>regimeResults[regime]?.holdout_logistic))
+  const holdoutLogistic=tcnHoldoutRegimes.length
+    ?aggregateEvaluations(tcnHoldoutRegimes.map(regime=>regimeResults[regime]?.holdout_logistic))
     :{evaluated:false,sample_count:0,available_sample_count:holdout.length,
       model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
       reason:'NO_VALIDATION_SELECTED_REGIME_HOLDOUT_REMAINS_CLOSED'};
@@ -1894,8 +1935,14 @@ export function buildTemporalNeuralProfile(samples = [], {
       opened:validationSelectedRegimes.length>0||temporalTreeValidationRegimes.length>0,
       tcn_validation_selected_regimes:validationSelectedRegimes,
       temporal_tree_validation_selected_regimes:temporalTreeValidationRegimes,
-      reason:validationSelectedRegimes.length>0||temporalTreeValidationRegimes.length>0
-        ?'ONLY_VALIDATION_SELECTED_TEMPORAL_FAMILY_SLICES_SCORED_ON_FINAL_HOLDOUT'
+      selected_validation_families:Object.fromEntries(regimes.map(regime=>[
+        regime,regimeResults[regime]?.validation_family_winner||
+          temporalBoostedTreeResults[regime]?.validation_family_winner||null
+      ])),
+      tcn_holdout_scored_regimes:tcnHoldoutRegimes,
+      temporal_tree_holdout_scored_regimes:temporalTreeHoldoutRegimes,
+      reason:tcnHoldoutRegimes.length||temporalTreeHoldoutRegimes.length
+        ?'ONE_VALIDATION_SELECTED_FAMILY_PER_REGIME_SCORED_ON_FINAL_HOLDOUT'
         :'NO_TEMPORAL_FAMILY_PASSED_VALIDATION_HOLDOUT_REMAINS_CLOSED'
     },
     holdout:{
