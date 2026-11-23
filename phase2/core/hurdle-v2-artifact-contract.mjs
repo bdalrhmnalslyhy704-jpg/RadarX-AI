@@ -19,6 +19,12 @@ export const HURDLE_V2_CALIBRATION_ID =
   'RADARX_HURDLE_V2_PURGED_EXECUTION_HEAD_PLATT_CALIBRATION_V1';
 
 const HURDLE_V2_FIXED_DATASET_ROWS = 32300;
+const HURDLE_V2_FIXED_DATASET_SHA256 =
+  'f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77';
+const HURDLE_V2_FIXED_INPUT_SHA256 =
+  'f16adcbb88fb64e4d79626c1cf0e4c8d461bd33a3c0f598223ac809c28b0ff3d';
+const HURDLE_V2_FIXED_SOURCE_COMMIT =
+  '039c9074fc21fa0ea303e360a6ea56d3a401a559';
 const HURDLE_V2_FIXED_SPLIT = Object.freeze({
   schema: 'RADARX_NEURAL_CLOSURE_PURGED_60_20_20_UTC_DAY_SPLIT_V1',
   purge_ms: 86400000,
@@ -240,9 +246,9 @@ export function createHurdleV2Artifact({
   selectionObjectiveId = null
 } = {}) {
   if (!fit?.model || !selection || !/^[a-f0-9]{40}$/i.test(String(codeCommitSha || '')) ||
-      !/^[a-f0-9]{64}$/i.test(String(datasetSha256 || '')) ||
-      !/^[a-f0-9]{64}$/i.test(String(inputFileSha256 || '')) ||
-      !/^[a-f0-9]{40}$/i.test(String(datasetSourceCommitSha || '')) ||
+      String(datasetSha256).toLowerCase() !== HURDLE_V2_FIXED_DATASET_SHA256 ||
+      String(inputFileSha256).toLowerCase() !== HURDLE_V2_FIXED_INPUT_SHA256 ||
+      String(datasetSourceCommitSha).toLowerCase() !== HURDLE_V2_FIXED_SOURCE_COMMIT ||
       !Number.isInteger(datasetRowCount) || datasetRowCount < 1 ||
       !Number.isInteger(randomSeed) || randomSeed < 0 ||
       roundTripCostBps !== 30 ||
@@ -547,9 +553,9 @@ export function verifyHurdleV2Artifact(artifact) {
     if (!artifact || artifact.artifact_schema !== HURDLE_V2_ARTIFACT_SCHEMA ||
         artifact.artifact_schema_version !== 2) return fail('ARTIFACT_SCHEMA_INVALID');
     if (!/^[a-f0-9]{40}$/i.test(String(artifact.code_commit_sha || '')) ||
-        !/^[a-f0-9]{64}$/i.test(String(artifact.dataset_sha256 || '')) ||
-        !/^[a-f0-9]{64}$/i.test(String(artifact.input_file_sha256 || '')) ||
-        !/^[a-f0-9]{40}$/i.test(String(artifact.dataset_source_commit_sha || '')) ||
+        artifact.dataset_sha256 !== HURDLE_V2_FIXED_DATASET_SHA256 ||
+        artifact.input_file_sha256 !== HURDLE_V2_FIXED_INPUT_SHA256 ||
+        artifact.dataset_source_commit_sha !== HURDLE_V2_FIXED_SOURCE_COMMIT ||
         artifact.dataset_row_count !== HURDLE_V2_FIXED_DATASET_ROWS)
       return fail('PROVENANCE_INVALID');
     if (!artifact.contextual_head_present || !artifact.pooled_head_present)
