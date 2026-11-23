@@ -48,7 +48,12 @@ jobs:
             'auditCognitiveTrainingSamples(sampleRows)',
             'rejection_reason_counts:audit.rejection_reason_counts',
             "await writeFile(REJECTION_PATH,rejectionJsonl,'utf8')",
-            'rejected_samples_by_symbol:audit.rejected_samples_by_symbol'
+            'rejected_samples_by_symbol:audit.rejected_samples_by_symbol',
+            'buildCognitiveTrainingTensorJsonl(samples)',
+            "await writeFile(TENSOR_PATH,tensorGzip)",
+            'tensor_file_sha256:sha256(tensorGzip)',
+            'tensor_payload_includes_values:true',
+            'GZIP_JSONL_FULL_24X29_SEQUENCE_V1'
           ];
           for(const token of required){
             if(!source.includes(token))throw new Error('missing rejection audit wiring: '+token);
