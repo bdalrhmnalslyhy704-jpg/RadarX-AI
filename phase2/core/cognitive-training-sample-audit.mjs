@@ -10,7 +10,6 @@ export function cognitiveTrainingSampleRejectionReasons(row){
   if(!row||typeof row!=='object'||Array.isArray(row)){
     return ['SAMPLE_NOT_OBJECT'];
   }
-  if(!String(row.id||'').trim())reasons.push('SAMPLE_ID_MISSING');
   if(row.training_eligible!==true)reasons.push('TRAINING_NOT_ELIGIBLE');
   if(row.historical_baseline!==true)reasons.push('HISTORICAL_BASELINE_NOT_CONFIRMED');
   if(row.target_definition!==TEMPORAL_TARGET_DEFINITION)reasons.push('TARGET_DEFINITION_MISMATCH');
@@ -25,14 +24,10 @@ export function cognitiveTrainingSampleRejectionReasons(row){
     if(row.first_passage.outcome!==row.outcome)
       reasons.push('FIRST_PASSAGE_OUTCOME_MISMATCH');
   }
-  const at=row.at===null||row.at===undefined||row.at===''?NaN:Number(row.at);
-  const resolvedAt=row.resolved_at===null||row.resolved_at===undefined||row.resolved_at===''?
-    NaN:Number(row.resolved_at);
-  if(!Number.isFinite(at)||!Number.isFinite(resolvedAt)){
-    reasons.push('SAMPLE_TIMESTAMPS_INVALID');
-  }else if(resolvedAt-at!==COGNITIVE_TRAINING_HORIZON_MS){
+  // Preserve the original benchmark's exact Number(...) coercion semantics.
+  const at=Number(row.at),resolvedAt=Number(row.resolved_at);
+  if(resolvedAt-at!==COGNITIVE_TRAINING_HORIZON_MS)
     reasons.push('SAMPLE_RESOLVED_HORIZON_NOT_EXACTLY_4H');
-  }
   if(Number(row.horizon_ms)!==COGNITIVE_TRAINING_HORIZON_MS)
     reasons.push('DECLARED_HORIZON_NOT_EXACTLY_4H');
 
@@ -42,15 +37,14 @@ export function cognitiveTrainingSampleRejectionReasons(row){
   }else{
     if(sequence.length!==COGNITIVE_TRAINING_SEQUENCE_STEPS)
       reasons.push('TEMPORAL_SEQUENCE_STEP_COUNT_NOT_24');
-    let invalidStepShape=false,invalidChannels=false,nonFinite=false;
-    for(const step of sequence){
-      if(!Array.isArray(step)){invalidStepShape=true;continue;}
-      if(step.length!==COGNITIVE_TRAINING_SEQUENCE_CHANNELS)invalidChannels=true;
-      if(step.some(value=>!Number.isFinite(value)))nonFinite=true;
-    }
-    if(invalidStepShape)reasons.push('TEMPORAL_SEQUENCE_STEP_NOT_ARRAY');
-    if(invalidChannels)reasons.push('TEMPORAL_SEQUENCE_CHANNEL_COUNT_NOT_29');
-    if(nonFinite)reasons.push('TEMPORAL_SEQUENCE_CONTAINS_NON_FINITE_VALUE');
+    // Match the original every(...) predicate exactly, including JavaScript's
+    // sparse-array semantics, so the diagnostic pass cannot change admission.
+    if(!sequence.every(step=>Array.isArray(step)))
+      reasons.push('TEMPORAL_SEQUENCE_STEP_NOT_ARRAY');
+    if(!sequence.every(step=>Array.isArray(step)&&step.length===COGNITIVE_TRAINING_SEQUENCE_CHANNELS))
+      reasons.push('TEMPORAL_SEQUENCE_CHANNEL_COUNT_NOT_29');
+    if(!sequence.every(step=>Array.isArray(step)&&step.every(Number.isFinite)))
+      reasons.push('TEMPORAL_SEQUENCE_CONTAINS_NON_FINITE_VALUE');
   }
   return reasons;
 }
@@ -100,18 +94,25 @@ export function auditCognitiveTrainingSamples(rows){
   };
   for(const row of input){
     const id=String(row?.id||'').trim();
-    if(id&&ids.has(id)){
+    if(!id){
+      duplicates++;
+      missingIds++;
+      const reasons=['SAMPLE_ID_MISSING'];
+      rejectedSamples.push(rejectionSummary(row,reasons));
+      addReasons(row?.symbol,reasons);
+      continue;
+    }
+    if(ids.has(id)){
       duplicates++;
       const reasons=['DUPLICATE_SAMPLE_ID'];
       rejectedSamples.push(rejectionSummary(row,reasons));
       addReasons(row?.symbol,reasons);
       continue;
     }
-    if(id)ids.add(id);
+    ids.add(id);
     const reasons=cognitiveTrainingSampleRejectionReasons(row);
     if(reasons.length){
       invalid++;
-      if(!id)missingIds++;
       rejectedSamples.push(rejectionSummary(row,reasons));
       addReasons(row?.symbol,reasons);
       continue;
@@ -162,7 +163,13 @@ export function buildCognitiveTrainingRejectionJsonl(audit){
 }
 
 export function buildCognitiveTrainingTensorJsonl(rows){
-  const valid=(Array.isArray(rows)?rows:[]).filter(isValidCognitiveTrainingSample);
+  const seen=new Set();
+  const valid=(Array.isArray(rows)?rows:[]).filter(row=>{
+    const id=String(row?.id||'').trim();
+    if(!id||seen.has(id))return false;
+    seen.add(id);
+    return isValidCognitiveTrainingSample(row);
+  });
   return valid.map(row=>{
     const sequenceJson=JSON.stringify(row.temporal_sequence);
     return JSON.stringify({
