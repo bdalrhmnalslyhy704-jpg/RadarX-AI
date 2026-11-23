@@ -579,6 +579,18 @@ export function verifyHurdleV2Artifact(artifact) {
         artifact.pooled_head_parameters?.weights?.length !== 8)
       return fail('FEATURE_SHAPE_MISMATCH');
     const splitCounts = artifact.split_definition?.counts;
+    let splitChronologyValid = false;
+    try {
+      validateFixedSplit({
+        schema: artifact.split_definition?.schema,
+        purge_ms: artifact.split_definition?.purge_ms,
+        counts: splitCounts,
+        boundaries: artifact.split_definition?.utc_day_boundaries
+      }, artifact.dataset_row_count);
+      splitChronologyValid = true;
+    } catch {
+      splitChronologyValid = false;
+    }
     if (artifact.split_id !== HURDLE_V2_FIXED_SPLIT.schema ||
         artifact.split_definition?.schema !== HURDLE_V2_FIXED_SPLIT.schema ||
         artifact.split_definition?.purge_ms !== HURDLE_V2_FIXED_SPLIT.purge_ms ||
@@ -587,12 +599,7 @@ export function verifyHurdleV2Artifact(artifact) {
         splitCounts?.holdout !== HURDLE_V2_FIXED_SPLIT.counts.holdout ||
         splitCounts?.purged !== HURDLE_V2_FIXED_SPLIT.counts.purged ||
         splitCounts?.total !== HURDLE_V2_FIXED_SPLIT.counts.total ||
-        !validateFixedSplit({
-          schema: artifact.split_definition?.schema,
-          purge_ms: artifact.split_definition?.purge_ms,
-          counts: splitCounts,
-          boundaries: artifact.split_definition?.utc_day_boundaries
-        }, artifact.dataset_row_count) ||
+        !splitChronologyValid ||
         artifact.split_definition?.training_rows !== splitCounts?.train ||
         artifact.split_definition?.outer_validation_rows !== splitCounts?.validation ||
         artifact.split_definition?.untouched_holdout_rows !== splitCounts?.holdout ||
