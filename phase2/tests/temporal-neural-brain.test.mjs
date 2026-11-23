@@ -224,7 +224,36 @@ test('temporal network trains only on valid tensors and keeps chronological vali
     assert.ok(specialist.calibration_cutoff_at<=specialist.validation_start_at);
   }
   assert.ok(profile.validation.positive_rate_pct>=0&&profile.validation.positive_rate_pct<=100);
-  assert.ok(profile.holdout.positive_rate_pct>=0&&profile.holdout.positive_rate_pct<=100);
+  assert.equal(profile.holdout_access.opened,
+    profile.holdout_access.tcn_validation_selected_regimes.length>0||
+    profile.holdout_access.temporal_tree_validation_selected_regimes.length>0);
+  if(profile.holdout_access.opened){
+    assert.ok(profile.holdout.positive_rate_pct>=0&&profile.holdout.positive_rate_pct<=100);
+    assert.ok(profile.holdout.sample_count>=40);
+  }else{
+    assert.equal(profile.holdout.evaluated,false);
+    assert.equal(profile.holdout.sample_count,0);
+    assert.equal(profile.holdout_comparison.sample_count,0);
+    assert.equal(profile.holdout_access.reason,
+      'NO_TEMPORAL_FAMILY_PASSED_VALIDATION_HOLDOUT_REMAINS_CLOSED');
+  }
+  for(const regime of profile.supported_regimes){
+    const specialist=profile.regime_specialists[regime];
+    if(!specialist.validation_passed){
+      assert.equal(specialist.holdout.evaluated,false,
+        'a regime that failed Validation must not be evaluated on final Holdout');
+      assert.equal(specialist.holdout.sample_count,0);
+      assert.equal(specialist.holdout_logistic.evaluated,false);
+    }
+  }
+  for(const specialist of Object.values(profile.temporal_boosted_tree.regime_specialists)){
+    if(specialist.supported&&!specialist.validation_passed){
+      assert.equal(specialist.holdout.evaluated,false,
+        'a temporal tree that failed Validation must not consume final Holdout');
+      assert.equal(specialist.holdout.sample_count,0);
+      assert.equal(specialist.holdout_logistic.evaluated,false);
+    }
+  }
   assert.ok(profile.max_training_outcome_resolved_at<profile.validation_start_at);
   assert.ok(profile.validation_start_at<profile.holdout_start_at);
   assert.equal(profile.holdout_comparison.sample_count,profile.holdout.sample_count,
@@ -261,6 +290,7 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   assert.equal(profile.trained,true);
   assert.equal(profile.regime_split_method,'SHARED_GLOBAL_TIME_SPLIT_WITH_REGIME_LOCAL_AUXILIARY_TREE_SPLITS_V1');
   assert.equal(profile.validation.evaluated,true);
+  assert.equal(profile.holdout_access.opened,true);
   assert.equal(profile.holdout.evaluated,true);
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON']);
   const expert=profile.regime_specialists.BTC_RISK_ON;
