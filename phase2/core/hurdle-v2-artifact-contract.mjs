@@ -74,7 +74,18 @@ function validateFixedSplit(splitDefinition, datasetRowCount) {
   const scored = Number(counts?.train) + Number(counts?.validation) +
     Number(counts?.holdout);
   const purged = Number(datasetRowCount) - scored;
-  if (datasetRowCount !== HURDLE_V2_FIXED_DATASET_ROWS ||
+  const boundaries = splitDefinition?.boundaries;
+  const chronologyValid = boundaries &&
+    finite(boundaries.train_last_at) &&
+    finite(boundaries.validation_first_at) &&
+    finite(boundaries.validation_last_at) &&
+    finite(boundaries.holdout_first_at) &&
+    boundaries.validation_first_at - boundaries.train_last_at >
+      HURDLE_V2_FIXED_SPLIT.purge_ms &&
+    boundaries.holdout_first_at - boundaries.validation_last_at >
+      HURDLE_V2_FIXED_SPLIT.purge_ms;
+  if (!chronologyValid ||
+      datasetRowCount !== HURDLE_V2_FIXED_DATASET_ROWS ||
       splitDefinition?.schema !== HURDLE_V2_FIXED_SPLIT.schema ||
       splitDefinition?.purge_ms !== HURDLE_V2_FIXED_SPLIT.purge_ms ||
       counts?.train !== HURDLE_V2_FIXED_SPLIT.counts.train ||
@@ -576,6 +587,12 @@ export function verifyHurdleV2Artifact(artifact) {
         splitCounts?.holdout !== HURDLE_V2_FIXED_SPLIT.counts.holdout ||
         splitCounts?.purged !== HURDLE_V2_FIXED_SPLIT.counts.purged ||
         splitCounts?.total !== HURDLE_V2_FIXED_SPLIT.counts.total ||
+        !validateFixedSplit({
+          schema: artifact.split_definition?.schema,
+          purge_ms: artifact.split_definition?.purge_ms,
+          counts: splitCounts,
+          boundaries: artifact.split_definition?.utc_day_boundaries
+        }, artifact.dataset_row_count) ||
         artifact.split_definition?.training_rows !== splitCounts?.train ||
         artifact.split_definition?.outer_validation_rows !== splitCounts?.validation ||
         artifact.split_definition?.untouched_holdout_rows !== splitCounts?.holdout ||
