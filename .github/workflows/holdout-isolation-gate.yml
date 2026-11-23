@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: radarx-holdout-isolation-\${{ github.ref }}
+  group: radarx-holdout-isolation-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
