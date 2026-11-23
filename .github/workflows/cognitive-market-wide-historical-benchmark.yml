@@ -49,6 +49,7 @@ jobs:
       RADARX_COGNITIVE_BENCHMARK_REPORT: artifacts/cognitive-market-wide-historical-benchmark.json
       RADARX_COGNITIVE_BENCHMARK_SAMPLES: artifacts/cognitive-market-wide-historical-samples.jsonl
       RADARX_COGNITIVE_BENCHMARK_REJECTIONS: artifacts/cognitive-market-wide-historical-rejections.jsonl
+      RADARX_COGNITIVE_BENCHMARK_TENSORS: artifacts/cognitive-market-wide-historical-tensors.jsonl.gz
     steps:
       - name: Checkout isolated Build 224 research branch
         uses: actions/checkout@v4
