@@ -444,3 +444,24 @@ test('32. verifier rejects a broken UTC purge boundary after resealing', () => {
   assert.equal(result.valid, false);
   assert.equal(result.reason, 'SPLIT_PROVENANCE_INVALID');
 });
+test('33. verifier rejects a forged inner-qualified status when all recorded gates failed', () => {
+  const tampered = structuredClone(artifact);
+  tampered.inner_qualification.passed = true;
+  tampered.inner_qualification.status = 'INNER_QUALIFIED_FOR_OUTER_REPLAY';
+  tampered.inner_qualification.selection_status = 'INNER_SELECTION_QUALIFIED_RESEARCH_ONLY';
+  tampered.evaluation_status = 'INNER_QUALIFIED_FOR_OUTER_REPLAY';
+  tampered.scientific_qualification_status = 'INNER_QUALIFIED_FOR_OUTER_REPLAY';
+  tampered.execution_qualification_status = 'INNER_QUALIFIED_FOR_OUTER_REPLAY';
+  const resealed = resealArtifact(tampered);
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_GATE_EVIDENCE_INCOMPLETE');
+});
+test('34. verifier rejects scientific qualification status drift from the qualification record', () => {
+  const resealed = resealArtifact(artifact, {
+    scientific_qualification_status: 'INNER_QUALIFIED_FOR_OUTER_REPLAY'
+  });
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_STATUS_INCONSISTENT');
+});
