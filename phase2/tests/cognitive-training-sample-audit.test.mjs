@@ -36,6 +36,8 @@ test('a complete first-passage sample with a finite 24x29 tensor is accepted',()
   const row=validSample();
   assert.deepEqual(cognitiveTrainingSampleRejectionReasons(row),[]);
   assert.equal(isValidCognitiveTrainingSample(row),true);
+  assert.equal(isValidCognitiveTrainingSample(validSample({id:''})),true,
+    'the original validity predicate does not include identity; the audit handles identity exclusions separately');
 });
 
 test('audit preserves the original numeric-coercion rule for resolved horizon',()=>{
@@ -95,7 +97,7 @@ test('audit separates valid, invalid, missing-id and duplicate-id rows without c
   const good=validSample();
   const bad=validSample({id:'BAD-TENSOR',symbol:'ETHUSDT',temporal_sequence:null});
   const duplicate=validSample({id:good.id,symbol:'DUPUSDT'});
-  const missingId=validSample({id:'',symbol:'NOIDUSDT',temporal_sequence:null});
+  const missingId=validSample({id:'',symbol:'NOIDUSDT'});
   const audit=auditCognitiveTrainingSamples([good,bad,duplicate,missingId]);
   assert.equal(audit.observed_rows,4);
   assert.equal(audit.valid_samples,1);
@@ -105,7 +107,7 @@ test('audit separates valid, invalid, missing-id and duplicate-id rows without c
     'the historical audit counts missing and duplicate IDs in the identity-exclusion total');
   assert.equal(audit.missing_ids,1);
   assert.equal(audit.valid_temporal_sequences,1);
-  assert.equal(audit.rejection_reason_counts.TEMPORAL_SEQUENCE_MISSING,2);
+  assert.equal(audit.rejection_reason_counts.TEMPORAL_SEQUENCE_MISSING,1);
   assert.equal(audit.rejection_reason_counts.DUPLICATE_SAMPLE_ID,1);
   assert.equal(audit.rejection_reason_counts.SAMPLE_ID_MISSING,1);
   assert.equal(audit.rejected_samples_by_symbol.ETHUSDT.sample_count,1);
