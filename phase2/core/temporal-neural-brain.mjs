@@ -1715,6 +1715,8 @@ export function buildTemporalNeuralProfile(samples = [], {
         result.validation_passed?'REGIME_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
         'REGIME_TCN_DID_NOT_PASS_VALIDATION',
       support_gaps:result.support_gaps||[],
+      validation_family_winner:result.validation_family_winner??null,
+      holdout_family_selected:result.holdout_family_selected===true,
       model_scope:'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES',
       model_split_scope:'SHARED_POOLED_CHRONOLOGICAL_PURGED_WALK_FORWARD_WITH_REGIME_GATES_V1',
       training_cutoff_at:sharedTrainingCutoffAt,
