@@ -369,7 +369,8 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
   assert.match(trainer,/baseRiskAdjustedScores:pooledBaseScores/);
   assert.match(trainer,/baseRiskAdjustedScoresByPolicy/,
     'outer bootstrap must use the same positive base-return gate');
-  assert.match(contracts,/baseGateEnabled/,
+  const externalContracts=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+  assert.match(externalContracts,/baseGateEnabled/,
     'outer execution scoring must enforce the independent positive base-return gate');
   assert.match(temporal,/rank_adjusted_execution_selection_score/,
     'outer validation must receive the frozen rank-adjusted ordering score');
