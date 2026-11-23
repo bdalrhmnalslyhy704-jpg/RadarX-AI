@@ -8,6 +8,7 @@ on:
       - phase2/tools/cognitive-market-wide-historical-benchmark.mjs
       - phase2/tests/cognitive-training-sample-audit.test.mjs
       - .github/workflows/cognitive-sample-audit-gate.yml
+      - .github/workflows/cognitive-market-wide-historical-benchmark.yml
   workflow_dispatch:
 
 permissions:
