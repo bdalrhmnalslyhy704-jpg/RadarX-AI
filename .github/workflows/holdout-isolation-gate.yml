@@ -52,12 +52,16 @@ jobs:
           const cognitive=fs.readFileSync('phase2/core/cognitive-brain.mjs','utf8');
           const temporal=fs.readFileSync('phase2/core/temporal-neural-brain.mjs','utf8');
           const guards=[
-            [!cognitive.includes('const neuralHoldout=neuralFit&&'), 'cognitive challenger holdout no longer runs before validation winner selection'],
-            [cognitive.includes('NO_VALIDATION_QUALIFIED_MODEL_HOLDOUT_REMAINS_CLOSED'), 'cognitive fallback remains closed when no validation model qualifies'],
-            [temporal.includes('const holdoutModel=validationPassed'), 'per-regime TCN holdout is validation-gated'],
-            [temporal.includes('if(temporalTreeValidationPassed){'), 'temporal GBDT logistic holdout reference is validation-gated'],
-            [temporal.includes('validationSelectedRegimes.map(regime=>regimeResults[regime]?.holdout_model)'), 'temporal aggregate scores only validation-selected regimes'],
-            [temporal.includes('NO_VALIDATION_SELECTED_REGIME_HOLDOUT_REMAINS_CLOSED'), 'temporal holdout explicitly remains closed without a validation-qualified regime']
+            [!cognitive.includes('const neuralHoldout=neuralFit&&'), 'cognitive challengers are not scored on Holdout before validation winner selection'],
+            [cognitive.includes('NO_VALIDATION_QUALIFIED_MODEL_HOLDOUT_REMAINS_CLOSED'), 'cognitive Holdout stays closed when no model qualifies on Validation'],
+            [temporal.includes('const validationFamilyWinner=validationFamilyCandidates[0]||null;'), 'one temporal model family is frozen from Validation before Holdout'],
+            [temporal.includes("holdoutFamilySelected==='TCN'&&"), 'TCN Holdout is scored only when TCN wins the per-regime validation-family selection'],
+            [temporal.includes("holdoutFamilySelected==='TEMPORAL_GBDT'&&"), 'Temporal GBDT Holdout is scored only when it wins the per-regime validation-family selection'],
+            [!temporal.includes("if(holdTargets.positive<minRegimePositive)"), 'Holdout class balance is not used to decide regime support'],
+            [temporal.includes('positive:null,negative:null,evaluated:false'), 'Holdout class counts remain hidden before a Validation winner exists'],
+            [temporal.includes('const tcnHoldoutRegimes=regimes.filter'), 'TCN aggregate includes only regimes where TCN won Validation'],
+            [temporal.includes('const temporalTreeHoldoutRegimes=regimes.filter'), 'tree aggregate includes only regimes where Temporal GBDT won Validation'],
+            [temporal.includes('NO_VALIDATION_FAMILY_WINNER_HOLDOUT_REMAINS_CLOSED'), 'Holdout explicitly stays closed when no temporal family qualifies']
           ];
           for(const [ok,label] of guards){
             console.log((ok?'PASS ':'FAIL ')+label);
