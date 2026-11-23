@@ -362,6 +362,15 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
   assert.match(temporal,/Number\(rankAdjustmentWeight\)\*normalizedRank/);
   assert.match(temporal,/baseRiskAdjustedScores\[index\]>0/,
     'rank adjustment must never make a non-positive base expected return eligible');
+  assert.match(temporal,/riskPenaltyWeightGrid=\[0\.01,0\.025,0\.05,0\.1/,
+    'inner risk policy must test lower positive downside penalties');
+  assert.match(trainer,/baseRiskAdjustedScores:contextBaseScores/);
+  assert.match(trainer,/rankingScoreAdjustmentWeights:contextRankWeights/);
+  assert.match(trainer,/baseRiskAdjustedScores:pooledBaseScores/);
+  assert.match(trainer,/baseRiskAdjustedScoresByPolicy/,
+    'outer bootstrap must use the same positive base-return gate');
+  assert.match(contracts,/baseGateEnabled/,
+    'outer execution scoring must enforce the independent positive base-return gate');
   assert.match(temporal,/rank_adjusted_execution_selection_score/,
     'outer validation must receive the frozen rank-adjusted ordering score');
   assert.match(temporal,/execution_ranking_score_adjustment_weight/);

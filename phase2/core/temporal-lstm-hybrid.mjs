@@ -2337,6 +2337,7 @@ export function predictTcnLstmHybridExecutionScore(sequence,profile,{
 export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logisticLogits,{
   roundTripCostBps=30,minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8,
   abstentionPercentileGrid=[0.20,0.35,0.50,0.65,0.80,0.825,0.85,0.875,0.90],
+  riskPenaltyWeightGrid=[0.01,0.025,0.05,0.1,0.25,0.5,1,2,4,8],
   rankingScoreAdjustmentGrid=[0]
 }={}) {
   const unavailable=reason=>({
@@ -2363,6 +2364,9 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
     !Array.isArray(abstentionPercentileGrid)||!abstentionPercentileGrid.length||
     abstentionPercentileGrid.some(value=>!finite(value)||value<=0||value>=1)||
     new Set(abstentionPercentileGrid).size!==abstentionPercentileGrid.length||
+    !Array.isArray(riskPenaltyWeightGrid)||!riskPenaltyWeightGrid.length||
+    riskPenaltyWeightGrid.some(value=>!finite(value)||value<=0||value>8)||
+    new Set(riskPenaltyWeightGrid).size!==riskPenaltyWeightGrid.length||
     !Array.isArray(rankingScoreAdjustmentGrid)||!rankingScoreAdjustmentGrid.length||
     rankingScoreAdjustmentGrid.some(value=>!finite(value)||value<0||value>8)||
     new Set(rankingScoreAdjustmentGrid).size!==rankingScoreAdjustmentGrid.length)
@@ -2387,7 +2391,7 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
       ?[{name:'HURDLE_EXPECTED_VALUE',field:'predicted_hurdle_net_return_pct'}]:[])
   ];
   for(const returnEstimator of returnEstimators){
-    for(const lambda of [0.1,0.25,0.5,1,2,4,8]){
+    for(const lambda of riskPenaltyWeightGrid){
       for(const rankAdjustmentWeight of rankingScoreAdjustmentGrid){
         const baseRiskAdjustedScores=executionPredictions.map(item=>
           Number(item[returnEstimator.field])-
@@ -2511,6 +2515,8 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
     top_k_per_timestamp:1,
     passed,
     selected_return_estimator:best?.return_estimator??'POINTWISE_HUBER',
+    risk_penalty_weight_grid:[...riskPenaltyWeightGrid],
+    ranking_score_adjustment_weight_grid:[...rankingScoreAdjustmentGrid],
     selected_risk_penalty_weight:best?.risk_penalty_weight??null,
     selected_ranking_score_adjustment_weight:best?.ranking_score_adjustment_weight??0,
     selected_score_formula_id:best?.score_formula_id??

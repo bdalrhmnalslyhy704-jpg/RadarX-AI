@@ -1773,6 +1773,8 @@ async function main(){
                 pooledOnlyExecution.predicted_positive_net_return_probability,
               pooled_only_execution_return_estimator:pooledOnlyReturnEstimator,
               pooled_only_predicted_downside_risk_pct:Number(pooledOnlyExecution.predicted_downside_risk_pct),
+              pooled_only_execution_base_risk_adjusted_expected_net_return_pct:
+                Number(pooledOnlyRiskAdjustedScore),
               pooled_only_execution_risk_adjusted_score:Number(pooledOnlyRiskAdjustedScore),
               pooled_only_execution_risk_penalty_weight:Number(pooledOnlyRiskPenaltyWeight),
               pooled_only_execution_ranking_score_adjustment_weight:Number(pooledOnlyRankAdjustmentWeight),
@@ -2070,9 +2072,13 @@ async function main(){
       return neural&&logistic&&finite(neural.execution_risk_adjusted_score)&&
         finite(neural.execution_risk_penalty_weight)&&
         finite(neural.execution_ranking_score_adjustment_weight)&&
+        finite(neural.execution_base_risk_adjusted_expected_net_return_pct)&&
+        typeof neural.execution_base_risk_adjusted_return_positive==='boolean'&&
+        finite(neural.execution_rank_adjusted_selection_score)&&
         finite(neural.execution_risk_abstention_threshold)&&
         finite(neural.execution_risk_abstention_percentile)&&
         finite(neural.pooled_only_execution_risk_adjusted_score)&&
+        finite(neural.pooled_only_execution_base_risk_adjusted_expected_net_return_pct)&&
         finite(neural.pooled_only_execution_risk_penalty_weight)&&
         finite(neural.pooled_only_execution_ranking_score_adjustment_weight)&&
         finite(neural.pooled_only_execution_risk_abstention_threshold)&&
@@ -2080,8 +2086,12 @@ async function main(){
         finite(logistic.probability);
     });
     if(complete){
-      const contextScores=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_adjusted_score);
+      const contextScores=alignedRows.map(row=>riskById.get(String(row.id)).execution_rank_adjusted_selection_score);
+      const contextBaseScores=alignedRows.map(row=>
+        riskById.get(String(row.id)).execution_base_risk_adjusted_expected_net_return_pct);
       const pooledScores=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_adjusted_score);
+      const pooledBaseScores=alignedRows.map(row=>
+        riskById.get(String(row.id)).pooled_only_execution_base_risk_adjusted_expected_net_return_pct);
       const logisticScores=alignedRows.map(row=>
         logisticById.get(String(row.id)).calibrated_probability??
         logisticById.get(String(row.id)).probability);
@@ -2101,12 +2111,18 @@ async function main(){
         throw new Error('OUTER_SELECTIVE_EXECUTION_POLICY_NOT_FROZEN');
       externalExecutionRiskTopK=evaluateExternalExecutionRiskTopK(
         alignedRows,contextScores,logisticScores,
-        {riskPenaltyWeights:contextLambdas,topKGrid:[1],roundTripCostBps:args.roundTripCostBps,
+        {riskPenaltyWeights:contextLambdas,
+          baseRiskAdjustedScores:contextBaseScores,
+          rankingScoreAdjustmentWeights:contextRankWeights,
+          topKGrid:[1],roundTripCostBps:args.roundTripCostBps,
           minimumRiskAdjustedScore:contextThresholds[0],abstentionPercentile:contextPercentiles[0]}
       );
       pooledOnlyExternalExecutionRiskTopK=evaluateExternalExecutionRiskTopK(
         alignedRows,pooledScores,logisticScores,
-        {riskPenaltyWeights:pooledLambdas,topKGrid:[1],roundTripCostBps:args.roundTripCostBps,
+        {riskPenaltyWeights:pooledLambdas,
+          baseRiskAdjustedScores:pooledBaseScores,
+          rankingScoreAdjustmentWeights:pooledRankWeights,
+          topKGrid:[1],roundTripCostBps:args.roundTripCostBps,
           minimumRiskAdjustedScore:pooledThresholds[0],abstentionPercentile:pooledPercentiles[0]}
       );
       const contextTrials=new Map(externalExecutionRiskTopK.trials.map(row=>[row.top_k_per_timestamp,row]));
@@ -2141,7 +2157,13 @@ async function main(){
         outer_validation_used_for_lambda_or_top_k_selection:false,
         holdout_rows_or_scores_used:false,
         context_risk_penalty_weight:externalExecutionRiskTopK.risk_penalty_weight,
+        context_ranking_score_adjustment_weight:externalExecutionRiskTopK.ranking_score_adjustment_weight,
         pooled_only_risk_penalty_weight:pooledOnlyExternalExecutionRiskTopK.risk_penalty_weight,
+        pooled_only_ranking_score_adjustment_weight:
+          pooledOnlyExternalExecutionRiskTopK.ranking_score_adjustment_weight,
+        positive_base_risk_adjusted_return_gate_enforced:
+          externalExecutionRiskTopK.base_risk_adjusted_return_gate_enforced&&
+          pooledOnlyExternalExecutionRiskTopK.base_risk_adjusted_return_gate_enforced,
         context_abstention_policy:externalExecutionRiskTopK.frozen_abstention_policy,
         pooled_only_abstention_policy:pooledOnlyExternalExecutionRiskTopK.frozen_abstention_policy,
         matched_logistic_trade_counts:externalExecutionRiskTopK.trials.every(row=>
@@ -2183,10 +2205,13 @@ async function main(){
     const riskById=new Map(lstmExternalPredictions.filter(item=>
       bootstrapIds.includes(String(item?.id))).map(item=>[String(item.id),item]));
     const contextComplete=bootstrapIds.every(id=>
-      finite(riskById.get(id)?.execution_risk_adjusted_score)&&
+      finite(riskById.get(id)?.execution_rank_adjusted_selection_score)&&
+      finite(riskById.get(id)?.execution_base_risk_adjusted_expected_net_return_pct)&&
+      finite(riskById.get(id)?.execution_ranking_score_adjustment_weight)&&
       finite(riskById.get(id)?.execution_risk_abstention_threshold));
     const pooledComplete=bootstrapIds.every(id=>
       finite(riskById.get(id)?.pooled_only_execution_risk_adjusted_score)&&
+      finite(riskById.get(id)?.pooled_only_execution_base_risk_adjusted_expected_net_return_pct)&&
       finite(riskById.get(id)?.pooled_only_execution_risk_abstention_threshold));
     if(contextComplete&&pooledComplete){
       const logisticExecutionById=new Map(predictionsByModel.LOGISTIC_REGRESSION
@@ -2199,22 +2224,31 @@ async function main(){
         throw new Error('BOOTSTRAP_SELECTIVE_EXECUTION_THRESHOLDS_NOT_FROZEN');
       const executionScoresByPolicy={
         LOGIT_CONTEXT_AUGMENTED:bootstrapIds.map(id=>
-          riskById.get(id).execution_risk_adjusted_score),
+          riskById.get(id).execution_rank_adjusted_selection_score),
         POOLED_ONLY:bootstrapIds.map(id=>
           riskById.get(id).pooled_only_execution_risk_adjusted_score),
         LOGISTIC_MATCHED_CONTEXT:bootstrapIds.map(id=>logisticExecutionById.get(id)),
         LOGISTIC_MATCHED_POOLED:bootstrapIds.map(id=>logisticExecutionById.get(id)),
         LOGISTIC_REGRESSION:bootstrapIds.map(id=>logisticExecutionById.get(id))
       };
+      const baseRiskAdjustedScoresByPolicy={
+        LOGIT_CONTEXT_AUGMENTED:bootstrapIds.map(id=>
+          riskById.get(id).execution_base_risk_adjusted_expected_net_return_pct),
+        POOLED_ONLY:bootstrapIds.map(id=>
+          riskById.get(id).pooled_only_execution_base_risk_adjusted_expected_net_return_pct)
+      };
       const executionPolicyConfigurations={
-        LOGIT_CONTEXT_AUGMENTED:{minimum_score:contextThresholds[0]},
-        POOLED_ONLY:{minimum_score:pooledThresholds[0]},
+        LOGIT_CONTEXT_AUGMENTED:{minimum_score:contextThresholds[0],
+          require_positive_base_score:true},
+        POOLED_ONLY:{minimum_score:pooledThresholds[0],
+          require_positive_base_score:true},
         LOGISTIC_MATCHED_CONTEXT:{match_trade_counts_with:'LOGIT_CONTEXT_AUGMENTED'},
         LOGISTIC_MATCHED_POOLED:{match_trade_counts_with:'POOLED_ONLY'}
       };
       outerValidationUncertaintyBootstrap=bootstrapOuterValidationUncertainty(
         bootstrapRows,bootstrapProbabilityByModel,{
-          executionScoresByPolicy,executionPolicyConfigurations,topKGrid:[1],
+          executionScoresByPolicy,executionPolicyConfigurations,
+          baseRiskAdjustedScoresByPolicy,topKGrid:[1],
           roundTripCostBps:args.roundTripCostBps,
           repetitions:250,blockLengthDays:3,seed:22429,
           maxConcurrentPositions:30

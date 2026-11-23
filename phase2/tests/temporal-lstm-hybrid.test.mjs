@@ -812,6 +812,30 @@ test('independent raw rank score adjusts expected-return ranking without touchin
   assert.equal(policy.holdout_values_used,false);
 });
 
+test('selective execution policy accepts a frozen lower positive risk-penalty grid',()=>{
+  const groupCount=30;
+  const rows=Array.from({length:groupCount*2},(_,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    return makeExecutionRow(index,group<25&&rank===0?'UP':'DOWN',
+      BASE+group*DAY+rank*75);
+  });
+  const predictions=rows.map((row,index)=>({
+    predicted_net_return_pct:0.08,
+    predicted_hurdle_net_return_pct:0.08,
+    predicted_downside_risk_pct:0.5,
+    normalized_independent_return_rank_score:index%2===0?0.2:-0.2
+  }));
+  const logisticLogits=rows.map((row,index)=>index%2===0?1:0);
+  const policy=selectTcnLstmExecutionRiskPolicy(rows,predictions,logisticLogits,{
+    minimumTrades:1,minimumWinRatePct:50,maximumDrawdownPct:8,
+    abstentionPercentileGrid:[0.2,0.5],
+    riskPenaltyWeightGrid:[0.01,0.05],
+    rankingScoreAdjustmentGrid:[0]
+  });
+  assert.deepEqual(policy.risk_penalty_weight_grid,[0.01,0.05]);
+  assert.ok(policy.trials.every(item=>item.risk_penalty_weight>0));
+  assert.ok(policy.trials.every(item=>item.risk_penalty_weight<=0.05));
+});
 test('selective execution policy stays abstained when every predicted risk-adjusted net-return score is nonpositive',()=>{
   const groupCount=30;
   const rows=Array.from({length:groupCount*2},(_,index)=>{
