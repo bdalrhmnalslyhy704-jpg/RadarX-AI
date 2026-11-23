@@ -24,7 +24,9 @@ export function cognitiveTrainingSampleRejectionReasons(row){
     if(row.first_passage.outcome!==row.outcome)
       reasons.push('FIRST_PASSAGE_OUTCOME_MISMATCH');
   }
-  const at=Number(row.at),resolvedAt=Number(row.resolved_at);
+  const at=row.at===null||row.at===undefined||row.at===''?NaN:Number(row.at);
+  const resolvedAt=row.resolved_at===null||row.resolved_at===undefined||row.resolved_at===''?
+    NaN:Number(row.resolved_at);
   if(!Number.isFinite(at)||!Number.isFinite(resolvedAt)){
     reasons.push('SAMPLE_TIMESTAMPS_INVALID');
   }else if(resolvedAt-at!==COGNITIVE_TRAINING_HORIZON_MS){
