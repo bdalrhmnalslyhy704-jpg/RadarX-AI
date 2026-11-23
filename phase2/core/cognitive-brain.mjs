@@ -1329,39 +1329,27 @@ export function buildCognitiveLearningProfile(samples = [], {
     neuralValidationComparison.beats_same_window_logistic===true&&
     neuralValidationComparison.beats_global_logistic===true&&
     neuralValidationComparison.beats_recent_logistic===true;
-  const neuralHoldout=neuralFit&&neuralFit.selected_member_index>=0
-    ?evaluateHoldout(upEventHoldout,neuralFit,comparisonMargin):{
-    sample_count:upEventHoldout.length,evaluated:false,model_brier_score:null,base_rate_brier_score:null,
-    log_loss:null,beat_base_rate:false,reason:'NEURAL_MODEL_NOT_FITTED'
-  };
-  const neuralSameWindowLogisticHoldout=neuralSameWindowLogisticFit
-    ?evaluateHoldout(upEventHoldout,neuralSameWindowLogisticFit,comparisonMargin):{evaluated:false,model_brier_score:null};
-  const neuralGlobalLogisticHoldout=neuralGlobalLogisticFit
-    ?evaluateHoldout(upEventHoldout,neuralGlobalLogisticFit,comparisonMargin):{evaluated:false,model_brier_score:null};
-  const neuralRecentLogisticHoldout=neuralRecentLogisticFit
-    ?evaluateHoldout(upEventHoldout,neuralRecentLogisticFit,comparisonMargin):null;
-  const beatsSameWindowLogistic=neuralHoldout.evaluated===true&&
-    neuralSameWindowLogisticHoldout.evaluated===true&&
-    neuralHoldout.model_brier_score+comparisonMargin<neuralSameWindowLogisticHoldout.model_brier_score;
-  const beatsGlobalLogistic=neuralHoldout.evaluated===true&&neuralGlobalLogisticHoldout.evaluated===true&&
-    neuralHoldout.model_brier_score+comparisonMargin<neuralGlobalLogisticHoldout.model_brier_score;
-  const beatsRecentLogistic=!neuralRecentLogisticFit||(neuralHoldout.evaluated===true&&
-    neuralRecentLogisticHoldout?.evaluated===true&&
-    neuralHoldout.model_brier_score+comparisonMargin<neuralRecentLogisticHoldout.model_brier_score);
-  const neuralHoldoutReady=neuralHoldout.evaluated===true&&neuralHoldout.beat_base_rate===true&&
-    beatsSameWindowLogistic&&beatsGlobalLogistic&&beatsRecentLogistic;
-  const neuralHoldoutComparison={
-    sample_count:upEventHoldout.length,required_live_holdout_samples:100,required_brier_margin:comparisonMargin,
-    base_rate_used:neuralFit?.base_rate??null,
-    neural_brier_score:neuralHoldout.model_brier_score,
-    same_window_logistic_brier_score:neuralSameWindowLogisticHoldout.model_brier_score??null,
-    global_logistic_brier_score:neuralGlobalLogisticHoldout.model_brier_score??null,
-    recent_logistic_brier_score:neuralRecentLogisticHoldout?.model_brier_score??null,
-    beats_base_rate:neuralHoldout.beat_base_rate===true,
-    beats_same_window_logistic:beatsSameWindowLogistic,
-    beats_global_logistic:beatsGlobalLogistic,
-    beats_recent_logistic:neuralRecentLogisticFit?beatsRecentLogistic:null,
-    passed:neuralHoldoutReady
+  // Holdout is a one-shot acceptance set. Keep every challenger and reference
+  // unopened until a single candidate has qualified on chronological validation.
+  const closedUpEventHoldout=(reason)=>({
+    sample_count:0,available_sample_count:upEventHoldout.length,evaluated:false,
+    model_brier_score:null,base_rate_brier_score:null,log_loss:null,
+    beat_base_rate:false,reason
+  });
+  let neuralHoldout=closedUpEventHoldout('NEURAL_CHALLENGER_NOT_SELECTED_FOR_FINAL_HOLDOUT');
+  let neuralSameWindowLogisticHoldout=closedUpEventHoldout('REFERENCE_NOT_NEEDED_BEFORE_VALIDATION_SELECTION');
+  let neuralGlobalLogisticHoldout=closedUpEventHoldout('REFERENCE_NOT_NEEDED_BEFORE_VALIDATION_SELECTION');
+  let neuralRecentLogisticHoldout=closedUpEventHoldout('REFERENCE_NOT_NEEDED_BEFORE_VALIDATION_SELECTION');
+  let neuralHoldoutReady=false;
+  let neuralHoldoutComparison={
+    sample_count:0,available_sample_count:upEventHoldout.length,
+    required_live_holdout_samples:100,required_brier_margin:comparisonMargin,
+    opened:false,evaluated:false,reason:'NO_VALIDATION_SELECTED_NEURAL_CHALLENGER',
+    base_rate_used:neuralFit?.base_rate??null,neural_brier_score:null,
+    same_window_logistic_brier_score:null,global_logistic_brier_score:null,
+    recent_logistic_brier_score:null,beats_base_rate:false,
+    beats_same_window_logistic:false,beats_global_logistic:false,
+    beats_recent_logistic:null,passed:false
   };
   // GBDT capacity/regularization is selected only on the disjoint inner
   // selection block. It is then refit on model-fit + selection rows and scored
@@ -1419,9 +1407,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   const boostedSameWindowLogisticValidation=boostedTreeRefitBaselineFit
     ?evaluateHoldout(upEventValidation,boostedTreeRefitBaselineFit,comparisonMargin)
     :{evaluated:false,sample_count:upEventValidation.length,model_brier_score:null};
-  const boostedSameWindowLogisticHoldout=boostedTreeRefitBaselineFit
-    ?evaluateHoldout(upEventHoldout,boostedTreeRefitBaselineFit,comparisonMargin)
-    :{evaluated:false,sample_count:upEventHoldout.length,model_brier_score:null};
+  let boostedSameWindowLogisticHoldout=closedUpEventHoldout('GBDT_REFERENCE_NOT_NEEDED_BEFORE_VALIDATION_SELECTION');
   const boostedTreeProbabilityCalibration=boostedTreeFit
     ?fitAndSelectProbabilityCalibrator(neuralCalibrationFit,neuralCalibrationCheck,boostedTreeFit)
     :{method:'DISJOINT_BRIER_PLATT_MODEL_CALIBRATION_V2',fitted:false,accepted:false,reason:'GBDT_FIT_UNAVAILABLE'};
@@ -1539,15 +1525,35 @@ export function buildCognitiveLearningProfile(samples = [], {
   // another tuning set.
   const validationWinner=validationQualified[0]||null;
   let neuralSelected=validationWinner?.name==='NEURAL_GLOBAL';
-  let challengerHoldout={evaluated:false,model_brier_score:null,reason:'NO_VALIDATED_CHALLENGER'};
-  let challengerHoldoutComparison={passed:false,beats_base_rate:false,
-    beats_same_window_logistic:false,beats_global_logistic:false,beats_recent_logistic:false};
+  let challengerHoldout=closedUpEventHoldout('NO_VALIDATION_WINNER_HOLDOUT_REMAINS_CLOSED');
+  let challengerHoldoutComparison={evaluated:false,opened:false,passed:false,
+    beats_base_rate:false,beats_same_window_logistic:false,
+    beats_global_logistic:false,beats_recent_logistic:false,
+    reason:'NO_VALIDATION_WINNER_HOLDOUT_REMAINS_CLOSED'};
   let activeChallenger=null;
   if(validationWinner){
-    challengerHoldout=validationWinner.name==='NEURAL_GLOBAL'
-      ?neuralHoldout:evaluateHoldout(upEventHoldout,validationWinner.fit,comparisonMargin);
-    const challengerSameWindowLogisticHoldout=validationWinner.name==='NEURAL_GLOBAL'
-      ?neuralSameWindowLogisticHoldout:boostedSameWindowLogisticHoldout;
+    // Open the final block only after Validation has selected exactly one
+    // challenger. Score that winner and its predeclared logistic references;
+    // never score losing neural/tree/hybrid candidates on the final block.
+    const neuralWinner=validationWinner.name==='NEURAL_GLOBAL';
+    challengerHoldout=evaluateHoldout(upEventHoldout,validationWinner.fit,comparisonMargin);
+    const sameWindowLogisticFit=neuralWinner
+      ?neuralSameWindowLogisticFit:boostedTreeRefitBaselineFit;
+    const challengerSameWindowLogisticHoldout=sameWindowLogisticFit
+      ?evaluateHoldout(upEventHoldout,sameWindowLogisticFit,comparisonMargin)
+      :closedUpEventHoldout('SELECTED_CHALLENGER_LOGISTIC_REFERENCE_UNAVAILABLE');
+    if(neuralWinner){
+      neuralHoldout=challengerHoldout;
+      neuralSameWindowLogisticHoldout=challengerSameWindowLogisticHoldout;
+    }else{
+      boostedSameWindowLogisticHoldout=challengerSameWindowLogisticHoldout;
+    }
+    neuralGlobalLogisticHoldout=neuralGlobalLogisticFit
+      ?evaluateHoldout(upEventHoldout,neuralGlobalLogisticFit,comparisonMargin)
+      :closedUpEventHoldout('GLOBAL_LOGISTIC_REFERENCE_UNAVAILABLE');
+    neuralRecentLogisticHoldout=neuralRecentLogisticFit
+      ?evaluateHoldout(upEventHoldout,neuralRecentLogisticFit,comparisonMargin)
+      :closedUpEventHoldout('RECENT_LOGISTIC_REFERENCE_UNAVAILABLE');
     const holdoutReferences=[
       challengerSameWindowLogisticHoldout,neuralGlobalLogisticHoldout,
       ...(neuralRecentLogisticFit?[neuralRecentLogisticHoldout]:[])
@@ -1556,13 +1562,15 @@ export function buildCognitiveLearningProfile(samples = [], {
       holdoutReferences.length>=2&&holdoutReferences.every(reference=>
         challengerHoldout.model_brier_score+comparisonMargin<reference.model_brier_score);
     challengerHoldoutComparison={
-      sample_count:upEventHoldout.length,
+      sample_count:challengerHoldout.sample_count,
+      available_sample_count:upEventHoldout.length,
       required_brier_margin:comparisonMargin,
+      opened:true,evaluated:challengerHoldout.evaluated===true,
       model_brier_score:challengerHoldout.model_brier_score??null,
       base_rate_brier_score:challengerHoldout.base_rate_brier_score??null,
       same_window_logistic_brier_score:challengerSameWindowLogisticHoldout.model_brier_score??null,
       global_logistic_brier_score:neuralGlobalLogisticHoldout.model_brier_score??null,
-      recent_logistic_brier_score:neuralRecentLogisticHoldout?.model_brier_score??null,
+      recent_logistic_brier_score:neuralRecentLogisticHoldout.model_brier_score??null,
       beats_base_rate:challengerHoldout.beat_base_rate===true,
       beats_same_window_logistic:challengerHoldout.evaluated===true&&
         challengerSameWindowLogisticHoldout.evaluated===true&&
@@ -1572,12 +1580,41 @@ export function buildCognitiveLearningProfile(samples = [], {
         neuralGlobalLogisticHoldout.evaluated===true&&
         challengerHoldout.model_brier_score+comparisonMargin<
           neuralGlobalLogisticHoldout.model_brier_score,
-      beats_recent_logistic:!neuralRecentLogisticFit||
-        (challengerHoldout.evaluated===true&&neuralRecentLogisticHoldout?.evaluated===true&&
+      beats_recent_logistic:neuralRecentLogisticFit?
+        (challengerHoldout.evaluated===true&&neuralRecentLogisticHoldout.evaluated===true&&
           challengerHoldout.model_brier_score+comparisonMargin<
-            neuralRecentLogisticHoldout.model_brier_score),
+            neuralRecentLogisticHoldout.model_brier_score):null,
       passed:challengerHoldout.beat_base_rate===true&&beatsReferences
     };
+    if(neuralWinner){
+      neuralHoldoutReady=challengerHoldout.evaluated===true&&
+        challengerHoldout.beat_base_rate===true&&beatsReferences;
+      neuralHoldoutComparison={
+        sample_count:challengerHoldout.sample_count,
+        available_sample_count:upEventHoldout.length,
+        required_live_holdout_samples:100,required_brier_margin:comparisonMargin,
+        opened:true,evaluated:challengerHoldout.evaluated===true,
+        base_rate_used:neuralFit?.base_rate??null,
+        neural_brier_score:challengerHoldout.model_brier_score??null,
+        same_window_logistic_brier_score:challengerSameWindowLogisticHoldout.model_brier_score??null,
+        global_logistic_brier_score:neuralGlobalLogisticHoldout.model_brier_score??null,
+        recent_logistic_brier_score:neuralRecentLogisticHoldout.model_brier_score??null,
+        beats_base_rate:challengerHoldout.beat_base_rate===true,
+        beats_same_window_logistic:challengerHoldout.evaluated===true&&
+          challengerSameWindowLogisticHoldout.evaluated===true&&
+          challengerHoldout.model_brier_score+comparisonMargin<
+            challengerSameWindowLogisticHoldout.model_brier_score,
+        beats_global_logistic:challengerHoldout.evaluated===true&&
+          neuralGlobalLogisticHoldout.evaluated===true&&
+          challengerHoldout.model_brier_score+comparisonMargin<
+            neuralGlobalLogisticHoldout.model_brier_score,
+        beats_recent_logistic:neuralRecentLogisticFit?
+          (challengerHoldout.evaluated===true&&neuralRecentLogisticHoldout.evaluated===true&&
+            challengerHoldout.model_brier_score+comparisonMargin<
+              neuralRecentLogisticHoldout.model_brier_score):null,
+        passed:neuralHoldoutReady
+      };
+    }
     if(challengerHoldoutComparison.passed){
       activeChallenger=validationWinner.name;
       selectedModel=validationWinner.name;
@@ -1586,11 +1623,22 @@ export function buildCognitiveLearningProfile(samples = [], {
       selectedValidation=validationWinner.validation;
       selectionReason=validationWinner.name+'_BEAT_ALL_LOGISTIC_CHALLENGERS_ON_VALIDATION_AND_HOLDOUT';
     }else{
-      selectionReason='VALIDATION_CHALLENGER_FAILED_UNTOUCHED_HOLDOUT;_LOGISTIC_FALLBACK_RETAINED';
+      selectionReason='VALIDATION_CHALLENGER_FAILED_FINAL_HOLDOUT;_LOGISTIC_FALLBACK_RETAINED';
     }
   }
-  const holdoutMetrics = activeChallenger
-    ?challengerHoldout:evaluateHoldout(holdout, selectedFit);
+  // If no challenger wins, the global/recent logistic fallback may access the
+  // final block only when that single fallback itself passed outer Validation.
+  const fallbackValidationQualified=validationWinner===null&&
+    selectedValidation?.evaluated===true&&selectedValidation?.beat_base_rate===true;
+  const fallbackHoldout=fallbackValidationQualified
+    ?evaluateHoldout(holdout,selectedFit)
+    :{
+      evaluated:false,sample_count:0,available_sample_count:holdout.length,
+      model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+      reason:'NO_VALIDATION_QUALIFIED_MODEL_HOLDOUT_REMAINS_CLOSED'
+    };
+  const holdoutMetrics=validationWinner?challengerHoldout:fallbackHoldout;
+  const holdoutAccessOpened=validationWinner!==null||fallbackValidationQualified;
   const evidence = factorEvidence(selectedTraining, { minimumBucket });
   const rankingReady = training.length >= minTrainingSamples &&
     validation.length >= minimumValidationSamples &&
@@ -1657,6 +1705,16 @@ export function buildCognitiveLearningProfile(samples = [], {
     training_positive_rate_pct: Number((selectedFit.base_rate * 100).toFixed(1)),
     validation: selectedValidation,
     holdout: holdoutMetrics,
+    holdout_access:{
+      opened:holdoutAccessOpened,
+      validation_winner:validationWinner?.name??null,
+      selected_model:validationWinner?.name??(fallbackValidationQualified?selectedModel:null),
+      reason:validationWinner
+        ?'ONLY_SINGLE_VALIDATION_SELECTED_CHALLENGER_SCORED_ON_FINAL_HOLDOUT'
+        :fallbackValidationQualified
+          ?'ONLY_VALIDATION_QUALIFIED_LOGISTIC_FALLBACK_SCORED_ON_FINAL_HOLDOUT'
+          :'NO_VALIDATION_QUALIFIED_MODEL_HOLDOUT_REMAINS_CLOSED'
+    },
     neural_network: {
       status: !neuralFit ? 'WAITING_FOR_MATURED_TRAINING_SAMPLES' :
         neuralLiveReady ? 'LIVE_GATE_PASSED_OUT_OF_SAMPLE' :
