@@ -70,7 +70,7 @@ test('sample rejection audit identifies target, source, outcome and timestamp fa
     'OUTCOME_NOT_RESOLVED',
     'FIRST_PASSAGE_RESOLUTION_NOT_15M',
     'FIRST_PASSAGE_OUTCOME_MISMATCH',
-    'SAMPLE_TIMESTAMPS_INVALID',
+    'SAMPLE_RESOLVED_HORIZON_NOT_EXACTLY_4H',
     'DECLARED_HORIZON_NOT_EXACTLY_4H'
   ])assert.ok(reasons.includes(code),'missing rejection code '+code);
 });
