@@ -1485,7 +1485,8 @@ export function buildTemporalNeuralProfile(samples = [], {
         !temporalTreeSelectionPassed?'TEMPORAL_TREE_DID_NOT_BEAT_SELECTION_LOGISTIC':
         !temporalTreeCalibrator.fitted?'TEMPORAL_TREE_CALIBRATION_NOT_READY':
         temporalTreeHoldoutPassed?'TEMPORAL_GBDT_OUT_OF_SAMPLE_VALIDATED':
-        temporalTreeValidationPassed?'TEMPORAL_GBDT_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+        holdoutFamilySelected==='TEMPORAL_GBDT'?'TEMPORAL_GBDT_VALIDATION_SELECTED_HOLDOUT_NOT_PASSED':
+        temporalTreeValidationPassed?'TEMPORAL_GBDT_VALIDATION_PASSED_OTHER_FAMILY_SELECTED':
         'TEMPORAL_GBDT_DID_NOT_BEAT_VALIDATION_LOGISTIC',
       training_samples:regimeTraining.length,
       selection_samples:memberSelectionRows.length,
@@ -1697,7 +1698,9 @@ export function buildTemporalNeuralProfile(samples = [], {
   // regime that did not independently clear both gates. Do not reject a valid
   // regime merely because a different regime is weaker, and never broaden the
   // selected regime set using pooled holdout metrics.
-  const selected=validationSelectedRegimes.length>0;
+  const tcnValidationWinnerRegimes=regimes.filter(regime=>
+    regimeResults[regime]?.validation_family_winner==='TCN');
+  const selected=tcnValidationWinnerRegimes.length>0;
   const holdoutPassed=selectedRegimes.length>0;
   const probabilityReady=holdoutPassed;
   const allSupportedRegimesValidated=supportedRegimes.length>0&&
@@ -1712,7 +1715,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     return [regime,{
       status:!supported?'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE':
         result.holdout_passed?'REGIME_TCN_OUT_OF_SAMPLE_VALIDATED':
-        result.validation_passed?'REGIME_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+        result.validation_family_winner==='TCN'?'REGIME_TCN_VALIDATION_SELECTED_HOLDOUT_NOT_PASSED':
+        result.validation_passed?'REGIME_TCN_VALIDATION_PASSED_OTHER_FAMILY_SELECTED':
         'REGIME_TCN_DID_NOT_PASS_VALIDATION',
       support_gaps:result.support_gaps||[],
       validation_family_winner:result.validation_family_winner??null,
@@ -1785,7 +1789,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       required_holdout_positive_samples:minRegimePositive,
       required_validation_negative_samples:minRegimeNegative,
       required_holdout_negative_samples:minRegimeNegative,
-      selected:result.validation_passed===true,
+      selected:result.validation_family_winner==='TCN',
       probability_ready:result.holdout_passed===true,
       live_eligibility_ready:result.holdout_passed===true&&
         Number(result.holdout_model?.sample_count)>=liveHoldoutSamples,
