@@ -365,7 +365,7 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
   assert.match(temporal,/rank_adjusted_execution_selection_score/,
     'outer validation must receive the frozen rank-adjusted ordering score');
   assert.match(temporal,/execution_ranking_score_adjustment_weight/);
-  assert.match(trainer,/execution_risk_score_semantics:[\s\S]{0,600}FROZEN_INDEPENDENT_RANK_ADJUSTMENT_V1/,
+  assert.match(trainer,/execution_risk_score_semantics:[\s\S]{0,600}RANK_ADJUSTMENT_ONLY_SORTS_ELIGIBLE_CANDIDATES_V2/,
     'the exported TCN-LSTM artifact must describe the exact frozen rank-adjusted execution score');
   assert.match(temporal,/execution_head_context_ablation\?\.passed===true/,
     'inner qualification must require a matched execution-head ablation pass');
