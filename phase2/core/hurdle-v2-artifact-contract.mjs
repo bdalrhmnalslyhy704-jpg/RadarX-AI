@@ -643,6 +643,25 @@ export function verifyHurdleV2Artifact(artifact) {
         artifact.execution_qualification_status !== expectedQualificationStatus ||
         artifact.training_status !== 'TRAINED')
       return fail('QUALIFICATION_STATUS_INCONSISTENT');
+
+    // Qualification is valid only when every decision was made on the frozen
+    // inner-selection partition. A sealed artifact must not be able to claim
+    // inner-only qualification while its evidence admits outer/holdout use.
+    const selectionScoring = qualification?.selection_scoring;
+    if (selectionScoring?.ranking_uses_inner_selection_partition_only !== true ||
+        selectionScoring?.outer_validation_or_holdout_used !== false)
+      return fail('QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+    const qualificationEvidence = [
+      qualification?.gate_results,
+      qualification?.gate_results?.result,
+      qualification?.context_ablation,
+      qualification?.ranking_head_selection_qualification
+    ];
+    if (qualificationEvidence.some(record => record &&
+        (record.source_partition !== 'INNER_SELECTION_ONLY' ||
+         record.holdout_values_used !== false)))
+      return fail('QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+
     if (qualified) {
       const selected = qualification.candidates?.find(candidate =>
         candidate.name === qualification.selected_configuration);
