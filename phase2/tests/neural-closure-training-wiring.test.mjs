@@ -364,7 +364,8 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
   assert.match(trainer,/minimumPositiveNetReturnProbabilities:contextPositiveProbabilityThresholds/);
   assert.match(trainer,/minimum_positive_net_return_probability:contextPositiveProbabilityThresholds\[0\]/);
   assert.match(trainer,/execution_minimum_positive_net_return_probability/);
-  assert.match(contracts,/EXTERNAL_EXECUTION_POSITIVE_RETURN_PROBABILITY_THRESHOLD_NOT_FROZEN/);
+    const externalContracts=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+  assert.match(externalContracts,/EXTERNAL_EXECUTION_POSITIVE_RETURN_PROBABILITY_THRESHOLD_NOT_FROZEN/);
   assert.match(temporal,/Number\(rankAdjustmentWeight\)\*normalizedRank/);
   assert.match(temporal,/baseRiskAdjustedScores\[index\]>0/,
     'rank adjustment must never make a non-positive base expected return eligible');
