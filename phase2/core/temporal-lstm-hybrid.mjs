@@ -1398,7 +1398,8 @@ export function tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit) {
     ?Math.exp(-margin)/(1+Math.exp(-margin))
     :1/(1+Math.exp(margin));
   return {margin,loss:stableSoftplus(-margin),high_logit_gradient:-error,
-    low_logit_gradient:error,correct:margin>0};
+    low_logit_gradient:error,correct:margin>0,tied:margin===0,
+    accuracy_contribution:margin>0?1:margin===0?0.5:0};
 }
 export function tcnLstmPairwiseReturnRankingLoss(highProbability,lowProbability) {
   if(!finite(highProbability)||!finite(lowProbability)||highProbability<0||
@@ -1486,7 +1487,7 @@ export function summarizeTcnLstmPairwiseReturnRanking(rows,probabilities,{
   for(const pair of built.pairs){
     const item=tcnLstmPairwiseReturnRankingLoss(
       probabilities[pair.high_index],probabilities[pair.low_index]);
-    loss+=item.loss;if(item.correct)correct++;
+    loss+=item.loss;correct+=item.accuracy_contribution;
   }
   return {schema:'RADARX_TCN_LSTM_PAIRWISE_RANKING_METRICS_V1',
     status:'AVAILABLE',sample_count:rows.length,decision_group_count:built.decision_group_count,
@@ -1513,7 +1514,7 @@ export function summarizeTcnLstmPairwiseLogitRanking(rows,logits,{
   let loss=0,correct=0;
   for(const pair of built.pairs){
     const item=tcnLstmPairwiseLogitRankingLoss(logits[pair.high_index],logits[pair.low_index]);
-    loss+=item.loss;if(item.correct)correct++;
+    loss+=item.loss;correct+=item.accuracy_contribution;
   }
   return {schema:'RADARX_TCN_LSTM_PAIRWISE_LOGIT_RANKING_METRICS_V1',
     status:'AVAILABLE',sample_count:rows.length,decision_group_count:built.decision_group_count,
@@ -3754,11 +3755,25 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     Number(b.pairwise_ranking_improvement??-Infinity)-Number(a.pairwise_ranking_improvement??-Infinity)||
     a.selection_score-b.selection_score||a.name.localeCompare(b.name)
   );
-  // Stage 1 is mandatory: inner Brier improvement AND independent rank-loss improvement.
+  // A flat rank score must not pass merely because its neutral 0.693 loss
+  // beats an over-confident Logistic logit. Ties count as half-correct in the
+  // metric; qualification additionally requires a trained, nonzero rank head,
+  // accuracy above chance, and accuracy above the matched Logistic anchor.
+  const independentRankingSignalPassed=item=>{
+    const rankHead=item.fit?.training?.return_ranking?.ranking_head??null;
+    const accuracy=Number(item.pairwise_ranking?.pairwise_accuracy_pct);
+    const logisticAccuracy=Number(item.logistic_pairwise_ranking?.pairwise_accuracy_pct);
+    return rankHead?.fitted===true&&finite(rankHead.weight_l2_norm)&&
+      rankHead.weight_l2_norm>1e-8&&
+      finite(accuracy)&&accuracy>50&&finite(logisticAccuracy)&&
+      accuracy>logisticAccuracy&&
+      item.pairwise_ranking?.status==='AVAILABLE'&&
+      finite(item.pairwise_ranking_improvement)&&item.pairwise_ranking_improvement>0;
+  };
+  // Stage 1 requires Brier improvement and non-degenerate independent return ranking.
   const stageOneQualified=evaluated.filter(item=>
     item.brier_improvement>requiredImprovement&&
-    rankingScoreAvailable&&item.pairwise_ranking.status==='AVAILABLE'&&
-    finite(item.pairwise_ranking_improvement)&&item.pairwise_ranking_improvement>0
+    rankingScoreAvailable&&independentRankingSignalPassed(item)
   );
   // Stage 2 fits execution/Hurdle heads for every stage-1 qualifier. If the
   // classifier/ranker stage has no qualifier, also fit the single best
@@ -3873,22 +3888,21 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   }
   const isInnerQualified=item=>
     item.brier_improvement>requiredImprovement&&
-    rankingScoreAvailable&&item.pairwise_ranking?.status==='AVAILABLE'&&
-    finite(item.pairwise_ranking_improvement)&&item.pairwise_ranking_improvement>0&&
+    rankingScoreAvailable&&independentRankingSignalPassed(item)&&
     item.execution_heads_fitted===true&&
     item.execution_risk_policy?.status!=='UNAVAILABLE'&&
     item.execution_risk_policy?.passed===true&&
     item.execution_head_context_ablation?.passed===true&&
     item.return_selection_diagnostics?.status==='AVAILABLE'&&
     Number(item.return_selection_diagnostics.preliminary_return_screen_candidates)>0&&
-    rankingScoreAvailable&&finite(item.pairwise_ranking_improvement)&&
-      item.pairwise_ranking_improvement>0&&
     item.ranking_head_selection_qualified===true;
   const qualifiedCandidates=evaluated.filter(isInnerQualified);
-  const winner=(qualifiedCandidates.length?qualifiedCandidates:evaluated)[0];
+  // When none fully qualifies, retain the best stage-one classifier+ranker
+  // candidate for the diagnostic Hurdle artifact; do not fall back to a flat rank head.
+  const winner=(qualifiedCandidates.length?qualifiedCandidates:
+    stageOneQualified.length?stageOneQualified:evaluated)[0];
   const brierGatePassed=winner.brier_improvement>requiredImprovement;
-  const rankingGatePassed=rankingScoreAvailable&&winner.pairwise_ranking?.status==='AVAILABLE'&&
-    finite(winner.pairwise_ranking_improvement)&&winner.pairwise_ranking_improvement>0;
+  const rankingGatePassed=rankingScoreAvailable&&independentRankingSignalPassed(winner);
   const compositeGatePassed=brierGatePassed&&rankingGatePassed;
   const sharedClassifierRankingGateRequired=false;
   const sharedClassifierRankingGatePassed=true;
@@ -3960,9 +3974,13 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       required_inner_brier_improvement:requiredImprovement,
       required_composite_improvement:requiredImprovement,
       require_pairwise_ranking_improvement:true,
+      minimum_pairwise_ranking_accuracy_pct:50,
+      require_pairwise_accuracy_above_logistic_anchor:true,
+      require_non_degenerate_independent_rank_head:true,
       gate_results:{
         brier_improvement:brierGatePassed?'PASS':'FAIL',
         pairwise_ranking_improvement:rankingGatePassed?'PASS':'FAIL',
+        pairwise_ranking_accuracy:rankingGatePassed?'PASS':'FAIL',
         shared_classifier_pairwise_ranking_improvement:'DIAGNOSTIC_ONLY_NOT_USED_AS_RANK_SCORE',
         composite_improvement:compositeGatePassed?'PASS':'FAIL',
         execution_head_context_ablation:
@@ -3988,6 +4006,13 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       pairwise_ranking,logistic_pairwise_ranking,
       pairwise_ranking_improvement:finite(pairwise_ranking_improvement)
         ?Number(pairwise_ranking_improvement.toFixed(8)):null,
+      pairwise_ranking_accuracy_improvement_pct:
+        pairwise_ranking?.status==='AVAILABLE'&&logistic_pairwise_ranking?.status==='AVAILABLE'
+          ?Number((pairwise_ranking.pairwise_accuracy_pct-
+            logistic_pairwise_ranking.pairwise_accuracy_pct).toFixed(4)):null,
+      independent_ranking_signal_passed:independentRankingSignalPassed({
+        fit,pairwise_ranking,logistic_pairwise_ranking,pairwise_ranking_improvement
+      }),
       shared_classifier_pairwise_ranking,
       shared_classifier_pairwise_ranking_improvement:
         finite(shared_classifier_pairwise_ranking_improvement)
@@ -4005,17 +4030,19 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       composite_improvement:Number(composite_improvement.toFixed(8)),
       improvement:Number(composite_improvement.toFixed(8)),
       passed_inner_brier_margin:brier_improvement>requiredImprovement,
-      passed_inner_pairwise_ranking_gate:rankingScoreAvailable&&
-        pairwise_ranking?.status==='AVAILABLE'&&finite(pairwise_ranking_improvement)&&
-        pairwise_ranking_improvement>0,
+      passed_inner_pairwise_ranking_gate:independentRankingSignalPassed({
+        fit,pairwise_ranking,logistic_pairwise_ranking,pairwise_ranking_improvement
+      }),
       passed_inner_shared_classifier_ranking_gate:null,
       shared_classifier_pairwise_ranking_is_diagnostic_only:true,
       passed_inner_composite_margin:brier_improvement>requiredImprovement&&
-        rankingScoreAvailable&&pairwise_ranking?.status==='AVAILABLE'&&
-        finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0,
+        independentRankingSignalPassed({
+          fit,pairwise_ranking,logistic_pairwise_ranking,pairwise_ranking_improvement
+        }),
       passed_inner_margin:brier_improvement>requiredImprovement&&
-        rankingScoreAvailable&&pairwise_ranking?.status==='AVAILABLE'&&
-        finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0&&
+        independentRankingSignalPassed({
+          fit,pairwise_ranking,logistic_pairwise_ranking,pairwise_ranking_improvement
+        })&&
         execution_heads_fitted===true&&execution_risk_policy?.passed===true&&
         execution_head_context_ablation?.passed===true&&
         return_selection_diagnostics?.status==='AVAILABLE'&&

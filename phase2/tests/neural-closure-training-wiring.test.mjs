@@ -370,6 +370,10 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'execution heads must be skipped for candidates that fail inner Brier or independent ranking');
   assert.match(temporal,/item\.brier_improvement>requiredImprovement/);
   assert.match(temporal,/item\.pairwise_ranking_improvement>0/);
+  assert.match(temporal,/accuracy>50&&finite\(logisticAccuracy\)&&accuracy>logisticAccuracy/,
+    'independent ranking must beat chance and the matched Logistic accuracy');
+  assert.match(temporal,/rankHead\.weight_l2_norm>1e-8/,
+    'a constant zero-weight rank head must not pass qualification');
   assert.match(temporal,/representation_out_of_sample:true/,
     'the fitted execution head must attest to out-of-sample representations');
   assert.match(temporal,/fitHurdleReturnHead/,

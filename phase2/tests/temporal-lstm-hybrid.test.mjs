@@ -329,6 +329,24 @@ test('focal-asymmetric TCN-LSTM fits class weights on the training rows only',()
   assert.equal(profile.real_order_execution,false);
 });
 
+test('pairwise ranking accuracy counts an exact score tie as half-correct',()=>{
+  const rows=makeRankedRows(0,10,'tie-accuracy');
+  const tiedLogits=Array(rows.length).fill(0);
+  const tiedProbabilities=Array(rows.length).fill(0.5);
+  const logitMetrics=summarizeTcnLstmPairwiseLogitRanking(rows,tiedLogits,{
+    roundTripCostBps:30,minimumReturnGapPct:0.5,maxPairsPerTimestamp:4
+  });
+  const probabilityMetrics=summarizeTcnLstmPairwiseReturnRanking(rows,tiedProbabilities,{
+    roundTripCostBps:30,minimumReturnGapPct:0.5,maxPairsPerTimestamp:4
+  });
+  assert.equal(logitMetrics.status,'AVAILABLE');
+  assert.equal(probabilityMetrics.status,'AVAILABLE');
+  assert.equal(logitMetrics.pairwise_accuracy_pct,50);
+  assert.equal(probabilityMetrics.pairwise_accuracy_pct,50);
+  assert.ok(Math.abs(logitMetrics.pairwise_log_loss-Math.log(2))<1e-7);
+  assert.ok(Math.abs(probabilityMetrics.pairwise_log_loss-Math.log(2))<1e-7);
+});
+
 test('TCN-LSTM pairwise return ranking loss orders high-return candidates above low-return candidates',()=>{
   const correct=tcnLstmPairwiseReturnRankingLoss(0.82,0.18);
   const reversed=tcnLstmPairwiseReturnRankingLoss(0.18,0.82);
@@ -1099,7 +1117,11 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.ok(result.candidates.every(item=>item.logistic_pairwise_ranking.holdout_values_used===false));
   assert.ok(result.candidates.every(item=>{
     const stageOnePassed=item.brier_improvement>0.00025&&
-      Number.isFinite(item.pairwise_ranking_improvement)&&item.pairwise_ranking_improvement>0;
+      Number.isFinite(item.pairwise_ranking_improvement)&&item.pairwise_ranking_improvement>0&&
+      item.ranking_head?.fitted===true&&item.ranking_head.weight_l2_norm>1e-8&&
+      item.pairwise_ranking.pairwise_accuracy_pct>50&&
+      item.pairwise_ranking.pairwise_accuracy_pct>
+        item.logistic_pairwise_ranking.pairwise_accuracy_pct;
     const stageTwoAttempted=stageOnePassed||item.stage_two_diagnostic_only===true;
     return stageTwoAttempted
       ?item.ranking_execution_selection.status!=='DEFERRED_UNTIL_DUAL_INNER_GATE'
