@@ -194,10 +194,10 @@ test('verifier rejects tampered parameters and an invalid OOS chronology contrac
     'a ranker artifact must reject a tuning record that does not preserve the four-hour internal purge');
 
   const forgedPurgeClock=makeProfile();
-  forgedPurgeClock.training.return_ranking.ranking_head.internal_training_validation.validation_min_at=1001;
+  forgedPurgeClock.training.return_ranking.ranking_head.internal_training_validation.validation_min_at+=1;
   assert.throws(()=>createOrderedTemporalRankerArtifact({profile:forgedPurgeClock,provenance}),
     /ORDERED_RANKER_ARTIFACT_VERIFY_FAILED:ORDERED_RANKER_TRAINING_BOUNDARY_INVALID/,
-    'the declared purge gap must equal the gap computed from the recorded decision timestamps');
+    'a one-millisecond timestamp change must invalidate a stale declared purge gap');
 
   const inconsistentEpochs=makeProfile();
   inconsistentEpochs.training.return_ranking.ranking_head.epochs_completed=3;
