@@ -2040,3 +2040,18 @@ test('execution-block ranker rejects row overlap and chronological leakage',()=>
     modelTrainingRows,earlierExecutionRows,profile.model
   ),/PURGE_VIOLATION/);
 });
+
+
+test('candidate fitting defers independent rank-head optimization until the later purged execution block',()=>{
+  const trainingRows=makeRankedRows(0,12,'ranker-deferred-fit');
+  const profile=trainTcnLstmHybrid(trainingRows,{
+    epochs:1,learningRate:0.0015,l2:0.001,batchSize:8,
+    seed:22443,maxTrainingSamples:48,
+    rankingRows:trainingRows,fitIndependentRankingHead:false
+  });
+  assert.equal(profile.training.return_ranking.ranking_head.fitted,false);
+  assert.equal(profile.training.return_ranking.ranking_head.reason,
+    'DEFERRED_TO_PURGED_EXECUTION_HEAD_BLOCK');
+  assert.ok(profile.model.rankingHeadWeights.every(value=>value===0));
+  assert.equal(profile.training.return_ranking.enabled,false);
+});
