@@ -4322,6 +4322,20 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       out_of_fold_logistic_baseline:false,
       ranker_fitted_once_for_all_classifier_candidates:true
     };
+    // If an independent candidate also opts into the separate shared
+    // classifier-ranking objective, build those gradients on the OOF-filtered
+    // classifier subset. Do not refit or redefine the frozen sidecar above.
+    if(candidates.some(config=>Number(config?.rankingWeight??0)>0)){
+      const sharedSupport=buildTcnLstmReturnRankingPairs(
+        effectiveTrainingRowsForFit,rankingEvidenceRows,{
+          roundTripCostBps,
+          minimumReturnGapPct:rankingMinimumReturnGapPct,
+          maxPairsPerTimestamp:rankingPairsPerTimestamp,
+          pairStrategy:rankingPairStrategy
+        }
+      );
+      if(sharedSupport.comparison_pairs>=10)rankingRowsForFit=rankingEvidenceRows;
+    }
   }else if(rankingTrainingEvidenceComplete){
     try{
       const support=buildTcnLstmReturnRankingPairs(
