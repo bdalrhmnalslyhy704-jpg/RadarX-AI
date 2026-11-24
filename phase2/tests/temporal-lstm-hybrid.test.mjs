@@ -8,6 +8,7 @@ import {
   TCN_LSTM_RECEPTIVE_FIELD,
   TCN_LSTM_HIDDEN,
   TCN_LSTM_RANKING_FEATURE_COUNT,
+  TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
   buildTcnLstmAnchorFeatures,
   fitTcnLstmLogisticAnchor,
   inspectTcnLstmForward,
@@ -491,6 +492,60 @@ test('training return-ranking pairs use net realized returns and group near-simu
   assert.ok(built.pairs.every(pair=>pair.high_index!==pair.low_index));
   const mismatched=rows.map((row,index)=>index===0?{...row,symbol:'WRONGUSDT'}:row);
   assert.throws(()=>buildTcnLstmReturnRankingPairs(fitRows,mismatched),/ROW_IDENTITY_MISMATCH/);
+});
+
+test('profitability-boundary rank pairs compare only positive net opportunities against non-positive outcomes',()=>{
+  const returnsByGroup=[
+    [4,2,-1,-3],
+    [-0.5,-1,-2,-3],
+    [1,1.2,2,3],
+    [3,2,-2,-4],
+    [-0.2,0.1,-0.1,0.8]
+  ];
+  const rows=returnsByGroup.flatMap((groupReturns,group)=>groupReturns.map(
+    (realized_return_pct,rank)=>{
+      const at=BASE+group*DAY+rank*75;
+      return {
+        id:'profit-boundary-'+group+'-'+rank,
+        symbol:'BOUNDARY'+rank+'USDT',
+        at,resolved_at:at+4*60*60*1000,
+        target:rank%2===0?1:0,
+        realized_return_pct,
+        sequence:makeSequence(rank<2?1:-1,group*0.031+rank*0.17),
+        temporal_sequence_timestamps:Array.from({length:24},(_,step)=>
+          at-(23-step)*900000)
+      };
+    }
+  ));
+  const fitRows=rows.map(({realized_return_pct,...row})=>row);
+  const options={
+    roundTripCostBps:30,minimumReturnGapPct:0.5,
+    maxPairsPerTimestamp:16,pairStrategy:'PROFITABILITY_BOUNDARY_V1'
+  };
+  const built=buildTcnLstmReturnRankingPairs(fitRows,rows,options);
+  assert.equal(built.pair_strategy,'PROFITABILITY_BOUNDARY_V1');
+  assert.equal(built.schema,'RADARX_TCN_LSTM_PROFITABILITY_BOUNDARY_RANK_PAIRS_V1');
+  assert.equal(built.decision_group_count,5);
+  assert.equal(built.mixed_decision_groups,3);
+  assert.equal(built.all_non_positive_groups,1);
+  assert.equal(built.all_positive_groups,1);
+  assert.equal(built.comparison_pairs,11);
+  assert.ok(built.pairs.every(pair=>{
+    const high=rows[pair.high_index].realized_return_pct-0.30;
+    const low=rows[pair.low_index].realized_return_pct-0.30;
+    return pair.pair_type==='POSITIVE_VS_NON_POSITIVE'&&high>0&&low<=0&&
+      high-low>=0.5;
+  }));
+
+  const logits=rows.map(row=>row.realized_return_pct>0.30?2:-2);
+  const metrics=summarizeTcnLstmPairwiseLogitRanking(rows,logits,{
+    ...options
+  });
+  assert.equal(metrics.status,'AVAILABLE');
+  assert.equal(metrics.pair_strategy,'PROFITABILITY_BOUNDARY_V1');
+  assert.equal(metrics.positive_vs_non_positive_pairs,11);
+  assert.equal(metrics.pairwise_accuracy_pct,100);
+  assert.equal(metrics.holdout_values_used,false);
 });
 
 test('pairwise return-ranking evaluation reports only selection-supplied ranking evidence',()=>{
@@ -1192,13 +1247,17 @@ test('TCN-LSTM shared classifier pairwise ranking loss backpropagates through th
 });
 
 test('TCN-LSTM inner selector scores pairwise ranking on its own purged selection partition',()=>{
-  const trainingRows=makeRankedRows(0,10,'selector-train');
-  const selectionRows=makeRankedRows(20,10,'selector-selection');
+  // The independent ranker fits on the earlier model-training block.
+  // Execution-head features must therefore be OOS for that ranker.
+  const trainingRows=makeRankedRows(0,50,'selector-train').map(row=>({
+    ...row,max_adverse_excursion_pct:row.target===1?-0.4:-1.1
+  }));
+  const selectionRows=makeRankedRows(60,10,'selector-selection');
   let externalContextProviderCalls=0;
   let externalContextPurgeVerified=false;
   let externalContextLabelIsolationVerified=false;
   const result=selectTcnLstmHybridHyperparameters(trainingRows,selectionRows,{
-    requiredImprovement:0.00025,maxTrainingSamples:40,seed:131,
+    requiredImprovement:0.00025,maxTrainingSamples:200,seed:131,
     roundTripCostBps:30,rankingScoreWeight:0.01,
     rankingMinimumReturnGapPct:0.5,rankingPairsPerTimestamp:4,
     requireExternalLogisticSelectionBaseline:true,
@@ -1326,6 +1385,14 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(pairwiseCandidate?.shared_classifier_training?.validation_or_holdout_used,false);
   assert.ok(result.candidates.every(item=>item.pairwise_ranking.status==='AVAILABLE'));
   assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
+  assert.ok(result.candidates.every(item=>
+    item.ranking_head?.source_partition==='PRE_EXECUTION_MODEL_TRAINING_PARTITION'&&
+    item.ranking_head?.feature_scoring_partition==='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'&&
+    item.ranking_head?.feature_scores_out_of_sample===true&&
+    item.ranking_head?.downstream_feature_contract?.out_of_sample_for_execution_head_features===true&&
+    item.ranking_head?.downstream_feature_contract?.training_and_execution_feature_identities_disjoint===true&&
+    item.ranking_head?.downstream_feature_contract?.chronology_valid===true
+  ),'every execution-head rank feature must be scored by a ranker fit on earlier disjoint training rows');
   assert.ok(result.candidates.every(item=>
     item.ranking_score_method==='RAW_INDEPENDENT_MULTISCALE_TEMPORAL_RANK_SCORE_V2'&&
     item.ranking_score_domain==='RAW_LINEAR_SCORE_NO_SIGMOID_NO_CLASSIFIER_LOGIT_ADDITION'
@@ -1983,3 +2050,153 @@ test('selective execution policy evaluates singleton 15m buckets without treatin
   assert.equal(policy.selected_trial.gates.beats_matched_logistic_anchor,false);
 });
 
+
+
+test('ordered 696-feature pairwise ranker fits training-only normalization and leaves classifier parameters unchanged',()=>{
+  const modelTrainingRows=makeRankedRows(0,12,'ordered-ranker-fit');
+  const executionFeatureRows=makeRankedRows(100,12,'ordered-ranker-execution');
+  const fitRows=modelTrainingRows.map(({realized_return_pct,...row})=>row);
+  const options={
+    epochs:1,learningRate:0.0015,l2:0.0005,batchSize:8,
+    seed:696224,maxTrainingSamples:fitRows.length,
+    rankingRows:modelTrainingRows,fitIndependentRankingHead:true,
+    rankingPairStrategy:'PROFITABILITY_BOUNDARY_V1',
+    rankingRepresentation:'RAW_ORDERED_696_V1'
+  };
+  const profile=trainTcnLstmHybrid(fitRows,options);
+  const classifierOnly=trainTcnLstmHybrid(fitRows,{
+    ...options,fitIndependentRankingHead:false
+  });
+  const ranker=profile.training.return_ranking.ranking_head;
+  assert.equal(ranker.fitted,true);
+  assert.equal(ranker.schema,'RADARX_TCN_LSTM_INDEPENDENT_ORDERED_696_RETURN_RANKER_V1');
+  assert.equal(ranker.representation,'RAW_ORDERED_696_V1');
+  assert.equal(ranker.fit_boundary,'TRAINING_PARTITION_ONLY');
+  assert.equal(ranker.feature_count,TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT);
+  assert.equal(ranker.feature_count,TCN_LSTM_STEPS*TCN_LSTM_INPUT_CHANNELS);
+  assert.equal(ranker.training_rows,modelTrainingRows.length);
+  assert.equal(ranker.training_pairs,48);
+  assert.equal(ranker.standardization.fit_partition,'TRAINING_PARTITION_ONLY');
+  assert.equal(ranker.standardization.fit_rows,modelTrainingRows.length);
+  assert.equal(ranker.feature_schema_id,
+    'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1');
+  assert.equal(ranker.classifier_parameters_updated,false);
+  assert.equal(ranker.validation_or_holdout_used,false);
+  assert.equal(profile.model.rankingRepresentation,'RAW_ORDERED_696_V1');
+  assert.equal(profile.model.orderedRankingHeadWeights.length,696);
+  assert.equal(profile.training.return_ranking.representation,'RAW_ORDERED_696_V1');
+  assert.equal(profile.training.return_ranking.comparison_pairs,48);
+
+  const withoutRankFields=model=>{
+    const copy=structuredClone(model);
+    delete copy.rankingRepresentation;
+    delete copy.rankingHeadWeights;
+    delete copy.rankingFeatureMean;
+    delete copy.rankingFeatureStd;
+    delete copy.orderedRankingHeadWeights;
+    delete copy.orderedRankingFeatureMean;
+    delete copy.orderedRankingFeatureStd;
+    return copy;
+  };
+  assert.deepEqual(withoutRankFields(profile.model),withoutRankFields(classifierOnly.model),
+    'the full-sequence rank head must not update any temporal classifier parameter');
+
+  const score=predictTcnLstmHybridRankingScore(modelTrainingRows[0].sequence,profile);
+  assert.ok(Number.isFinite(score));
+  const forward=inspectTcnLstmForward(
+    modelTrainingRows[0].sequence,profile.model,0
+  );
+  assert.equal(forward.ranking_representation,'RAW_ORDERED_696_V1');
+  assert.equal(forward.ranking_score_feature_count,696);
+  assert.equal(forward.ranking_score,score);
+
+  const trainingIds=new Set(modelTrainingRows.map(row=>String(row.id)));
+  assert.ok(executionFeatureRows.every(row=>!trainingIds.has(String(row.id))),
+    'later execution feature identities must be disjoint from the ranker fit rows');
+  const rankerMaxResolvedAt=Math.max(...modelTrainingRows.map(row=>row.resolved_at));
+  const executionMinAt=Math.min(...executionFeatureRows.map(row=>row.at));
+  assert.ok(rankerMaxResolvedAt<executionMinAt,
+    'all ranker labels must resolve before the later execution-feature block begins');
+  for(const row of executionFeatureRows.slice(0,4)){
+    const anchorLogit=predictTcnLstmLogisticLogit(row.sequence,profile.baseline_fit);
+    const executionFeatures=buildTcnLstmExecutionHeadInputFeatures(
+      row.sequence,profile.model,profile.baseline_fit,{
+        variant:'LOGIT_CONTEXT_AUGMENTED',
+        externalLogisticLogit:anchorLogit
+      }
+    );
+    const independentScore=predictTcnLstmHybridRankingScore(row.sequence,profile);
+    assert.equal(executionFeatures.independent_return_rank_score,independentScore);
+    assert.equal(executionFeatures.normalized_ranking_score,Math.tanh(independentScore/4));
+    assert.ok(Number.isFinite(executionFeatures.normalized_ranking_score));
+  }
+
+  const restored=JSON.parse(JSON.stringify(profile));
+  assert.equal(
+    predictTcnLstmHybridRankingScore(modelTrainingRows[0].sequence,restored),
+    score,
+    'fresh-process JSON state must preserve the independent ordered rank score'
+  );
+  assert.equal(profile.probability_ready,false);
+  assert.equal(profile.real_order_execution,false);
+});
+
+test('independent return ranker fits only the earlier model-training partition and produces out-of-sample execution-head features',()=>{
+  const modelTrainingRows=makeRankedRows(0,12,'ranker-model-fit');
+  const executionHeadRows=makeRankedRows(100,12,'ranker-execution-features');
+  const fitRows=modelTrainingRows.map(({realized_return_pct,...row})=>row);
+  const options={
+    epochs:1,learningRate:0.0015,l2:0.001,batchSize:8,
+    seed:22441,maxTrainingSamples:fitRows.length,
+    rankingRows:modelTrainingRows,fitIndependentRankingHead:true,
+    rankingPairStrategy:'PROFITABILITY_BOUNDARY_V1'
+  };
+  const profile=trainTcnLstmHybrid(fitRows,options);
+  const classifierOnly=trainTcnLstmHybrid(fitRows,{
+    ...options,fitIndependentRankingHead:false
+  });
+  const withoutRankFields=model=>{
+    const copy=structuredClone(model);
+    delete copy.rankingHeadWeights;
+    delete copy.rankingFeatureMean;
+    delete copy.rankingFeatureStd;
+    return copy;
+  };
+  const ranker=profile.training.return_ranking.ranking_head;
+  assert.equal(ranker.fitted,true);
+  assert.equal(ranker.fit_boundary,'TRAINING_PARTITION_ONLY');
+  assert.equal(ranker.training_rows,modelTrainingRows.length);
+  assert.equal(ranker.training_pairs,48);
+  assert.equal(profile.training.return_ranking.pair_strategy,'PROFITABILITY_BOUNDARY_V1');
+  assert.equal(profile.training.return_ranking.comparison_pairs,48);
+  assert.equal(ranker.standardization.fit_partition,'TRAINING_PARTITION_ONLY');
+  assert.equal(ranker.standardization.fit_rows,modelTrainingRows.length);
+  assert.equal(ranker.classifier_parameters_updated,false);
+  assert.equal(ranker.validation_or_holdout_used,false);
+  assert.ok(ranker.weight_l2_norm>1e-8);
+  assert.deepEqual(withoutRankFields(profile.model),withoutRankFields(classifierOnly.model),
+    'fitting the independent rank head must not update temporal classifier parameters');
+
+  const rankerIds=new Set(modelTrainingRows.map(row=>String(row.id)));
+  assert.ok(executionHeadRows.every(row=>!rankerIds.has(String(row.id))));
+  const rankerMaxResolvedAt=Math.max(...modelTrainingRows.map(row=>row.resolved_at));
+  const executionFeatureMinAt=Math.min(...executionHeadRows.map(row=>row.at));
+  assert.ok(rankerMaxResolvedAt<executionFeatureMinAt,
+    'all ranker labels must resolve before execution-head feature rows begin');
+
+  const row=executionHeadRows[0];
+  const externalLogisticLogit=predictTcnLstmLogisticLogit(
+    row.sequence,profile.baseline_fit
+  );
+  const features=buildTcnLstmExecutionHeadInputFeatures(
+    row.sequence,profile.model,profile.baseline_fit,{
+      variant:'LOGIT_CONTEXT_AUGMENTED',externalLogisticLogit
+    }
+  );
+  const rankingScore=predictTcnLstmHybridRankingScore(row.sequence,profile);
+  assert.equal(features.independent_return_rank_score,rankingScore);
+  assert.equal(features.normalized_ranking_score,Math.tanh(rankingScore/4));
+  assert.ok(Number.isFinite(features.normalized_ranking_score));
+  assert.equal(profile.probability_ready,false);
+  assert.equal(profile.real_order_execution,false);
+});

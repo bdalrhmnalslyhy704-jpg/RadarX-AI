@@ -1401,9 +1401,12 @@ async function main(){
           minimumReturnWinRatePct:55,
           rankingScoreWeight:0.01,
           rankingMinimumReturnGapPct:0.50,
-          // Use every available top-four versus bottom-four extreme comparison per timestamp.
-          // This raises the prior 8-pair budget to the complete 16-pair set where available.
-          // The classifier remains pure Brier; ranking scores stay in their own sidecar.
+          rankingPairStrategy:'PROFITABILITY_BOUNDARY_V1',
+          rankingRepresentation:'RAW_ORDERED_696_V1',
+          // Preserve the entire ordered 24x29 history in the independent rank sidecar.
+          // Its scaler and weights fit only the earlier purged training rows.
+          // Net-profitability pair labels, 30 bps cost and 0.50pp gap remain fixed.
+          // The temporal classifier remains pure Brier and is not updated by this ranker.
           rankingPairsPerTimestamp:16,
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
