@@ -1401,8 +1401,9 @@ async function main(){
           minimumReturnWinRatePct:55,
           rankingScoreWeight:0.01,
           rankingMinimumReturnGapPct:0.50,
-          // Use every available top-four versus bottom-four extreme comparison per timestamp.
-          // This raises the prior 8-pair budget to the complete 16-pair set where available.
+          rankingPairStrategy:'PROFITABILITY_BOUNDARY_V1',
+          // Rank only positive net-return opportunities against non-positive outcomes
+          // inside the same 15m decision cohort. The 30 bps cost and 0.50pp gap remain fixed.
           // The classifier remains pure Brier; ranking scores stay in their own sidecar.
           rankingPairsPerTimestamp:16,
           rankingHeadLearningRate:0.03,
