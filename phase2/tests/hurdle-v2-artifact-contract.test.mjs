@@ -201,7 +201,20 @@ before(async () => {
     randomSeed: 22429,
     innerQualified: false,
     objectiveId: HURDLE_V2_OBJECTIVE,
-    selectionObjectiveId: 'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6'
+    selectionObjectiveId: 'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6',
+    orderedRankingDependency: {
+      artifact_schema:'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V1',
+      artifact_path:'model-artifacts/TCN_LSTM_ORDERED_RANKER.json',
+      manifest_path:'model-artifacts/TCN_LSTM_ORDERED_RANKER.manifest.json',
+      artifact_content_hash:'5'.repeat(64),
+      artifact_manifest_hash:'6'.repeat(64),
+      code_commit_sha:'1f845f944b0f5119a2bb6b08aeeaf1d48178f1ec',
+      dataset_sha256:'f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77',
+      input_file_sha256:'f16adcbb88fb64e4d79626c1cf0e4c8d461bd33a3c0f598223ac809c28b0ff3d',
+      representation:'RAW_ORDERED_696_V1',
+      feature_schema_id:'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1',
+      feature_count:696,validation_or_holdout_used:false,holdout_status:'LOCKED'
+    }
   };
   artifact = createHurdleV2Artifact(fixture);
   directory = await mkdtemp(join(tmpdir(), 'radarx-hurdle-v2-'));
@@ -225,6 +238,17 @@ test('03. artifact contains both independently serialized heads', () => {
   assert.equal(artifact.pooled_head_present, true);
   assert.equal(artifact.contextual_head_parameters.weights.length, 44);
   assert.equal(artifact.pooled_head_parameters.weights.length, 8);
+  assert.equal(artifact.upstream_ordered_ranker_dependency.feature_count,696);
+  assert.equal(artifact.upstream_ordered_ranker_dependency.representation,'RAW_ORDERED_696_V1');
+});
+test('03b. Hurdle rejects an upstream ordered-ranker dependency with mismatched provenance',()=>{
+  const invalid=structuredClone(fixture);
+  invalid.orderedRankingDependency.dataset_sha256='9'.repeat(64);
+  assert.throws(()=>createHurdleV2Artifact(invalid),
+    /HURDLE_V2_ORDERED_RANKER_DEPENDENCY_INVALID/);
+  const changed=JSON.parse(JSON.stringify(artifact));
+  changed.upstream_ordered_ranker_dependency.artifact_content_hash='7'.repeat(64);
+  assert.equal(verifyHurdleV2Artifact(changed).reason,'CONTENT_HASH_MISMATCH');
 });
 test('04. artifact records complete code, dataset, target, split and cost provenance', () => {
   assert.equal(artifact.code_commit_sha, fixture.codeCommitSha);

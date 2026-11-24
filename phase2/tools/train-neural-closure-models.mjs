@@ -60,6 +60,9 @@ import {
   HURDLE_V2_OBJECTIVE
 } from '../core/hurdle-v2-artifact-contract.mjs';
 import {
+  createOrderedTemporalRankerArtifact,writeOrderedTemporalRankerArtifactAtomic
+} from '../core/ordered-temporal-ranker-artifact.mjs';
+import {
   fitTunedTemporalLogisticBaseline,predictTemporalLogisticProbability,
   predictCrossFittedCalibratedTemporalLogisticProbability,
   evaluateBinaryProbabilityMetrics
@@ -391,6 +394,7 @@ async function main(){
   const trainingArtifacts={};
   const unavailable={};
   let hurdleV2ExportStatus=null;
+  let orderedRankerExportStatus=null;
   const logisticTrainingVectors=split.train.map(row=>
     buildTcnLstmFlattenedFeatures(row.temporal_sequence));
   const fixedLogisticFit=fitLogisticBaseline(split.train);
@@ -1504,7 +1508,37 @@ async function main(){
         ):{fitted:false,reason:'INNER_SELECTION_DID_NOT_QUALIFY'};
         const innerQualified=selection.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY'&&
           selectedFit!==null&&calibrator.fitted===true;
+        if(selectedFit?.model?.rankingRepresentation==='RAW_ORDERED_696_V1'){
+          const orderedRankerArtifact=createOrderedTemporalRankerArtifact({
+            profile:selectedFit,
+            provenance:{
+              sourceCommitSha,datasetSha256:datasetSha,
+              inputFileSha256,datasetSourceCommitSha,
+              datasetRowCount:rows.length,
+              targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+              targetSemantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+              featureNames:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES,
+              roundTripCostBps:args.roundTripCostBps,
+              splitDefinition:{
+                schema:split.schema,purge_ms:split.purge_ms,
+                counts:{train:split.train.length,validation:split.validation.length,
+                  holdout:split.holdout.length},
+                boundaries:split.boundaries
+              }
+            }
+          });
+          orderedRankerExportStatus=await writeOrderedTemporalRankerArtifactAtomic(
+            join(dirname(outputPath),'model-artifacts'),orderedRankerArtifact
+          );
+        }else{
+          orderedRankerExportStatus={
+            status:'NOT_EXPORTED',
+            reason:'SELECTED_TCN_LSTM_FIT_HAS_NO_RAW_ORDERED_696_RANKER'
+          };
+        }
         const hurdleHeadsAvailable=selectedFit?.model?.executionRegressionHeadsFitted===true&&
+          orderedRankerExportStatus?.dependency!==undefined&&
+          orderedRankerExportStatus?.dependency!==null&&
           selectedFit?.model?.executionHeadInputFeatureSchema===TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA&&
           selectedFit?.model?.executionHurdleReturnHeads?.LOGIT_CONTEXT_AUGMENTED?.fitted===true&&
           selectedFit?.model?.executionHurdleReturnHeads?.POOLED_ONLY?.fitted===true&&
@@ -1526,6 +1560,7 @@ async function main(){
             codeCommitSha:sourceCommitSha,
             roundTripCostBps:args.roundTripCostBps,
             randomSeed:22429,innerQualified,
+            orderedRankingDependency:orderedRankerExportStatus?.dependency??null,
             objectiveId:HURDLE_V2_OBJECTIVE,
             selectionObjectiveId:selection.selection_scoring?.method??
               'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6'
@@ -1538,6 +1573,7 @@ async function main(){
             qualification_status:innerQualified
               ?'INNER_QUALIFIED_FOR_OUTER_REPLAY':'NOT_QUALIFIED',
             selection_status:selection.status,
+            ordered_ranker_dependency:orderedRankerExportStatus?.dependency??null,
             execution_ablation:selection.execution_head_context_ablation??selection.execution_head_context_ablation_qualification?.result??null,
             selection_scoring:selection.selection_scoring??null
           };
@@ -1549,6 +1585,7 @@ async function main(){
             training_status:'TRAINED',
             evaluation_status:innerQualified?'INNER_QUALIFIED':'NOT_QUALIFIED',
             contextual_head_present:true,pooled_head_present:true,
+            ordered_ranker_artifact:orderedRankerExportStatus,
             reload_status:'FRESH_PROCESS_RELOAD_VERIFIED',
             inner_qualification_status:selection.status,
             promotion_status:'NOT_APPROVED'
@@ -1908,6 +1945,7 @@ async function main(){
       split_id:split.schema,split_counts:{train:split.train.length,
         validation:split.validation.length,holdout:split.holdout.length},
       hurdle_v2:hurdleV2ExportStatus,
+      ordered_temporal_ranker:orderedRankerExportStatus,
       tcn_lstm_inner_diagnostics:training.model_internal_diagnostics?.TCN_LSTM_HYBRID??null,
       logistic_baseline_cv:logisticTuning.report??null,
       holdout:{status:'LOCKED',opened:false,predictions_generated:false,
@@ -1918,17 +1956,39 @@ async function main(){
     await atomicJson(outputPath,innerOnlyReport);
     const innerDiagnostic=innerOnlyReport.tcn_lstm_inner_diagnostics??{};
     const executionAblation=innerOnlyReport.hurdle_v2?.execution_ablation??{};
-    const candidateSummary=(innerDiagnostic.candidates??[]).map(candidate=>({
-      name:candidate.name??null,
-      selection_brier:candidate.selection_brier??null,
-      brier_improvement:candidate.brier_improvement??null,
-      pairwise_ranking_improvement:candidate.pairwise_ranking_improvement??null,
-      independent_ranking_signal_passed:
-        candidate.independent_ranking_signal_passed??null,
-      execution_head_context_ablation_passed:
-        candidate.execution_head_context_ablation_passed??null,
-      passed_inner_margin:candidate.passed_inner_margin??null
-    }));
+    const candidateSummary=(innerDiagnostic.candidates??[]).map(candidate=>{
+      const ranker=candidate.ranking_head??null;
+      const ranking=candidate.pairwise_ranking??null;
+      const logisticRanking=candidate.logistic_pairwise_ranking??null;
+      return {
+        name:candidate.name??null,
+        selection_brier:candidate.selection_brier??null,
+        brier_improvement:candidate.brier_improvement??null,
+        pairwise_ranking_improvement:candidate.pairwise_ranking_improvement??null,
+        pairwise_ranking_accuracy_improvement_pct:
+          candidate.pairwise_ranking_accuracy_improvement_pct??null,
+        candidate_pairwise_log_loss:ranking?.pairwise_log_loss??null,
+        candidate_pairwise_accuracy_pct:ranking?.pairwise_accuracy_pct??null,
+        logistic_pairwise_log_loss:logisticRanking?.pairwise_log_loss??null,
+        logistic_pairwise_accuracy_pct:logisticRanking?.pairwise_accuracy_pct??null,
+        ranker_fit:{
+          fitted:ranker?.fitted??false,
+          representation:ranker?.representation??null,
+          training_rows:ranker?.training_rows??null,
+          training_pairs:ranker?.training_pairs??null,
+          initial_pairwise_log_loss:ranker?.initial_pairwise_log_loss??null,
+          final_pairwise_log_loss:ranker?.final_pairwise_log_loss??null,
+          epochs_completed:ranker?.epochs_completed??null,
+          weight_l2_norm:ranker?.weight_l2_norm??null,
+          validation_or_holdout_used:ranker?.validation_or_holdout_used??null
+        },
+        independent_ranking_signal_passed:
+          candidate.independent_ranking_signal_passed??null,
+        execution_head_context_ablation_passed:
+          candidate.execution_head_context_ablation_passed??null,
+        passed_inner_margin:candidate.passed_inner_margin??null
+      };
+    });
     console.log(JSON.stringify({
       schema:innerOnlyReport.schema,
       status:innerOnlyReport.status,
