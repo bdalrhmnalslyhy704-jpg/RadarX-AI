@@ -1407,7 +1407,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.ok(result.candidates.every(item=>
     item.ranking_score_method==='RAW_ORDERED_696_INDEPENDENT_PAIRWISE_RANK_SCORE_V1'&&
     item.ranking_score_domain==='RAW_LINEAR_SCORE_NO_SIGMOID_NO_CLASSIFIER_LOGIT_ADDITION'&&
-    item.fit.training.return_ranking.independent_ranker_fit_mode===
+    item.independent_ranker_fit_mode===
       'FITTED_ONCE_ON_COMPLETE_PRE_EXECUTION_MODEL_TRAINING_PARTITION'
   ));
   assert.equal(result.selection_scoring.score_separation_method,
