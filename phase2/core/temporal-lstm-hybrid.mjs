@@ -2975,7 +2975,7 @@ export function trainTcnLstmHybrid(trainingRows, {
   rankingRows=null,executionRows=null,rankingWeight=0,rankingRoundTripCostBps=30,
   rankingMinimumReturnGapPct=0.50,rankingPairsPerTimestamp=4,
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001,
-  executionHeadRoundTripCostBps=30,executionHeadLearningRate=0.015,
+  fitIndependentRankingHead=true,executionHeadRoundTripCostBps=30,executionHeadLearningRate=0.015,
   executionHeadEpochs=100,executionHeadL2=0.002
 } = {}) {
   assertRows(trainingRows, 'TRAINING');
@@ -3024,7 +3024,8 @@ export function trainTcnLstmHybrid(trainingRows, {
   if(!finite(rankingHeadLearningRate)||rankingHeadLearningRate<=0||
     rankingHeadLearningRate>0.25||!Number.isInteger(rankingHeadEpochs)||
     rankingHeadEpochs<1||rankingHeadEpochs>200||
-    !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1)
+    !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1||
+    typeof fitIndependentRankingHead!=='boolean')
     throw new TypeError('TCN_LSTM_RANKING_HEAD_CONFIGURATION_INVALID');
   const ranking=Array.isArray(rankingRows)
     ?buildTcnLstmReturnRankingPairs(rows,rankingRows,{
@@ -3240,14 +3241,19 @@ export function trainTcnLstmHybrid(trainingRows, {
   }
 
   Object.assign(model, cloneTree(bestModel));
-  const rankingHeadFit=rankingPairs.length
+  const rankingHeadFit=fitIndependentRankingHead&&rankingPairs.length
     ?fitTcnLstmPairwiseRankingHead(rows,rankingPairs,model,anchor,{
       learningRate:rankingHeadLearningRate,epochs:rankingHeadEpochs,
       l2:rankingHeadL2,patience:Math.min(20,Math.max(5,earlyStoppingPatience*2))
     })
-    :{schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
-      fitted:false,reason:'NO_TRAINING_PARTITION_RETURN_PAIRS',
-      fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false};
+    :{schema:'RADARX_TCN_LSTM_INDEPENDENT_MULTISCALE_RETURN_RANKER_V2',
+      fitted:false,
+      reason:fitIndependentRankingHead
+        ?'NO_TRAINING_PARTITION_RETURN_PAIRS'
+        :'DEFERRED_TO_PURGED_EXECUTION_HEAD_BLOCK',
+      fit_boundary:'TRAINING_PARTITION_ONLY',
+      training_rows:rows.length,training_pairs:rankingPairs.length,
+      validation_or_holdout_used:false};
   const executionHeadFit=Array.isArray(executionRows)
     ?{
       ...fitTcnLstmExecutionRegressionHeads(executionRows,executionRows,model,anchor,{
@@ -4028,6 +4034,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       rankingWeight:Number(config.rankingWeight??0),
       rankingHeadLearningRate:candidateRankingHeadLearningRate,
       rankingHeadEpochs,rankingHeadL2,
+      fitIndependentRankingHead:false,
       rankingRoundTripCostBps:roundTripCostBps,
       rankingMinimumReturnGapPct:rankingMinimumReturnGapPct,
       rankingPairsPerTimestamp:rankingPairsPerTimestamp,
@@ -4048,6 +4055,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     fit.training.return_ranking.model_training_partition_ranker=
       modelTrainingPartitionRanker;
     fit.training.return_ranking.ranking_head=executionBlockRanker;
+    fit.training.return_ranking.enabled=executionBlockRanker.fitted===true;
     fit.training.return_ranking.source_partition=executionBlockRanker.source_partition;
     fit.training.return_ranking.training_rows=executionBlockRanker.training_rows;
     fit.training.return_ranking.comparison_pairs=executionBlockRanker.comparison_pairs;
@@ -4343,6 +4351,14 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       execution_head_split:executionHeadSplit.diagnostics
     },
     ranking_training_pair_support:rankingTrainingPairSupport,
+    execution_block_ranking_pair_support:{
+      source_partition:winner.fit?.training?.return_ranking?.source_partition??null,
+      training_rows:winner.fit?.training?.return_ranking?.training_rows??0,
+      decision_group_count:winner.fit?.training?.return_ranking?.decision_group_count??0,
+      comparison_pairs:winner.fit?.training?.return_ranking?.comparison_pairs??0,
+      chronology_valid:winner.fit?.training?.execution_block_ranker?.chronology_valid===true,
+      validation_or_holdout_used:false
+    },
     baseline: {
       kind:innerSelectionBaseline.source,
       training_rows:innerSelectionBaseline.source==='TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW'
