@@ -10,6 +10,7 @@ import {
   TCN_LSTM_RANKING_FEATURE_COUNT,
   buildTcnLstmAnchorFeatures,
   fitTcnLstmLogisticAnchor,
+  fitTcnLstmExecutionBlockRankingHead,
   inspectTcnLstmForward,
   lossAndGradientsTcnLstmHybrid,
   projectTcnLstmAuxiliaryGradient,
@@ -1983,3 +1984,59 @@ test('selective execution policy evaluates singleton 15m buckets without treatin
   assert.equal(policy.selected_trial.gates.beats_matched_logistic_anchor,false);
 });
 
+
+
+test('independent return ranker fits the later purged execution block and leaves the temporal classifier frozen',()=>{
+  const modelTrainingRows=makeRows(0,60,'ranker-model-fit');
+  const executionHeadRows=makeRankedRows(100,12,'ranker-execution-fit');
+  const profile=trainTcnLstmHybrid(modelTrainingRows,{
+    epochs:1,learningRate:0.0015,l2:0.001,batchSize:8,
+    seed:22441,maxTrainingSamples:60
+  });
+  const withoutRankFields=model=>{
+    const copy=structuredClone(model);
+    delete copy.rankingHeadWeights;
+    delete copy.rankingFeatureMean;
+    delete copy.rankingFeatureStd;
+    return copy;
+  };
+  const classifierBefore=withoutRankFields(profile.model);
+  const fitted=fitTcnLstmExecutionBlockRankingHead(
+    modelTrainingRows,executionHeadRows,profile.model,{
+      roundTripCostBps:30,minimumReturnGapPct:0.5,
+      maxPairsPerTimestamp:16,learningRate:0.03,epochs:40,l2:0.001,patience:10
+    }
+  );
+  assert.equal(fitted.fitted,true);
+  assert.equal(fitted.source_partition,'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK');
+  assert.equal(fitted.fit_boundary,'TRAINING_PARTITION_ONLY');
+  assert.equal(fitted.model_training_rows,modelTrainingRows.length);
+  assert.equal(fitted.execution_head_rows,executionHeadRows.length);
+  assert.equal(fitted.decision_group_count,12);
+  assert.equal(fitted.comparison_pairs,12);
+  assert.equal(fitted.chronology_valid,true);
+  assert.equal(fitted.training_and_model_fit_identities_disjoint,true);
+  assert.equal(fitted.validation_or_holdout_used,false);
+  assert.ok(fitted.weight_l2_norm>1e-8);
+  assert.deepEqual(withoutRankFields(profile.model),classifierBefore,
+    'the execution-block ranker must not update TCN/LSTM classifier parameters');
+  const rankingScore=predictTcnLstmHybridRankingScore(
+    executionHeadRows[0].sequence,profile
+  );
+  assert.ok(Number.isFinite(rankingScore));
+});
+
+test('execution-block ranker rejects row overlap and chronological leakage',()=>{
+  const modelTrainingRows=makeRows(0,60,'ranker-purge-fit');
+  const profile=trainTcnLstmHybrid(modelTrainingRows,{
+    epochs:1,learningRate:0.0015,l2:0.001,batchSize:8,
+    seed:22442,maxTrainingSamples:60
+  });
+  assert.throws(()=>fitTcnLstmExecutionBlockRankingHead(
+    modelTrainingRows,modelTrainingRows,profile.model
+  ),/IDENTITY_OVERLAP/);
+  const earlierExecutionRows=makeRankedRows(10,12,'ranker-early-execution');
+  assert.throws(()=>fitTcnLstmExecutionBlockRankingHead(
+    modelTrainingRows,earlierExecutionRows,profile.model
+  ),/PURGE_VIOLATION/);
+});
