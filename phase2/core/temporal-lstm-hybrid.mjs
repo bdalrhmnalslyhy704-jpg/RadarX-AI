@@ -3228,9 +3228,11 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   const fitGroups=new Set(groups.slice(0,fitGroupCount));
   const tuningRows=ordered.filter(row=>fitGroups.has(bucketAt(row)));
   const tuningMaxResolvedAt=Math.max(...tuningRows.map(row=>Number(row.resolved_at)));
-  const validationRows=ordered.filter(row=>bucketAt(row)>tuningMaxResolvedAt);
+  const tuningMaxAt=Math.max(...tuningRows.map(row=>Number(row.at)));
+  const validationStartAfter=Math.max(tuningMaxResolvedAt,tuningMaxAt+purgeHorizonMs);
+  const validationRows=ordered.filter(row=>bucketAt(row)>validationStartAfter);
   const purgedRows=ordered.filter(row=>!fitGroups.has(bucketAt(row))&&
-    bucketAt(row)<=tuningMaxResolvedAt);
+    bucketAt(row)<=validationStartAfter);
   const tuningPairSupport=buildTcnLstmReturnRankingPairs(tuningRows,tuningRows,{
     roundTripCostBps,minimumReturnGapPct,maxPairsPerTimestamp,
     pairStrategy:'PROFITABILITY_BOUNDARY_V1'
@@ -3243,8 +3245,9 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   if(tuningRows.length<20||tuningPairSupport.comparison_pairs<10||
     validationRows.length<20||validationPairSupport.comparison_pairs<10)
     throw new TypeError('TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_SPLIT_SUPPORT_TOO_SMALL');
-  if(!(Math.max(...tuningRows.map(row=>Number(row.resolved_at)))<
-    Math.min(...validationRows.map(row=>Number(row.at)))))
+  const validationMinAt=Math.min(...validationRows.map(row=>Number(row.at)));
+  const internalPurgeGapMs=validationMinAt-tuningMaxAt;
+  if(!(tuningMaxResolvedAt<validationMinAt)||internalPurgeGapMs<purgeHorizonMs)
     throw new TypeError('TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGE_VIOLATION');
   const tuningCandidates=[];
   for(const candidateL2 of l2Grid){
@@ -3299,7 +3302,9 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     model_selection_partition_used:false,
     purge_horizon_ms:purgeHorizonMs,
     tuning_max_resolved_at:tuningMaxResolvedAt,
-    validation_min_at:Math.min(...validationRows.map(row=>Number(row.at))),
+    tuning_max_at:tuningMaxAt,
+    validation_min_at:validationMinAt,
+    purge_gap_ms:internalPurgeGapMs,
     chronology_valid:true,
     tuning_rows:tuningRows.length,
     validation_rows:validationRows.length,
