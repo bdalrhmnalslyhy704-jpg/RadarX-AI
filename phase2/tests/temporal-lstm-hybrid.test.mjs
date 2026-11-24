@@ -493,6 +493,60 @@ test('training return-ranking pairs use net realized returns and group near-simu
   assert.throws(()=>buildTcnLstmReturnRankingPairs(fitRows,mismatched),/ROW_IDENTITY_MISMATCH/);
 });
 
+test('profitability-boundary rank pairs compare only positive net opportunities against non-positive outcomes',()=>{
+  const returnsByGroup=[
+    [4,2,-1,-3],
+    [-0.5,-1,-2,-3],
+    [1,1.2,2,3],
+    [3,2,-2,-4],
+    [-0.2,0.1,-0.1,0.8]
+  ];
+  const rows=returnsByGroup.flatMap((groupReturns,group)=>groupReturns.map(
+    (realized_return_pct,rank)=>{
+      const at=BASE+group*DAY+rank*75;
+      return {
+        id:'profit-boundary-'+group+'-'+rank,
+        symbol:'BOUNDARY'+rank+'USDT',
+        at,resolved_at:at+4*60*60*1000,
+        target:rank%2===0?1:0,
+        realized_return_pct,
+        sequence:makeSequence(rank<2?1:-1,group*0.031+rank*0.17),
+        temporal_sequence_timestamps:Array.from({length:24},(_,step)=>
+          at-(23-step)*900000)
+      };
+    }
+  ));
+  const fitRows=rows.map(({realized_return_pct,...row})=>row);
+  const options={
+    roundTripCostBps:30,minimumReturnGapPct:0.5,
+    maxPairsPerTimestamp:16,pairStrategy:'PROFITABILITY_BOUNDARY_V1'
+  };
+  const built=buildTcnLstmReturnRankingPairs(fitRows,rows,options);
+  assert.equal(built.pair_strategy,'PROFITABILITY_BOUNDARY_V1');
+  assert.equal(built.schema,'RADARX_TCN_LSTM_PROFITABILITY_BOUNDARY_RANK_PAIRS_V1');
+  assert.equal(built.decision_group_count,5);
+  assert.equal(built.mixed_decision_groups,3);
+  assert.equal(built.all_non_positive_groups,1);
+  assert.equal(built.all_positive_groups,1);
+  assert.equal(built.comparison_pairs,11);
+  assert.ok(built.pairs.every(pair=>{
+    const high=rows[pair.high_index].realized_return_pct-0.30;
+    const low=rows[pair.low_index].realized_return_pct-0.30;
+    return pair.pair_type==='POSITIVE_VS_NON_POSITIVE'&&high>0&&low<=0&&
+      high-low>=0.5;
+  }));
+
+  const logits=rows.map(row=>row.realized_return_pct>0.30?2:-2);
+  const metrics=summarizeTcnLstmPairwiseLogitRanking(rows,logits,{
+    ...options
+  });
+  assert.equal(metrics.status,'AVAILABLE');
+  assert.equal(metrics.pair_strategy,'PROFITABILITY_BOUNDARY_V1');
+  assert.equal(metrics.positive_vs_non_positive_pairs,11);
+  assert.equal(metrics.pairwise_accuracy_pct,100);
+  assert.equal(metrics.holdout_values_used,false);
+});
+
 test('pairwise return-ranking evaluation reports only selection-supplied ranking evidence',()=>{
   const rows=makeRankedRows(0,10,'rank-eval');
   const probabilities=rows.map(row=>[0.84,0.72,0.28,0.16][Number(row.id.split('-').at(-1))]);
@@ -2004,7 +2058,8 @@ test('independent return ranker fits only the earlier model-training partition a
   const options={
     epochs:1,learningRate:0.0015,l2:0.001,batchSize:8,
     seed:22441,maxTrainingSamples:fitRows.length,
-    rankingRows:modelTrainingRows,fitIndependentRankingHead:true
+    rankingRows:modelTrainingRows,fitIndependentRankingHead:true,
+    rankingPairStrategy:'PROFITABILITY_BOUNDARY_V1'
   };
   const profile=trainTcnLstmHybrid(fitRows,options);
   const classifierOnly=trainTcnLstmHybrid(fitRows,{
@@ -2021,7 +2076,9 @@ test('independent return ranker fits only the earlier model-training partition a
   assert.equal(ranker.fitted,true);
   assert.equal(ranker.fit_boundary,'TRAINING_PARTITION_ONLY');
   assert.equal(ranker.training_rows,modelTrainingRows.length);
-  assert.equal(ranker.training_pairs,12);
+  assert.equal(ranker.training_pairs,48);
+  assert.equal(profile.training.return_ranking.pair_strategy,'PROFITABILITY_BOUNDARY_V1');
+  assert.equal(profile.training.return_ranking.comparison_pairs,48);
   assert.equal(ranker.standardization.fit_partition,'TRAINING_PARTITION_ONLY');
   assert.equal(ranker.standardization.fit_rows,modelTrainingRows.length);
   assert.equal(ranker.classifier_parameters_updated,false);
