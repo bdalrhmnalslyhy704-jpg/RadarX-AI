@@ -91,7 +91,7 @@ jobs:
 
   hurdle-v2-inner-training:
     name: Train Hurdle V2 and qualify on inner data only
-    if: github.event_name == 'pull_request' && (github.head_ref == 'research/build224-hurdle-v2-artifact-export-20261122' || github.head_ref == 'research/build224-purged-execution-block-ranker-20261124')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'research/build224-hurdle-v2-artifact-export-20261122' || github.head_ref == 'research/build224-purged-execution-block-ranker-20261124' || github.head_ref == 'research/build224-ordered-ranker-persistence-20261124')
     needs: tcn-v11-regression
     runs-on: ubuntu-latest
     timeout-minutes: 120
