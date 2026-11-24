@@ -192,6 +192,19 @@ test('verifier rejects tampered parameters and an invalid OOS chronology contrac
   assert.equal(verifyOrderedTemporalRankerArtifact(forgedTuning).reason,
     'ORDERED_RANKER_TRAINING_BOUNDARY_INVALID',
     'a ranker artifact must reject a tuning record that does not preserve the four-hour internal purge');
+
+  const forgedPurgeClock=makeProfile();
+  forgedPurgeClock.training.return_ranking.ranking_head.internal_training_validation.validation_min_at=1001;
+  assert.throws(()=>createOrderedTemporalRankerArtifact({profile:forgedPurgeClock,provenance}),
+    /ORDERED_RANKER_ARTIFACT_VERIFY_FAILED:ORDERED_RANKER_TRAINING_BOUNDARY_INVALID/,
+    'the declared purge gap must equal the gap computed from the recorded decision timestamps');
+
+  const inconsistentEpochs=makeProfile();
+  inconsistentEpochs.training.return_ranking.ranking_head.epochs_completed=3;
+  inconsistentEpochs.training.return_ranking.ranking_head.best_epoch=4;
+  assert.throws(()=>createOrderedTemporalRankerArtifact({profile:inconsistentEpochs,provenance}),
+    /ORDERED_RANKER_ARTIFACT_VERIFY_FAILED:ORDERED_RANKER_TRAINING_BOUNDARY_INVALID/,
+    'the selected epoch cannot exceed the epochs actually completed');
 });
 
 test('atomic sidecar export reloads and verifies both artifact and manifest',async()=>{
