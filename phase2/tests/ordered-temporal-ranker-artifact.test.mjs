@@ -62,7 +62,45 @@ function makeProfile(overrides={}){
     validation_or_holdout_used:false,
     downstream_feature_contract:structuredClone(contract),
     initial_pairwise_log_loss:0.693,
-    final_pairwise_log_loss:0.62
+    final_pairwise_log_loss:0.62,
+    learning_rate:0.03,
+    l2:0.05,
+    epochs_requested:8,
+    epochs_completed:8,
+    best_epoch:8,
+    patience:8,
+    internal_training_validation:{
+      schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_TRAINING_VALIDATION_V1',
+      source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY',
+      fit_partition:'EARLIER_SUBSET_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
+      validation_partition:'LATER_PURGED_SUBSET_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
+      outer_validation_or_holdout_used:false,
+      model_selection_partition_used:false,
+      purge_horizon_ms:14400000,
+      tuning_max_resolved_at:1000,
+      tuning_max_at:500,
+      validation_min_at:14400501,
+      purge_gap_ms:14400001,
+      chronology_valid:true,
+      tuning_rows:24,
+      validation_rows:24,
+      purged_rows:4,
+      tuning_pairs:48,
+      validation_pairs:16,
+      candidate_grid:[
+        {l2:0.001,best_epoch:6,best_validation_pairwise_log_loss:0.61,
+          training_rows:24,validation_rows:24,purged_rows:4,
+          training_pairs:48,validation_pairs:16},
+        {l2:0.05,best_epoch:8,best_validation_pairwise_log_loss:0.58,
+          training_rows:24,validation_rows:24,purged_rows:4,
+          training_pairs:48,validation_pairs:16}
+      ],
+      selected_l2:0.05,
+      selected_epochs:8,
+      selected_validation_pairwise_log_loss:0.58,
+      final_refit_rows:trainingRows,
+      final_refit_pairs:96
+    }
   };
   const profile={
     model:{
@@ -115,6 +153,13 @@ test('ordered raw 696 ranker exports a fully checksummed training-only artifact'
   assert.equal(artifact.parameters.feature_std.length,696);
   assert.equal(artifact.training_provenance.fit_partition,'TRAINING_PARTITION_ONLY');
   assert.equal(artifact.training_provenance.validation_or_holdout_used,false);
+  assert.equal(artifact.training_provenance.ranker_training_config.l2,0.05);
+  assert.equal(artifact.training_provenance.ranker_training_config.epochs_requested,8);
+  assert.equal(artifact.training_provenance.internal_training_validation.selected_l2,0.05);
+  assert.equal(artifact.training_provenance.internal_training_validation.selected_epochs,8);
+  assert.equal(artifact.training_provenance.internal_training_validation.purge_gap_ms,14400001);
+  assert.equal(artifact.artifact_manifest.ranker_training_config_sha256.length,64);
+  assert.equal(artifact.artifact_manifest.internal_training_validation_sha256.length,64);
   assert.equal(artifact.holdout_status,'LOCKED');
   assert.equal(artifact.real_order_execution,false);
   assert.equal(verification.content_hash.length,64);
@@ -142,6 +187,11 @@ test('verifier rejects tampered parameters and an invalid OOS chronology contrac
   broken.training.return_ranking.ranking_head.downstream_feature_contract.execution_feature_min_at=900;
   assert.throws(()=>createOrderedTemporalRankerArtifact({profile:broken,provenance}),
     /ORDERED_RANKER_ARTIFACT_VERIFY_FAILED:ORDERED_RANKER_TRAINING_BOUNDARY_INVALID/);
+  const forgedTuning=structuredClone(artifact);
+  forgedTuning.training_provenance.internal_training_validation.purge_gap_ms=1;
+  assert.equal(verifyOrderedTemporalRankerArtifact(forgedTuning).reason,
+    'ORDERED_RANKER_TRAINING_BOUNDARY_INVALID',
+    'a ranker artifact must reject a tuning record that does not preserve the four-hour internal purge');
 });
 
 test('atomic sidecar export reloads and verifies both artifact and manifest',async()=>{
