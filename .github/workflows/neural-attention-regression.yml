@@ -81,6 +81,8 @@ jobs:
         run: node --test --test-timeout=180000 phase2/tests/logistic-temporal-cv.test.mjs
       - name: Verify Hurdle V2 dual-head artifact export, hashes and fresh-process reload
         run: node --test --test-timeout=180000 phase2/tests/hurdle-v2-artifact-contract.test.mjs
+      - name: Verify ordered temporal ranker artifact integrity and inference
+        run: node --test --test-timeout=180000 phase2/tests/ordered-temporal-ranker-artifact.test.mjs
       - name: Verify checksummed model artifacts and experiment lineage
         run: node --test --test-timeout=180000 phase2/tests/model-artifact-feature-parity.test.mjs
       - name: Verify temporal training and exact artifact inference round-trip
@@ -174,6 +176,8 @@ jobs:
             HURDLE_V2_OBJECTIVE,
             HURDLE_V2_CALIBRATION_ID
           } from './phase2/core/hurdle-v2-artifact-contract.mjs';
+          import {verifyOrderedTemporalRankerArtifact} from
+            './phase2/core/ordered-temporal-ranker-artifact.mjs';
 
           const reportPath='artifacts/neural-closure-hurdle-v2-inner/inner-report.json';
           const report=JSON.parse(fs.readFileSync(reportPath,'utf8'));
@@ -187,6 +191,15 @@ jobs:
           const manifest=JSON.parse(fs.readFileSync(manifestPath,'utf8'));
           const result=verifyHurdleV2Artifact(artifact);
           if(!result.valid) throw new Error('HURDLE_V2_ARTIFACT_INVALID:'+result.reason);
+          const rankerPath='artifacts/neural-closure-hurdle-v2-inner/model-artifacts/TCN_LSTM_ORDERED_RANKER.json';
+          const rankerManifestPath='artifacts/neural-closure-hurdle-v2-inner/model-artifacts/TCN_LSTM_ORDERED_RANKER.manifest.json';
+          if(!fs.existsSync(rankerPath)||!fs.existsSync(rankerManifestPath))
+            throw new Error('HURDLE_V2_ORDERED_RANKER_ARTIFACT_OR_MANIFEST_MISSING');
+          const rankerArtifact=JSON.parse(fs.readFileSync(rankerPath,'utf8'));
+          const rankerManifest=JSON.parse(fs.readFileSync(rankerManifestPath,'utf8'));
+          const rankerVerification=verifyOrderedTemporalRankerArtifact(rankerArtifact);
+          if(!rankerVerification.valid)
+            throw new Error('ORDERED_RANKER_ARTIFACT_INVALID:'+rankerVerification.reason);
           const failures=[];
           if(artifact.code_commit_sha!==process.env.GITHUB_SHA) failures.push('CODE_SHA_MISMATCH');
           if(artifact.dataset_sha256!==process.env.EXPECTED_DATASET_SHA256) failures.push('DATASET_SHA_MISMATCH');
@@ -200,6 +213,23 @@ jobs:
           if(artifact.calibration_id!==HURDLE_V2_CALIBRATION_ID) failures.push('CALIBRATION_MISMATCH');
           if(artifact.input_contract?.contextual?.feature_schema_id!==HURDLE_V2_CONTEXT_SCHEMA) failures.push('CONTEXTUAL_SCHEMA_MISMATCH');
           if(artifact.contextual_head_present!==true||artifact.pooled_head_present!==true) failures.push('DUAL_HEAD_MISSING');
+          if(artifact.upstream_ordered_ranker_dependency?.artifact_content_hash!==rankerVerification.content_hash||
+             artifact.upstream_ordered_ranker_dependency?.artifact_manifest_hash!==rankerVerification.manifest_hash)
+            failures.push('ORDERED_RANKER_DEPENDENCY_HASH_MISMATCH');
+          if(artifact.upstream_ordered_ranker_dependency?.code_commit_sha!==artifact.code_commit_sha||
+             artifact.upstream_ordered_ranker_dependency?.dataset_sha256!==artifact.dataset_sha256||
+             artifact.upstream_ordered_ranker_dependency?.feature_count!==696)
+            failures.push('ORDERED_RANKER_DEPENDENCY_PROVENANCE_MISMATCH');
+          if(rankerArtifact.code_commit_sha!==process.env.GITHUB_SHA||
+             rankerArtifact.dataset_sha256!==process.env.EXPECTED_DATASET_SHA256||
+             rankerArtifact.input_file_sha256!==process.env.EXPECTED_INPUT_FILE_SHA256||
+             rankerArtifact.feature_count!==696||rankerArtifact.representation!=='RAW_ORDERED_696_V1')
+            failures.push('ORDERED_RANKER_IDENTITY_MISMATCH');
+          if(rankerManifest.artifact_content_hash!==rankerVerification.content_hash||
+             rankerManifest.artifact_content_hash!==rankerArtifact.artifact_content_hash)
+            failures.push('ORDERED_RANKER_MANIFEST_MISMATCH');
+          if(report.ordered_temporal_ranker?.status!=='EXPORTED_AND_DISK_RELOAD_VERIFIED')
+            failures.push('ORDERED_RANKER_EXPORT_OR_RELOAD_NOT_VERIFIED');
           if(artifact.contextual_head_parameters?.weights?.length!==44) failures.push('CONTEXTUAL_HEAD_WIDTH_MISMATCH');
           if(artifact.pooled_head_parameters?.weights?.length!==8) failures.push('POOLED_HEAD_WIDTH_MISMATCH');
           if(artifact.cost_model_id!=='FIXED_LINEAR_ROUND_TRIP_BPS_V1'||artifact.round_trip_cost_bps!==30) failures.push('COST_MISMATCH');
@@ -222,6 +252,9 @@ jobs:
             manifest_path:manifestPath,
             artifact_content_hash:result.content_hash,
             manifest_hash:result.manifest_hash,
+            ordered_ranker_content_hash:rankerVerification.content_hash,
+            ordered_ranker_manifest_hash:rankerVerification.manifest_hash,
+            ordered_ranker_feature_count:rankerArtifact.feature_count,
             contextual_head_features:artifact.contextual_head_parameters.weights.length,
             pooled_head_features:artifact.pooled_head_parameters.weights.length,
             fresh_process_reload_verified:exportStatus.fresh_process_reload_verified,
