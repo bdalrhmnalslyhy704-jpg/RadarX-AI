@@ -2168,7 +2168,7 @@ test('ordered 696-feature pairwise ranker fits training-only normalization and l
 });
 
 test('raw ordered ranker fits once on all pre-execution rows and can be injected into a smaller OOF classifier fit',()=>{
-  const completePartition=makeRankedRows(0,16,'ranker-full-partition');
+  const completePartition=makeRankedRows(0,30,'ranker-full-partition');
   const executionFeatureRows=makeRankedRows(100,4,'ranker-full-partition-execution');
   const ranker=fitTcnLstmOrderedRankerForTrainingPartition(completePartition,{
     roundTripCostBps:30,minimumReturnGapPct:0.50,maxPairsPerTimestamp:16,
