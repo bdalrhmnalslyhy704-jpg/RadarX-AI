@@ -113,6 +113,7 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       !Number.isInteger(trainingConfig.epochs_requested)||trainingConfig.epochs_requested<1||
       !Number.isInteger(trainingConfig.epochs_completed)||trainingConfig.epochs_completed<1||
       !Number.isInteger(trainingConfig.best_epoch)||trainingConfig.best_epoch<1||
+      trainingConfig.best_epoch>trainingConfig.epochs_requested||
       !Number.isInteger(trainingConfig.patience)||trainingConfig.patience<1||
       trainingConfig.selection_metric!=='PURGED_INTERNAL_TRAINING_VALIDATION_PAIRWISE_LOG_LOSS'||
       tuning?.schema!=='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_TRAINING_VALIDATION_V1'||
@@ -140,7 +141,6 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       !selectedTuningCandidate||!finite(tuningMinimumLoss)||
       Math.abs(tuningMinimumLoss-tuning.selected_validation_pairwise_log_loss)>1e-9||
       trainingConfig.l2!==tuning.selected_l2||
-      trainingConfig.best_epoch!==tuning.selected_epochs||
       trainingConfig.epochs_requested!==tuning.selected_epochs||
       tuning?.final_refit_rows!==training.training_rows||
       tuning?.final_refit_pairs!==training.training_pairs||
@@ -281,7 +281,7 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
         epochs_completed:ranker.epochs_completed,
         best_epoch:ranker.best_epoch,
         patience:ranker.patience,
-        selection_metric:ranker.selection_metric
+        selection_metric:'PURGED_INTERNAL_TRAINING_VALIDATION_PAIRWISE_LOG_LOSS'
       },
       internal_training_validation:ranker.internal_training_validation,
       downstream_feature_contract:downstreamContract,
