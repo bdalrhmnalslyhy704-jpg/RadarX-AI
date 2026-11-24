@@ -3146,6 +3146,76 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
 }
 
 /**
+ * Fit the raw ordered return ranker once on the complete pre-execution model
+ * training partition. This sidecar is independent of the classifier's OOF
+ * residual subset: it consumes no Logistic predictions or classifier logits.
+ * The returned state is frozen and can be shared across classifier candidates.
+ */
+export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
+  roundTripCostBps=30,minimumReturnGapPct=0.50,maxPairsPerTimestamp=16,
+  learningRate=0.03,epochs=40,l2=0.001,patience=10
+}={}){
+  if(!Array.isArray(rows)||rows.length<20)
+    throw new TypeError('TCN_LSTM_ORDERED_RANKER_PARTITION_TOO_SMALL');
+  assertRows(rows,'ORDERED_RANKER_TRAINING_PARTITION');
+  if(rows.some(row=>!finite(row.realized_return_pct)))
+    throw new TypeError('TCN_LSTM_ORDERED_RANKER_RETURN_EVIDENCE_INCOMPLETE');
+  const ordered=[...rows].sort((a,b)=>Number(a.at)-Number(b.at)||
+    String(a.symbol??a.id??'').localeCompare(String(b.symbol??b.id??''))||
+    String(a.id??'').localeCompare(String(b.id??'')));
+  const pairSupport=buildTcnLstmReturnRankingPairs(ordered,ordered,{
+    roundTripCostBps,minimumReturnGapPct,maxPairsPerTimestamp,
+    pairStrategy:'PROFITABILITY_BOUNDARY_V1'
+  });
+  if(pairSupport.comparison_pairs<10)
+    throw new TypeError('TCN_LSTM_ORDERED_RANKER_TRAINING_PAIR_SUPPORT_TOO_SMALL');
+  const rankerModel={
+    orderedRankingHeadWeights:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0),
+    orderedRankingFeatureMean:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0),
+    orderedRankingFeatureStd:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(1),
+    rankingRepresentation:'RAW_ORDERED_696_V1'
+  };
+  const training=fitTcnLstmOrderedPairwiseRankingHead(
+    ordered,pairSupport.pairs,rankerModel,{learningRate,epochs,l2,patience}
+  );
+  return {
+    schema:'RADARX_TCN_LSTM_PRE_EXECUTION_ORDERED_RANKER_FIT_V1',
+    fitted:true,
+    source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION',
+    feature_scoring_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+    training_rows:ordered.length,
+    training_pairs:pairSupport.comparison_pairs,
+    pair_support:{
+      schema:pairSupport.schema,
+      pair_strategy:pairSupport.pair_strategy,
+      source_partition:pairSupport.source_partition,
+      decision_group_count:pairSupport.decision_group_count,
+      comparison_pairs:pairSupport.comparison_pairs,
+      positive_opportunity_groups:pairSupport.positive_opportunity_groups,
+      mixed_decision_groups:pairSupport.mixed_decision_groups,
+      round_trip_cost_bps:pairSupport.round_trip_cost_bps,
+      minimum_return_gap_pct:pairSupport.minimum_return_gap_pct,
+      maximum_pairs_per_timestamp:pairSupport.maximum_pairs_per_timestamp
+    },
+    model_state:{
+      rankingRepresentation:'RAW_ORDERED_696_V1',
+      orderedRankingHeadWeights:[...rankerModel.orderedRankingHeadWeights],
+      orderedRankingFeatureMean:[...rankerModel.orderedRankingFeatureMean],
+      orderedRankingFeatureStd:[...rankerModel.orderedRankingFeatureStd]
+    },
+    training:{
+      ...training,
+      source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION',
+      feature_scoring_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+      training_rows:ordered.length,
+      training_pairs:pairSupport.comparison_pairs,
+      classifier_parameters_updated:false,
+      validation_or_holdout_used:false
+    }
+  };
+}
+
+/**
  * Fit the independent return ranker on the earlier model-training partition.
  * The ranker and scaler use only that partition; frozen scores are then emitted
  * for the later purged execution-head block. No later-block labels enter ranker
