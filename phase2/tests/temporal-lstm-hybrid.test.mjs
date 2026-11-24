@@ -1192,8 +1192,8 @@ test('TCN-LSTM shared classifier pairwise ranking loss backpropagates through th
 });
 
 test('TCN-LSTM inner selector scores pairwise ranking on its own purged selection partition',()=>{
-  // The execution-block ranker now fits on a later, disjoint 20% block.
-  // Use enough complete decision groups for the predeclared 10-pair fit floor.
+  // The independent ranker fits on the earlier model-training block.
+  // Execution-head features must therefore be OOS for that ranker.
   const trainingRows=makeRankedRows(0,50,'selector-train').map(row=>({
     ...row,max_adverse_excursion_pct:row.target===1?-0.4:-1.1
   }));
@@ -1330,6 +1330,14 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(pairwiseCandidate?.shared_classifier_training?.validation_or_holdout_used,false);
   assert.ok(result.candidates.every(item=>item.pairwise_ranking.status==='AVAILABLE'));
   assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
+  assert.ok(result.candidates.every(item=>
+    item.ranking_head?.source_partition==='PRE_EXECUTION_MODEL_TRAINING_PARTITION'&&
+    item.ranking_head?.feature_scoring_partition==='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'&&
+    item.ranking_head?.feature_scores_out_of_sample===true&&
+    item.ranking_head?.downstream_feature_contract?.out_of_sample_for_execution_head_features===true&&
+    item.ranking_head?.downstream_feature_contract?.training_and_execution_feature_identities_disjoint===true&&
+    item.ranking_head?.downstream_feature_contract?.chronology_valid===true
+  ),'every execution-head rank feature must be scored by a ranker fit on earlier disjoint training rows');
   assert.ok(result.candidates.every(item=>
     item.ranking_score_method==='RAW_INDEPENDENT_MULTISCALE_TEMPORAL_RANK_SCORE_V2'&&
     item.ranking_score_domain==='RAW_LINEAR_SCORE_NO_SIGMOID_NO_CLASSIFIER_LOGIT_ADDITION'
