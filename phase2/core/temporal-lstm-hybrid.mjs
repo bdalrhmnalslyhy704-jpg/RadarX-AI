@@ -3332,7 +3332,17 @@ export function trainTcnLstmHybrid(trainingRows, {
       round_trip_cost_bps:preFittedIndependentRankingHead.pair_support.round_trip_cost_bps,
       minimum_return_gap_pct:preFittedIndependentRankingHead.pair_support.minimum_return_gap_pct,
       maximum_pairs_per_timestamp:preFittedIndependentRankingHead.pair_support.maximum_pairs_per_timestamp,
-      pairs:[]
+      // A shared classifier-ranking loss, when explicitly enabled, still uses
+      // its own OOF-filtered fit subset. These pairs never refit the frozen
+      // independent sidecar and remain a distinct objective.
+      pairs:Array.isArray(rankingRows)
+        ?buildTcnLstmReturnRankingPairs(rows,rankingRows,{
+          roundTripCostBps:rankingRoundTripCostBps,
+          minimumReturnGapPct:rankingMinimumReturnGapPct,
+          maxPairsPerTimestamp:rankingPairsPerTimestamp,
+          pairStrategy:rankingPairStrategy
+        }).pairs
+        :[]
     }
     :Array.isArray(rankingRows)
       ?buildTcnLstmReturnRankingPairs(rows,rankingRows,{
@@ -4431,7 +4441,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       seed: seed + index * 101,
       maxTrainingSamples: modelTrainingRows.length,
       baselineFit: anchor,
-      rankingRows:preFittedIndependentRankingHead!==null?null:rankingRowsForFit,
+      rankingRows:preFittedIndependentRankingHead!==null
+        ?(Number(config.rankingWeight??0)>0?rankingRowsForFit:null)
+        :rankingRowsForFit,
       executionRows:null,
       rankingWeight:Number(config.rankingWeight??0),
       rankingHeadLearningRate:candidateRankingHeadLearningRate,
