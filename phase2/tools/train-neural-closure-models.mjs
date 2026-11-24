@@ -1517,6 +1517,7 @@ async function main(){
               datasetRowCount:rows.length,
               targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
               targetSemantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+              featureNames:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES,
               roundTripCostBps:args.roundTripCostBps,
               splitDefinition:{
                 schema:split.schema,purge_ms:split.purge_ms,
