@@ -137,7 +137,12 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       !Array.isArray(tuningGrid)||tuningGrid.length<2||
       tuningGrid.some(item=>!finite(item?.l2)||item.l2<0||item.l2>1||
         !Number.isInteger(item?.best_epoch)||item.best_epoch<1||
-        !finite(item?.best_validation_pairwise_log_loss))||
+        !finite(item?.best_validation_pairwise_log_loss)||
+        item?.training_rows!==tuning.tuning_rows||
+        item?.validation_rows!==tuning.validation_rows||
+        item?.purged_rows!==tuning.purged_rows||
+        item?.training_pairs!==tuning.tuning_pairs||
+        item?.validation_pairs!==tuning.validation_pairs)||
       !selectedTuningCandidate||!finite(tuningMinimumLoss)||
       Math.abs(tuningMinimumLoss-tuning.selected_validation_pairwise_log_loss)>1e-9||
       trainingConfig.l2!==tuning.selected_l2||
