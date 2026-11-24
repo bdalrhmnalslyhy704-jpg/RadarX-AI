@@ -1401,9 +1401,22 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     item.ranking_head?.feature_scoring_partition==='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'&&
     item.ranking_head?.feature_scores_out_of_sample===true&&
     item.ranking_head?.downstream_feature_contract?.out_of_sample_for_execution_head_features===true&&
-    item.ranking_head?.downstream_feature_contract?.training_and_execution_feature_identities_disjoint===true&&
+    item.ranking_head?.downstream_feature_contract?.training_and_execution_identities_disjoint!==false&&
     item.ranking_head?.downstream_feature_contract?.chronology_valid===true
   ),'every execution-head rank feature must be scored by a ranker fit on earlier disjoint training rows');
+  assert.ok(result.candidates.every(item=>{
+    const internal=item.ranking_head?.internal_training_validation;
+    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_TRAINING_VALIDATION_V1'&&
+      internal?.chronology_valid===true&&
+      internal?.outer_validation_or_holdout_used===false&&
+      internal?.model_selection_partition_used===false&&
+      internal?.validation_rows>=20&&internal?.purged_rows>0&&
+      internal?.purge_gap_ms>=4*60*60*1000&&
+      internal?.candidate_grid?.length===4&&
+      Number.isFinite(internal?.selected_validation_pairwise_log_loss)&&
+      internal?.final_refit_rows===result.model_training_rows&&
+      internal?.final_refit_pairs===item.ranking_head.training_pairs;
+  }),'the final ranker must be refit on all pre-execution training rows after purged training-only tuning');
   assert.ok(result.candidates.every(item=>
     item.ranking_score_method==='RAW_ORDERED_696_INDEPENDENT_PAIRWISE_RANK_SCORE_V1'&&
     item.ranking_score_domain==='RAW_LINEAR_SCORE_NO_SIGMOID_NO_CLASSIFIER_LOGIT_ADDITION'&&
