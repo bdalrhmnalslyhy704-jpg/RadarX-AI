@@ -1195,7 +1195,9 @@ test('TCN-LSTM shared classifier pairwise ranking loss backpropagates through th
 test('TCN-LSTM inner selector scores pairwise ranking on its own purged selection partition',()=>{
   // The execution-block ranker now fits on a later, disjoint 20% block.
   // Use enough complete decision groups for the predeclared 10-pair fit floor.
-  const trainingRows=makeRankedRows(0,50,'selector-train');
+  const trainingRows=makeRankedRows(0,50,'selector-train').map(row=>({
+    ...row,max_adverse_excursion_pct:row.target===1?-0.4:-1.1
+  }));
   const selectionRows=makeRankedRows(60,10,'selector-selection');
   let externalContextProviderCalls=0;
   let externalContextPurgeVerified=false;
