@@ -2183,6 +2183,7 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
     seed:696225,maxTrainingSamples:classifierFitRows.length,
     rankingRepresentation:'RAW_ORDERED_696_V1',
     rankingPairStrategy:'PROFITABILITY_BOUNDARY_V1',
+    rankingPairsPerTimestamp:16,
     rankingRows:null,fitIndependentRankingHead:false
   };
   const withFrozenRanker=trainTcnLstmHybrid(classifierFitRows,{
