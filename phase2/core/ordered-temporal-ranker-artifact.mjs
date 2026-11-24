@@ -38,6 +38,7 @@ function manifestFrom(core,contentHash){
     dataset_source_commit_sha:core.dataset_source_commit_sha,
     feature_schema_id:core.feature_schema_id,
     feature_count:core.feature_count,
+    feature_names_sha256:hashObject(core.feature_names),
     fit_partition:core.training_provenance.fit_partition,
     feature_scoring_partition:core.training_provenance.feature_scoring_partition,
     holdout_status:core.holdout_status,
@@ -69,6 +70,10 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       return fail('ORDERED_RANKER_PROVENANCE_SHA_INVALID');
     if(artifact.representation!=='RAW_ORDERED_696_V1'||
       artifact.feature_schema_id!==TCN_LSTM_ORDERED_RANKING_FEATURE_SCHEMA_ID||
+      !Array.isArray(artifact.feature_names)||
+      artifact.feature_names.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      artifact.feature_names.some(name=>typeof name!=='string'||!name.trim())||
+      new Set(artifact.feature_names).size!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
       artifact.feature_count!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
       artifact.input_shape?.[0]!==TCN_LSTM_STEPS||
       artifact.input_shape?.[1]!==TCN_LSTM_INPUT_CHANNELS)
@@ -162,7 +167,11 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
     !Number.isFinite(provenance?.splitDefinition?.purge_ms)||
     provenance.splitDefinition.purge_ms<=0||
     provenance?.roundTripCostBps!==30||
-    !provenance?.targetDefinition||!provenance?.targetSemantics)
+    !provenance?.targetDefinition||!provenance?.targetSemantics||
+    !Array.isArray(provenance?.featureNames)||
+    provenance.featureNames.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+    provenance.featureNames.some(name=>typeof name!=='string'||!name.trim())||
+    new Set(provenance.featureNames).size!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT)
     throw new TypeError('ORDERED_RANKER_DATASET_PROVENANCE_INVALID');
   const trainingRows=Number(ranker.training_rows);
   const standardizerRows=Number(standardization.fit_rows);
@@ -195,6 +204,7 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
     input_shape:[TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS],
     feature_schema_id:TCN_LSTM_ORDERED_RANKING_FEATURE_SCHEMA_ID,
     feature_count:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
+    feature_names:[...provenance.featureNames],
     feature_order:'STEP_MAJOR_ROW_MAJOR_24_STEPS_X_29_CHANNELS',
     parameters:{
       weights:[...weights],
