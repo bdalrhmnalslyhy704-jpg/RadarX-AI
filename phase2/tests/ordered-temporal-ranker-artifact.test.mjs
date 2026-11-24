@@ -92,6 +92,7 @@ const provenance={
   datasetRowCount:32300,
   targetDefinition:'FIRST_TOUCH_PLUS_3_PCT_BEFORE_MINUS_2_PCT_WITHIN_4H_1M_V1',
   targetSemantics:'UP_IF_PLUS_3_PCT_FIRST_BEFORE_MINUS_2_PCT_ELSE_NON_SUCCESS_WITHIN_4H_1M_V1',
+  featureNames:Array.from({length:696},(_,i)=>'STEP_FEATURE_'+String(i).padStart(3,'0')),
   roundTripCostBps:30,
   splitDefinition:{
     schema:'RADARX_NEURAL_CLOSURE_PURGED_60_20_20_UTC_DAY_SPLIT_V1',
@@ -107,6 +108,8 @@ test('ordered raw 696 ranker exports a fully checksummed training-only artifact'
   assert.equal(verification.valid,true);
   assert.equal(artifact.feature_schema_id,TCN_LSTM_ORDERED_RANKING_FEATURE_SCHEMA_ID);
   assert.equal(artifact.feature_count,696);
+  assert.equal(artifact.feature_names.length,696);
+  assert.equal(new Set(artifact.feature_names).size,696);
   assert.equal(artifact.parameters.weights.length,696);
   assert.equal(artifact.parameters.feature_mean.length,696);
   assert.equal(artifact.parameters.feature_std.length,696);
