@@ -254,7 +254,7 @@ export function createHurdleV2Artifact({
   datasetRowCount, targetDefinition, targetSemantics, splitDefinition,
   codeCommitSha, roundTripCostBps = 30, randomSeed = 22429,
   innerQualified = false, objectiveId = HURDLE_V2_OBJECTIVE,
-  selectionObjectiveId = null
+  selectionObjectiveId = null, orderedRankingDependency = null
 } = {}) {
   if (!fit?.model || !selection || !/^[a-f0-9]{40}$/i.test(String(codeCommitSha || '')) ||
       String(datasetSha256).toLowerCase() !== HURDLE_V2_FIXED_DATASET_SHA256 ||
@@ -270,6 +270,21 @@ export function createHurdleV2Artifact({
     throw new TypeError('HURDLE_V2_PROVENANCE_INVALID');
   }
   const fixedSplitCounts = validateFixedSplit(splitDefinition, datasetRowCount);
+  if(orderedRankingDependency!==null&&(
+    orderedRankingDependency?.artifact_schema!==
+      'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V1'||
+    !/^[a-f0-9]{64}$/.test(String(orderedRankingDependency?.artifact_content_hash??''))||
+    !/^[a-f0-9]{64}$/.test(String(orderedRankingDependency?.artifact_manifest_hash??''))||
+    orderedRankingDependency?.code_commit_sha!==String(codeCommitSha).toLowerCase()||
+    orderedRankingDependency?.dataset_sha256!==String(datasetSha256).toLowerCase()||
+    orderedRankingDependency?.input_file_sha256!==String(inputFileSha256).toLowerCase()||
+    orderedRankingDependency?.representation!=='RAW_ORDERED_696_V1'||
+    orderedRankingDependency?.feature_schema_id!==
+      'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1'||
+    orderedRankingDependency?.feature_count!==696||
+    orderedRankingDependency?.validation_or_holdout_used!==false||
+    orderedRankingDependency?.holdout_status!=='LOCKED'
+  ))throw new TypeError('HURDLE_V2_ORDERED_RANKER_DEPENDENCY_INVALID');
   const model = fit.model;
   if (model.executionRegressionHeadsFitted !== true ||
       model.executionHeadInputFeatureSchema !== HURDLE_V2_CONTEXT_SCHEMA) {
@@ -367,6 +382,7 @@ export function createHurdleV2Artifact({
       contextual: Array(44).fill('float64'),
       pooled: Array(8).fill('float64')
     },
+    upstream_ordered_ranker_dependency: orderedRankingDependency,
     input_contract: {
       base_sequence: {closed_candles_only: true, interval: '15m', shape: [24, 29]},
       contextual: {
@@ -596,6 +612,22 @@ export function verifyHurdleV2Artifact(artifact) {
       return fail('DUAL_HEAD_MISSING');
     if (artifact.input_contract?.contextual?.feature_schema_id !== HURDLE_V2_CONTEXT_SCHEMA)
       return fail('CONTEXT_SCHEMA_MISMATCH');
+    const rankerDependency=artifact.upstream_ordered_ranker_dependency??null;
+    if(rankerDependency!==null&&(
+      rankerDependency?.artifact_schema!==
+        'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V1'||
+      !/^[a-f0-9]{64}$/.test(String(rankerDependency?.artifact_content_hash??''))||
+      !/^[a-f0-9]{64}$/.test(String(rankerDependency?.artifact_manifest_hash??''))||
+      rankerDependency?.code_commit_sha!==artifact.code_commit_sha||
+      rankerDependency?.dataset_sha256!==artifact.dataset_sha256||
+      rankerDependency?.input_file_sha256!==artifact.input_file_sha256||
+      rankerDependency?.representation!=='RAW_ORDERED_696_V1'||
+      rankerDependency?.feature_schema_id!==
+        'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1'||
+      rankerDependency?.feature_count!==696||
+      rankerDependency?.validation_or_holdout_used!==false||
+      rankerDependency?.holdout_status!=='LOCKED'
+    ))return fail('ORDERED_RANKER_DEPENDENCY_INVALID');
     if (artifact.feature_order?.contextual?.length !== 44 ||
         artifact.feature_order?.pooled?.length !== 8 ||
         artifact.contextual_head_parameters?.weights?.length !== 44 ||
