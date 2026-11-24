@@ -9,6 +9,7 @@ import {
   TCN_LSTM_HIDDEN,
   TCN_LSTM_RANKING_FEATURE_COUNT,
   TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
+  fitTcnLstmOrderedRankerForTrainingPartition,
   buildTcnLstmAnchorFeatures,
   fitTcnLstmLogisticAnchor,
   inspectTcnLstmForward,
@@ -2139,6 +2140,72 @@ test('ordered 696-feature pairwise ranker fits training-only normalization and l
   );
   assert.equal(profile.probability_ready,false);
   assert.equal(profile.real_order_execution,false);
+});
+
+test('raw ordered ranker fits once on all pre-execution rows and can be injected into a smaller OOF classifier fit',()=>{
+  const completePartition=makeRankedRows(0,16,'ranker-full-partition');
+  const executionFeatureRows=makeRankedRows(100,4,'ranker-full-partition-execution');
+  const ranker=fitTcnLstmOrderedRankerForTrainingPartition(completePartition,{
+    roundTripCostBps:30,minimumReturnGapPct:0.50,maxPairsPerTimestamp:16,
+    learningRate:0.03,epochs:8,l2:0.001,patience:5
+  });
+  assert.equal(ranker.fitted,true);
+  assert.equal(ranker.training_rows,completePartition.length);
+  assert.equal(ranker.training.training_rows,completePartition.length);
+  assert.equal(ranker.training.standardization.fit_rows,completePartition.length);
+  assert.equal(ranker.training_pairs,ranker.pair_support.comparison_pairs);
+  assert.ok(ranker.training_pairs>=10);
+  assert.equal(ranker.source_partition,'PRE_EXECUTION_MODEL_TRAINING_PARTITION');
+  assert.equal(ranker.training.validation_or_holdout_used,false);
+  assert.equal(ranker.training.classifier_parameters_updated,false);
+  const rankerMaxResolvedAt=Math.max(...completePartition.map(row=>row.resolved_at));
+  const executionFeatureMinAt=Math.min(...executionFeatureRows.map(row=>row.at));
+  assert.ok(rankerMaxResolvedAt<executionFeatureMinAt);
+
+  // Simulate Logistic OOF coverage filtering out early rows from the classifier
+  // residual fit. The independent ranker remains fitted on the full earlier block.
+  const classifierRows=completePartition.slice(8);
+  const classifierFitRows=classifierRows.map(({realized_return_pct,...row})=>row);
+  const common={
+    epochs:1,learningRate:0.0015,l2:0.0005,batchSize:8,
+    seed:696225,maxTrainingSamples:classifierFitRows.length,
+    rankingRepresentation:'RAW_ORDERED_696_V1',
+    rankingPairStrategy:'PROFITABILITY_BOUNDARY_V1',
+    rankingRows:null,fitIndependentRankingHead:false
+  };
+  const withFrozenRanker=trainTcnLstmHybrid(classifierFitRows,{
+    ...common,preFittedIndependentRankingHead:ranker
+  });
+  const classifierOnly=trainTcnLstmHybrid(classifierFitRows,common);
+  const rankHead=withFrozenRanker.training.return_ranking.ranking_head;
+  assert.equal(rankHead.fitted,true);
+  assert.equal(rankHead.training_rows,completePartition.length);
+  assert.equal(rankHead.standardization.fit_rows,completePartition.length);
+  assert.equal(withFrozenRanker.training.return_ranking.comparison_pairs,ranker.training_pairs);
+  assert.equal(withFrozenRanker.training.return_ranking.independent_ranker_fit_mode,
+    'FITTED_ONCE_ON_COMPLETE_PRE_EXECUTION_MODEL_TRAINING_PARTITION');
+  assert.deepEqual(withFrozenRanker.model.orderedRankingHeadWeights,
+    ranker.model_state.orderedRankingHeadWeights);
+  assert.deepEqual(withFrozenRanker.model.orderedRankingFeatureMean,
+    ranker.model_state.orderedRankingFeatureMean);
+  assert.deepEqual(withFrozenRanker.model.orderedRankingFeatureStd,
+    ranker.model_state.orderedRankingFeatureStd);
+
+  const withoutRankFields=model=>{
+    const copy=structuredClone(model);
+    delete copy.rankingRepresentation;
+    delete copy.rankingHeadWeights;
+    delete copy.rankingFeatureMean;
+    delete copy.rankingFeatureStd;
+    delete copy.orderedRankingHeadWeights;
+    delete copy.orderedRankingFeatureMean;
+    delete copy.orderedRankingFeatureStd;
+    return copy;
+  };
+  assert.deepEqual(withoutRankFields(withFrozenRanker.model),withoutRankFields(classifierOnly.model),
+    'a pre-fitted independent ranker must not alter any classifier parameter');
+  assert.equal(withFrozenRanker.probability_ready,false);
+  assert.equal(withFrozenRanker.real_order_execution,false);
 });
 
 test('independent return ranker fits only the earlier model-training partition and produces out-of-sample execution-head features',()=>{
