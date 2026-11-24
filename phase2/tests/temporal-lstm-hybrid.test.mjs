@@ -1193,13 +1193,15 @@ test('TCN-LSTM shared classifier pairwise ranking loss backpropagates through th
 });
 
 test('TCN-LSTM inner selector scores pairwise ranking on its own purged selection partition',()=>{
-  const trainingRows=makeRankedRows(0,10,'selector-train');
-  const selectionRows=makeRankedRows(20,10,'selector-selection');
+  // The execution-block ranker now fits on a later, disjoint 20% block.
+  // Use enough complete decision groups for the predeclared 10-pair fit floor.
+  const trainingRows=makeRankedRows(0,50,'selector-train');
+  const selectionRows=makeRankedRows(60,10,'selector-selection');
   let externalContextProviderCalls=0;
   let externalContextPurgeVerified=false;
   let externalContextLabelIsolationVerified=false;
   const result=selectTcnLstmHybridHyperparameters(trainingRows,selectionRows,{
-    requiredImprovement:0.00025,maxTrainingSamples:40,seed:131,
+    requiredImprovement:0.00025,maxTrainingSamples:200,seed:131,
     roundTripCostBps:30,rankingScoreWeight:0.01,
     rankingMinimumReturnGapPct:0.5,rankingPairsPerTimestamp:4,
     requireExternalLogisticSelectionBaseline:true,
