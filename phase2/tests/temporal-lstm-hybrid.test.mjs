@@ -10,7 +10,6 @@ import {
   TCN_LSTM_RANKING_FEATURE_COUNT,
   buildTcnLstmAnchorFeatures,
   fitTcnLstmLogisticAnchor,
-  fitTcnLstmExecutionBlockRankingHead,
   inspectTcnLstmForward,
   lossAndGradientsTcnLstmHybrid,
   projectTcnLstmAuxiliaryGradient,
@@ -1990,12 +1989,18 @@ test('selective execution policy evaluates singleton 15m buckets without treatin
 
 
 
-test('independent return ranker fits the later purged execution block and leaves the temporal classifier frozen',()=>{
-  const modelTrainingRows=makeRows(0,60,'ranker-model-fit');
-  const executionHeadRows=makeRankedRows(100,12,'ranker-execution-fit');
-  const profile=trainTcnLstmHybrid(modelTrainingRows,{
+test('independent return ranker fits only the earlier model-training partition and produces out-of-sample execution-head features',()=>{
+  const modelTrainingRows=makeRankedRows(0,12,'ranker-model-fit');
+  const executionHeadRows=makeRankedRows(100,12,'ranker-execution-features');
+  const fitRows=modelTrainingRows.map(({realized_return_pct,...row})=>row);
+  const options={
     epochs:1,learningRate:0.0015,l2:0.001,batchSize:8,
-    seed:22441,maxTrainingSamples:60
+    seed:22441,maxTrainingSamples:fitRows.length,
+    rankingRows:modelTrainingRows,fitIndependentRankingHead:true
+  };
+  const profile=trainTcnLstmHybrid(fitRows,options);
+  const classifierOnly=trainTcnLstmHybrid(fitRows,{
+    ...options,fitIndependentRankingHead:false
   });
   const withoutRankFields=model=>{
     const copy=structuredClone(model);
@@ -2004,58 +2009,39 @@ test('independent return ranker fits the later purged execution block and leaves
     delete copy.rankingFeatureStd;
     return copy;
   };
-  const classifierBefore=withoutRankFields(profile.model);
-  const fitted=fitTcnLstmExecutionBlockRankingHead(
-    modelTrainingRows,executionHeadRows,profile.model,{
-      roundTripCostBps:30,minimumReturnGapPct:0.5,
-      maxPairsPerTimestamp:16,learningRate:0.03,epochs:40,l2:0.001,patience:10
+  const ranker=profile.training.return_ranking.ranking_head;
+  assert.equal(ranker.fitted,true);
+  assert.equal(ranker.fit_boundary,'TRAINING_PARTITION_ONLY');
+  assert.equal(ranker.training_rows,modelTrainingRows.length);
+  assert.equal(ranker.training_pairs,12);
+  assert.equal(ranker.standardization.fit_partition,'TRAINING_PARTITION_ONLY');
+  assert.equal(ranker.standardization.fit_rows,modelTrainingRows.length);
+  assert.equal(ranker.classifier_parameters_updated,false);
+  assert.equal(ranker.validation_or_holdout_used,false);
+  assert.ok(ranker.weight_l2_norm>1e-8);
+  assert.deepEqual(withoutRankFields(profile.model),withoutRankFields(classifierOnly.model),
+    'fitting the independent rank head must not update temporal classifier parameters');
+
+  const rankerIds=new Set(modelTrainingRows.map(row=>String(row.id)));
+  assert.ok(executionHeadRows.every(row=>!rankerIds.has(String(row.id))));
+  const rankerMaxResolvedAt=Math.max(...modelTrainingRows.map(row=>row.resolved_at));
+  const executionFeatureMinAt=Math.min(...executionHeadRows.map(row=>row.at));
+  assert.ok(rankerMaxResolvedAt<executionFeatureMinAt,
+    'all ranker labels must resolve before execution-head feature rows begin');
+
+  const row=executionHeadRows[0];
+  const externalLogisticLogit=predictTcnLstmLogisticLogit(
+    row.sequence,profile.baseline_fit
+  );
+  const features=buildTcnLstmExecutionHeadInputFeatures(
+    row.sequence,profile.model,profile.baseline_fit,{
+      variant:'LOGIT_CONTEXT_AUGMENTED',externalLogisticLogit
     }
   );
-  assert.equal(fitted.fitted,true);
-  assert.equal(fitted.source_partition,'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK');
-  assert.equal(fitted.fit_boundary,'TRAINING_PARTITION_ONLY');
-  assert.equal(fitted.model_training_rows,modelTrainingRows.length);
-  assert.equal(fitted.execution_head_rows,executionHeadRows.length);
-  assert.equal(fitted.decision_group_count,12);
-  assert.equal(fitted.comparison_pairs,12);
-  assert.equal(fitted.chronology_valid,true);
-  assert.equal(fitted.training_and_model_fit_identities_disjoint,true);
-  assert.equal(fitted.validation_or_holdout_used,false);
-  assert.ok(fitted.weight_l2_norm>1e-8);
-  assert.deepEqual(withoutRankFields(profile.model),classifierBefore,
-    'the execution-block ranker must not update TCN/LSTM classifier parameters');
-  const rankingScore=predictTcnLstmHybridRankingScore(
-    executionHeadRows[0].sequence,profile
-  );
-  assert.ok(Number.isFinite(rankingScore));
-});
-
-test('execution-block ranker rejects row overlap and chronological leakage',()=>{
-  const modelTrainingRows=makeRows(0,60,'ranker-purge-fit');
-  const profile=trainTcnLstmHybrid(modelTrainingRows,{
-    epochs:1,learningRate:0.0015,l2:0.001,batchSize:8,
-    seed:22442,maxTrainingSamples:60
-  });
-  assert.throws(()=>fitTcnLstmExecutionBlockRankingHead(
-    modelTrainingRows,modelTrainingRows,profile.model
-  ),/IDENTITY_OVERLAP/);
-  const earlierExecutionRows=makeRankedRows(10,12,'ranker-early-execution');
-  assert.throws(()=>fitTcnLstmExecutionBlockRankingHead(
-    modelTrainingRows,earlierExecutionRows,profile.model
-  ),/PURGE_VIOLATION/);
-});
-
-
-test('candidate fitting defers independent rank-head optimization until the later purged execution block',()=>{
-  const trainingRows=makeRankedRows(0,12,'ranker-deferred-fit');
-  const profile=trainTcnLstmHybrid(trainingRows,{
-    epochs:1,learningRate:0.0015,l2:0.001,batchSize:8,
-    seed:22443,maxTrainingSamples:48,
-    rankingRows:trainingRows,fitIndependentRankingHead:false
-  });
-  assert.equal(profile.training.return_ranking.ranking_head.fitted,false);
-  assert.equal(profile.training.return_ranking.ranking_head.reason,
-    'DEFERRED_TO_PURGED_EXECUTION_HEAD_BLOCK');
-  assert.ok(profile.model.rankingHeadWeights.every(value=>value===0));
-  assert.equal(profile.training.return_ranking.enabled,false);
+  const rankingScore=predictTcnLstmHybridRankingScore(row.sequence,profile);
+  assert.equal(features.independent_return_rank_score,rankingScore);
+  assert.equal(features.normalized_ranking_score,Math.tanh(rankingScore/4));
+  assert.ok(Number.isFinite(features.normalized_ranking_score));
+  assert.equal(profile.probability_ready,false);
+  assert.equal(profile.real_order_execution,false);
 });
