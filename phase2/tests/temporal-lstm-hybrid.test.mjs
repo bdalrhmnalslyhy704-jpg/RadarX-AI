@@ -9,6 +9,7 @@ import {
   TCN_LSTM_HIDDEN,
   TCN_LSTM_RANKING_FEATURE_COUNT,
   TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
+  fitTcnLstmOrderedRankerForTrainingPartition,
   buildTcnLstmAnchorFeatures,
   fitTcnLstmLogisticAnchor,
   inspectTcnLstmForward,
@@ -1260,6 +1261,9 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     requiredImprovement:0.00025,maxTrainingSamples:200,seed:131,
     roundTripCostBps:30,rankingScoreWeight:0.01,
     rankingMinimumReturnGapPct:0.5,rankingPairsPerTimestamp:4,
+    rankingPairStrategy:'PROFITABILITY_BOUNDARY_V1',
+    rankingRepresentation:'RAW_ORDERED_696_V1',
+    rankingHeadLearningRate:0.03,rankingHeadEpochs:8,rankingHeadL2:0.001,
     requireExternalLogisticSelectionBaseline:true,
     externalLogisticExecutionContextProvider:(modelRows,scoringRows)=>{
       externalContextProviderCalls++;
@@ -1273,6 +1277,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
         scoringRows.every(row=>!Object.hasOwn(row,'target')&&
           !Object.hasOwn(row,'realized_return_pct')&&
           !Object.hasOwn(row,'max_adverse_excursion_pct'));
+      const oofModelRows=modelRows.slice(Math.floor(modelRows.length*0.35));
       return {
         model:{training_partition_only:true,kind:'TEST_PURGED_TEMPORAL_LOGISTIC'},
         feature_schema_id:'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1',
@@ -1284,7 +1289,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
           selected_configuration:{l2:0.01,learning_rate:0.01},
           calibration:{status:'RAW_FALLBACK'}
         },
-        training_predictions:modelRows.map((row,index)=>({
+        training_predictions:oofModelRows.map((row,index)=>({
           id:String(row.id),at:Number(row.at),
           raw_logit:(Number(row.at)%997)/997-0.5,
           oof_fold:(index%3)+1,
@@ -1295,7 +1300,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
         training_prediction_coverage:{
           schema:'RADARX_PURGED_EXPANDING_TEMPORAL_LOGISTIC_OOF_PREDICTIONS_V1',
           total_training_rows:modelRows.length,
-          oof_scored_rows:modelRows.length,
+          oof_scored_rows:oofModelRows.length,
           outer_validation_or_holdout_used:false
         },
         predictions:scoringRows.map(row=>({
@@ -1311,7 +1316,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     ]
   });
   assert.equal(result.baseline.pairwise_ranking.status,'AVAILABLE');
-  assert.equal(result.baseline.pairwise_ranking.comparison_pairs,10);
+  assert.equal(result.baseline.pairwise_ranking.comparison_pairs,40);
   assert.equal(result.baseline.kind,'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
   assert.equal(result.baseline.feature_schema_id,
     'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1');
@@ -1343,6 +1348,10 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(result.classifier_baseline_training_logits_are_purged_oof,true);
   assert.equal(result.classifier_baseline_training_rows,
     selectedOrDiagnostic.training.rows);
+  assert.ok(result.classifier_baseline_training_rows<result.model_training_rows,
+    'the Logistic OOF subset must be smaller than the complete model-training partition');
+  assert.equal(result.training_return_pair_support.training_rows,result.model_training_rows);
+  assert.equal(result.training_return_pair_support.ranker_fitted_once_for_all_classifier_candidates,true);
   assert.equal(result.classifier_residual_reference.training_logits_used_for_fit,true);
   assert.equal(result.classifier_residual_reference.training_logits_are_purged_out_of_fold,true);
   assert.equal(result.classifier_residual_reference.selection_logits_from_final_train_only_refit,true);
@@ -1386,6 +1395,8 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.ok(result.candidates.every(item=>item.pairwise_ranking.status==='AVAILABLE'));
   assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
   assert.ok(result.candidates.every(item=>
+    item.ranking_head?.training_rows===result.model_training_rows&&
+    item.ranking_head?.standardization?.fit_rows===result.model_training_rows&&
     item.ranking_head?.source_partition==='PRE_EXECUTION_MODEL_TRAINING_PARTITION'&&
     item.ranking_head?.feature_scoring_partition==='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'&&
     item.ranking_head?.feature_scores_out_of_sample===true&&
@@ -1393,14 +1404,29 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     item.ranking_head?.downstream_feature_contract?.training_and_execution_feature_identities_disjoint===true&&
     item.ranking_head?.downstream_feature_contract?.chronology_valid===true
   ),'every execution-head rank feature must be scored by a ranker fit on earlier disjoint training rows');
+  assert.ok(result.candidates.every(item=>{
+    const internal=item.ranking_head?.internal_training_validation;
+    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_TRAINING_VALIDATION_V1'&&
+      internal?.chronology_valid===true&&
+      internal?.outer_validation_or_holdout_used===false&&
+      internal?.model_selection_partition_used===false&&
+      internal?.validation_rows>=20&&internal?.purged_rows>=0&&
+      internal?.purge_gap_ms>=4*60*60*1000&&
+      internal?.candidate_grid?.length===4&&
+      Number.isFinite(internal?.selected_validation_pairwise_log_loss)&&
+      internal?.final_refit_rows===result.model_training_rows&&
+      internal?.final_refit_pairs===item.ranking_head.training_pairs;
+  }),'the final ranker must be refit on all pre-execution training rows after purged training-only tuning');
   assert.ok(result.candidates.every(item=>
-    item.ranking_score_method==='RAW_INDEPENDENT_MULTISCALE_TEMPORAL_RANK_SCORE_V2'&&
-    item.ranking_score_domain==='RAW_LINEAR_SCORE_NO_SIGMOID_NO_CLASSIFIER_LOGIT_ADDITION'
+    item.ranking_score_method==='RAW_ORDERED_696_INDEPENDENT_PAIRWISE_RANK_SCORE_V1'&&
+    item.ranking_score_domain==='RAW_LINEAR_SCORE_NO_SIGMOID_NO_CLASSIFIER_LOGIT_ADDITION'&&
+    item.independent_ranker_fit_mode===
+      'FITTED_ONCE_ON_COMPLETE_PRE_EXECUTION_MODEL_TRAINING_PARTITION'
   ));
   assert.equal(result.selection_scoring.score_separation_method,
-    'RAW_INDEPENDENT_MULTISCALE_RETURN_SCORE_NO_SIGMOID_NO_CLASSIFIER_LOGIT_ADDITION_V2');
+    'RAW_ORDERED_696_RETURN_RANK_SCORE_NO_SIGMOID_NO_CLASSIFIER_LOGIT_ADDITION_V1');
   assert.equal(result.selection_scoring.method,
-    'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6');
+    'INNER_CLASSIFIER_BRIER_PLUS_RAW_ORDERED_696_RETURN_RANKING_V7');
   assert.equal(result.selection_scoring.require_pairwise_ranking_improvement,true);
   assert.ok(result.candidates.every(item=>
     item.shared_classifier_pairwise_ranking.status==='AVAILABLE'&&
@@ -2139,6 +2165,73 @@ test('ordered 696-feature pairwise ranker fits training-only normalization and l
   );
   assert.equal(profile.probability_ready,false);
   assert.equal(profile.real_order_execution,false);
+});
+
+test('raw ordered ranker fits once on all pre-execution rows and can be injected into a smaller OOF classifier fit',()=>{
+  const completePartition=makeRankedRows(0,30,'ranker-full-partition');
+  const executionFeatureRows=makeRankedRows(100,4,'ranker-full-partition-execution');
+  const ranker=fitTcnLstmOrderedRankerForTrainingPartition(completePartition,{
+    roundTripCostBps:30,minimumReturnGapPct:0.50,maxPairsPerTimestamp:16,
+    learningRate:0.03,epochs:8,l2:0.001,patience:5
+  });
+  assert.equal(ranker.fitted,true);
+  assert.equal(ranker.training_rows,completePartition.length);
+  assert.equal(ranker.training.training_rows,completePartition.length);
+  assert.equal(ranker.training.standardization.fit_rows,completePartition.length);
+  assert.equal(ranker.training_pairs,ranker.pair_support.comparison_pairs);
+  assert.ok(ranker.training_pairs>=10);
+  assert.equal(ranker.source_partition,'PRE_EXECUTION_MODEL_TRAINING_PARTITION');
+  assert.equal(ranker.training.validation_or_holdout_used,false);
+  assert.equal(ranker.training.classifier_parameters_updated,false);
+  const rankerMaxResolvedAt=Math.max(...completePartition.map(row=>row.resolved_at));
+  const executionFeatureMinAt=Math.min(...executionFeatureRows.map(row=>row.at));
+  assert.ok(rankerMaxResolvedAt<executionFeatureMinAt);
+
+  // Simulate Logistic OOF coverage filtering out early rows from the classifier
+  // residual fit. The independent ranker remains fitted on the full earlier block.
+  const classifierRows=completePartition.slice(8);
+  const classifierFitRows=classifierRows.map(({realized_return_pct,...row})=>row);
+  const common={
+    epochs:1,learningRate:0.0015,l2:0.0005,batchSize:8,
+    seed:696225,maxTrainingSamples:classifierFitRows.length,
+    rankingRepresentation:'RAW_ORDERED_696_V1',
+    rankingPairStrategy:'PROFITABILITY_BOUNDARY_V1',
+    rankingPairsPerTimestamp:16,
+    rankingRows:null,fitIndependentRankingHead:false
+  };
+  const withFrozenRanker=trainTcnLstmHybrid(classifierFitRows,{
+    ...common,preFittedIndependentRankingHead:ranker
+  });
+  const classifierOnly=trainTcnLstmHybrid(classifierFitRows,common);
+  const rankHead=withFrozenRanker.training.return_ranking.ranking_head;
+  assert.equal(rankHead.fitted,true);
+  assert.equal(rankHead.training_rows,completePartition.length);
+  assert.equal(rankHead.standardization.fit_rows,completePartition.length);
+  assert.equal(withFrozenRanker.training.return_ranking.comparison_pairs,ranker.training_pairs);
+  assert.equal(withFrozenRanker.training.return_ranking.independent_ranker_fit_mode,
+    'FITTED_ONCE_ON_COMPLETE_PRE_EXECUTION_MODEL_TRAINING_PARTITION');
+  assert.deepEqual(withFrozenRanker.model.orderedRankingHeadWeights,
+    ranker.model_state.orderedRankingHeadWeights);
+  assert.deepEqual(withFrozenRanker.model.orderedRankingFeatureMean,
+    ranker.model_state.orderedRankingFeatureMean);
+  assert.deepEqual(withFrozenRanker.model.orderedRankingFeatureStd,
+    ranker.model_state.orderedRankingFeatureStd);
+
+  const withoutRankFields=model=>{
+    const copy=structuredClone(model);
+    delete copy.rankingRepresentation;
+    delete copy.rankingHeadWeights;
+    delete copy.rankingFeatureMean;
+    delete copy.rankingFeatureStd;
+    delete copy.orderedRankingHeadWeights;
+    delete copy.orderedRankingFeatureMean;
+    delete copy.orderedRankingFeatureStd;
+    return copy;
+  };
+  assert.deepEqual(withoutRankFields(withFrozenRanker.model),withoutRankFields(classifierOnly.model),
+    'a pre-fitted independent ranker must not alter any classifier parameter');
+  assert.equal(withFrozenRanker.probability_ready,false);
+  assert.equal(withFrozenRanker.real_order_execution,false);
 });
 
 test('independent return ranker fits only the earlier model-training partition and produces out-of-sample execution-head features',()=>{
