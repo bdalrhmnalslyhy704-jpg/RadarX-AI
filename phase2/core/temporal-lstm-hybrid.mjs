@@ -2910,77 +2910,6 @@ function fitTcnLstmPairwiseRankingHead(rows,pairs,model,anchor,{
  * separate rank-head weights and their training-only feature scaler are fit
  * here. No selection, outer-validation, or holdout rows are accepted.
  */
-export function fitTcnLstmExecutionBlockRankingHead(modelTrainingRows,executionHeadRows,model,{
-  roundTripCostBps=30,minimumReturnGapPct=0.50,maxPairsPerTimestamp=16,
-  learningRate=0.03,epochs=40,l2=0.001,patience=10
-}={}) {
-  if(!model||typeof model!=='object'||!Array.isArray(modelTrainingRows)||
-    !Array.isArray(executionHeadRows))
-    throw new TypeError('TCN_LSTM_EXECUTION_BLOCK_RANKER_INPUT_INVALID');
-  assertRows(modelTrainingRows,'RANKER_MODEL_TRAINING_REFERENCE');
-  assertRows(executionHeadRows,'RANKER_EXECUTION_HEAD_TRAINING');
-  const modelIds=new Set(modelTrainingRows.map(sampleIdentity));
-  if(executionHeadRows.some(row=>modelIds.has(sampleIdentity(row))))
-    throw new TypeError('TCN_LSTM_EXECUTION_BLOCK_RANKER_IDENTITY_OVERLAP');
-  const modelTrainingMaxResolvedAt=Math.max(
-    ...modelTrainingRows.map(row=>Number(row.resolved_at))
-  );
-  const executionHeadMinAt=Math.min(
-    ...executionHeadRows.map(row=>Number(row.at))
-  );
-  if(!finite(modelTrainingMaxResolvedAt)||!finite(executionHeadMinAt)||
-    !(modelTrainingMaxResolvedAt<executionHeadMinAt))
-    throw new TypeError('TCN_LSTM_EXECUTION_BLOCK_RANKER_PURGE_VIOLATION');
-  if(executionHeadRows.some(row=>!finite(row.realized_return_pct)))
-    throw new TypeError('TCN_LSTM_EXECUTION_BLOCK_RANKER_RETURN_EVIDENCE_INCOMPLETE');
-  const ranking=buildTcnLstmReturnRankingPairs(
-    executionHeadRows,executionHeadRows,{
-      roundTripCostBps,minimumReturnGapPct,maxPairsPerTimestamp
-    }
-  );
-  if(ranking.comparison_pairs<10)
-    return {
-      schema:'RADARX_TCN_LSTM_INDEPENDENT_MULTISCALE_RETURN_RANKER_V2',
-      status:'UNAVAILABLE',fitted:false,
-      reason:'EXECUTION_BLOCK_RANKING_PAIR_SUPPORT_TOO_SMALL',
-      fit_boundary:'TRAINING_PARTITION_ONLY',
-      source_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
-      model_training_rows:modelTrainingRows.length,
-      execution_head_rows:executionHeadRows.length,
-      decision_group_count:ranking.decision_group_count,
-      comparison_pairs:ranking.comparison_pairs,
-      minimum_required_pairs:10,
-      chronology_valid:true,
-      training_and_model_fit_identities_disjoint:true,
-      validation_or_holdout_used:false
-    };
-  // Refit from zero because the feature scaler is refit on this later block.
-  // Carrying weights across different scalers would change their meaning.
-  model.rankingHeadWeights=Array(TCN_LSTM_RANKING_FEATURE_COUNT).fill(0);
-  const fitted=fitTcnLstmPairwiseRankingHead(
-    executionHeadRows,ranking.pairs,model,null,{
-      learningRate,epochs,l2,patience
-    }
-  );
-  return {
-    ...fitted,
-    source_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
-    fit_boundary:'TRAINING_PARTITION_ONLY',
-    model_training_rows:modelTrainingRows.length,
-    model_training_max_resolved_at:modelTrainingMaxResolvedAt,
-    execution_head_rows:executionHeadRows.length,
-    execution_head_min_at:executionHeadMinAt,
-    purge_gap_ms:executionHeadMinAt-modelTrainingMaxResolvedAt,
-    decision_group_count:ranking.decision_group_count,
-    comparison_pairs:ranking.comparison_pairs,
-    round_trip_cost_bps:Number(roundTripCostBps),
-    minimum_return_gap_pct:Number(minimumReturnGapPct),
-    maximum_pairs_per_timestamp:maxPairsPerTimestamp,
-    chronology_valid:true,
-    training_and_model_fit_identities_disjoint:true,
-    validation_or_holdout_used:false
-  };
-}
 export function trainTcnLstmHybrid(trainingRows, {
   epochs = 8, learningRate = 0.0025, l2 = 0.0015, dropout = TCN_LSTM_DROPOUT,
   batchSize = 32, seed = 29, maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
@@ -4048,49 +3977,76 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       rankingWeight:Number(config.rankingWeight??0),
       rankingHeadLearningRate:candidateRankingHeadLearningRate,
       rankingHeadEpochs,rankingHeadL2,
-      fitIndependentRankingHead:false,
+      fitIndependentRankingHead:true,
       rankingRoundTripCostBps:roundTripCostBps,
       rankingMinimumReturnGapPct:rankingMinimumReturnGapPct,
       rankingPairsPerTimestamp:rankingPairsPerTimestamp,
       executionHeadRoundTripCostBps:roundTripCostBps
     });
-    const modelTrainingPartitionRanker=fit.training?.return_ranking?.ranking_head??null;
-    const executionBlockRanker=Array.isArray(executionHeadRowsWithLogisticContext)
-      ?fitTcnLstmExecutionBlockRankingHead(
-        modelTrainingRows,executionHeadRowsWithLogisticContext,fit.model,{
-          roundTripCostBps,minimumReturnGapPct:rankingMinimumReturnGapPct,
-          maxPairsPerTimestamp:rankingPairsPerTimestamp,
-          learningRate:candidateRankingHeadLearningRate,
-          epochs:rankingHeadEpochs,l2:rankingHeadL2,
-          patience:Math.min(20,Math.max(5,5*2))
-        }
-      )
-      :{
-        schema:'RADARX_TCN_LSTM_INDEPENDENT_MULTISCALE_RETURN_RANKER_V2',
-        status:'UNAVAILABLE',fitted:false,
-        reason:'PURGED_EXECUTION_HEAD_BLOCK_NOT_AVAILABLE',
-        fit_boundary:'TRAINING_PARTITION_ONLY',
-        source_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
-        model_training_rows:modelTrainingRows.length,
-        execution_head_rows:0,decision_group_count:0,comparison_pairs:0,
-        chronology_valid:false,training_and_model_fit_identities_disjoint:false,
-        validation_or_holdout_used:false
-      };
     if(!fit.training?.return_ranking)
-      throw new TypeError('TCN_LSTM_EXECUTION_BLOCK_RANKER_PROFILE_CONTRACT_MISSING');
-    fit.training.return_ranking.model_training_partition_ranker=
-      modelTrainingPartitionRanker;
-    fit.training.return_ranking.ranking_head=executionBlockRanker;
-    fit.training.return_ranking.enabled=executionBlockRanker.fitted===true;
-    fit.training.return_ranking.source_partition=executionBlockRanker.source_partition;
-    fit.training.return_ranking.training_rows=executionBlockRanker.training_rows;
-    fit.training.return_ranking.comparison_pairs=executionBlockRanker.comparison_pairs;
-    fit.training.return_ranking.decision_group_count=executionBlockRanker.decision_group_count;
-    fit.training.return_ranking.training_pairwise_log_loss=
-      executionBlockRanker.final_pairwise_log_loss;
-    fit.training.final_training_pairwise_rank_loss=
-      executionBlockRanker.final_pairwise_log_loss;
-    fit.final_training_pairwise_rank_loss=executionBlockRanker.final_pairwise_log_loss;
+      throw new TypeError('TCN_LSTM_PRE_EXECUTION_RANKER_PROFILE_CONTRACT_MISSING');
+    const rankerHead=fit.training.return_ranking.ranking_head??null;
+    const rankerTrainingIds=new Set(effectiveTrainingRowsForFit.map(sampleIdentity));
+    const executionFeatureRows=Array.isArray(executionHeadRowsWithLogisticContext)
+      ?executionHeadRowsWithLogisticContext:[];
+    const executionFeatureIds=new Set(executionFeatureRows.map(sampleIdentity));
+    const rankerAndExecutionFeatureIdentitiesDisjoint=
+      [...executionFeatureIds].every(id=>!rankerTrainingIds.has(id));
+    const rankerTrainingMaxResolvedAt=effectiveTrainingRowsForFit.length
+      ?Math.max(...effectiveTrainingRowsForFit.map(row=>Number(row.resolved_at))):null;
+    const executionFeatureMinAt=executionFeatureRows.length
+      ?Math.min(...executionFeatureRows.map(row=>Number(row.at))):null;
+    const rankerFeatureChronologyValid=finite(rankerTrainingMaxResolvedAt)&&
+      finite(executionFeatureMinAt)&&rankerTrainingMaxResolvedAt<executionFeatureMinAt;
+    const rankerFeatureContract={
+      schema:'RADARX_TCN_LSTM_EXECUTION_RANK_FEATURE_OUT_OF_SAMPLE_CONTRACT_V1',
+      fit_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION',
+      feature_scoring_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+      ranker_training_rows:rankerHead?.training_rows??0,
+      ranker_training_pairs:rankerHead?.training_pairs??0,
+      ranker_standardizer_fit_rows:rankerHead?.standardization?.fit_rows??0,
+      ranker_standardizer_fit_partition:rankerHead?.standardization?.fit_partition??null,
+      model_training_max_resolved_at:rankerTrainingMaxResolvedAt,
+      execution_feature_min_at:executionFeatureMinAt,
+      purge_gap_ms:finite(rankerTrainingMaxResolvedAt)&&finite(executionFeatureMinAt)
+        ?executionFeatureMinAt-rankerTrainingMaxResolvedAt:null,
+      training_and_execution_feature_identities_disjoint:
+        rankerAndExecutionFeatureIdentitiesDisjoint,
+      chronology_valid:rankerFeatureChronologyValid,
+      classifier_parameters_updated_by_ranker:
+        rankerHead?.classifier_parameters_updated===true,
+      validation_or_holdout_used:rankerHead?.validation_or_holdout_used===true,
+      out_of_sample_for_execution_head_features:
+        rankerHead?.fitted===true&&
+        rankerHead?.standardization?.fit_partition==='TRAINING_PARTITION_ONLY'&&
+        Number(rankerHead?.standardization?.fit_rows)===effectiveTrainingRowsForFit.length&&
+        rankerAndExecutionFeatureIdentitiesDisjoint&&rankerFeatureChronologyValid&&
+        rankerHead?.classifier_parameters_updated===false&&
+        rankerHead?.validation_or_holdout_used===false
+    };
+    if(rankerHead?.fitted===true&&
+      !rankerFeatureContract.out_of_sample_for_execution_head_features)
+      throw new TypeError('TCN_LSTM_EXECUTION_RANK_FEATURE_LEAKAGE_CONTRACT_FAILED');
+    if(rankerHead?.fitted===true){
+      Object.assign(rankerHead,{
+        source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION',
+        feature_scoring_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+        feature_scores_out_of_sample:true,
+        training_and_execution_feature_identities_disjoint:true,
+        chronology_valid:true,
+        classifier_parameters_updated:false,
+        validation_or_holdout_used:false,
+        downstream_feature_contract:rankerFeatureContract
+      });
+    }
+    fit.training.return_ranking.ranking_head=rankerHead;
+    fit.training.return_ranking.enabled=rankerHead?.fitted===true;
+    fit.training.return_ranking.source_partition='PRE_EXECUTION_MODEL_TRAINING_PARTITION';
+    fit.training.return_ranking.feature_scoring_partition=
+      'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK';
+    fit.training.return_ranking.feature_scores_out_of_sample=
+      rankerFeatureContract.out_of_sample_for_execution_head_features;
+    fit.training.return_ranking.downstream_feature_contract=rankerFeatureContract;
     fit.execution_logistic_context_model=externalLogisticContextModel;
     fit.execution_logistic_context_metadata=externalLogisticContextMetadata;
     const executionHeadsFitted=false;
@@ -4222,6 +4178,14 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       if(!Array.isArray(executionHeadRowsWithLogisticContext)||
         executionHeadRowsWithLogisticContext.length<20)
         throw new TypeError('PURGED_EXECUTION_HEAD_TRAINING_BLOCK_NOT_AVAILABLE');
+      const rankerFeatureContract=
+        item.fit.training?.return_ranking?.downstream_feature_contract;
+      if(rankerFeatureContract?.out_of_sample_for_execution_head_features!==true||
+        rankerFeatureContract?.feature_scoring_partition!==
+          'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'||
+        rankerFeatureContract?.fit_partition!==
+          'PRE_EXECUTION_MODEL_TRAINING_PARTITION')
+        throw new TypeError('TCN_LSTM_EXECUTION_HEAD_RANK_FEATURE_NOT_OUT_OF_SAMPLE');
       const executionHeadFit={
         ...fitTcnLstmExecutionRegressionHeads(
           executionHeadRowsWithLogisticContext,executionHeadRowsWithLogisticContext,
