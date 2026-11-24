@@ -112,8 +112,9 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       !finite(trainingConfig.l2)||trainingConfig.l2<0||trainingConfig.l2>1||
       !Number.isInteger(trainingConfig.epochs_requested)||trainingConfig.epochs_requested<1||
       !Number.isInteger(trainingConfig.epochs_completed)||trainingConfig.epochs_completed<1||
+      trainingConfig.epochs_completed>trainingConfig.epochs_requested||
       !Number.isInteger(trainingConfig.best_epoch)||trainingConfig.best_epoch<1||
-      trainingConfig.best_epoch>trainingConfig.epochs_requested||
+      trainingConfig.best_epoch>trainingConfig.epochs_completed||
       !Number.isInteger(trainingConfig.patience)||trainingConfig.patience<1||
       trainingConfig.selection_metric!=='PURGED_INTERNAL_TRAINING_VALIDATION_PAIRWISE_LOG_LOSS'||
       tuning?.schema!=='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_TRAINING_VALIDATION_V1'||
@@ -128,13 +129,16 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       !finite(tuning?.tuning_max_at)||
       !finite(tuning?.validation_min_at)||
       tuning.validation_min_at<=tuning.tuning_max_resolved_at||
-      !finite(tuning?.purge_gap_ms)||tuning.purge_gap_ms<tuning.purge_horizon_ms||
+      !finite(tuning?.purge_gap_ms)||
+      Math.abs(tuning.purge_gap_ms-(tuning.validation_min_at-tuning.tuning_max_at))>1e-6||
+      tuning.purge_gap_ms<tuning.purge_horizon_ms||
       !Number.isInteger(tuning?.tuning_rows)||tuning.tuning_rows<20||
       !Number.isInteger(tuning?.validation_rows)||tuning.validation_rows<20||
       !Number.isInteger(tuning?.purged_rows)||tuning.purged_rows<0||
       !Number.isInteger(tuning?.tuning_pairs)||tuning.tuning_pairs<10||
       !Number.isInteger(tuning?.validation_pairs)||tuning.validation_pairs<10||
       !Array.isArray(tuningGrid)||tuningGrid.length<2||
+      new Set(tuningGrid.map(item=>item?.l2)).size!==tuningGrid.length||
       tuningGrid.some(item=>!finite(item?.l2)||item.l2<0||item.l2>1||
         !Number.isInteger(item?.best_epoch)||item.best_epoch<1||
         !finite(item?.best_validation_pairwise_log_loss)||
