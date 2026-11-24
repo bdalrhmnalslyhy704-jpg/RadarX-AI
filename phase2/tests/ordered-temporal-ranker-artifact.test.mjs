@@ -60,7 +60,7 @@ function makeProfile(overrides={}){
     feature_scoring_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
     classifier_parameters_updated:false,
     validation_or_holdout_used:false,
-    downstream_feature_contract:contract,
+    downstream_feature_contract:structuredClone(contract),
     initial_pairwise_log_loss:0.693,
     final_pairwise_log_loss:0.62
   };
