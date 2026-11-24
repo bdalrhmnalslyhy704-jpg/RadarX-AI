@@ -1402,9 +1402,11 @@ async function main(){
           rankingScoreWeight:0.01,
           rankingMinimumReturnGapPct:0.50,
           rankingPairStrategy:'PROFITABILITY_BOUNDARY_V1',
-          // Rank only positive net-return opportunities against non-positive outcomes
-          // inside the same 15m decision cohort. The 30 bps cost and 0.50pp gap remain fixed.
-          // The classifier remains pure Brier; ranking scores stay in their own sidecar.
+          rankingRepresentation:'RAW_ORDERED_696_V1',
+          // Preserve the entire ordered 24x29 history in the independent rank sidecar.
+          // Its scaler and weights fit only the earlier purged training rows.
+          // Net-profitability pair labels, 30 bps cost and 0.50pp gap remain fixed.
+          // The temporal classifier remains pure Brier and is not updated by this ranker.
           rankingPairsPerTimestamp:16,
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
