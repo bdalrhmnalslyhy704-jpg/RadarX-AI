@@ -3022,7 +3022,8 @@ function fitTcnLstmPairwiseRankingHead(rows,pairs,model,anchor,{
  * not modified by this sidecar.
  */
 function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
-  learningRate=0.03,epochs=40,l2=0.001,patience=10
+  learningRate=0.03,epochs=40,l2=0.001,patience=10,
+  validationRows=null,validationPairs=null
 }={}){
   if(!Array.isArray(rows)||!Array.isArray(pairs)||rows.length<20||pairs.length<10)
     throw new TypeError('TCN_LSTM_ORDERED_RANKING_HEAD_TRAINING_SUPPORT_TOO_SMALL');
@@ -3043,6 +3044,30 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       pair.high_index===pair.low_index)
       throw new TypeError('TCN_LSTM_ORDERED_RANKING_PAIR_INDEX_INVALID');
   }
+  if((validationRows===null)!==(validationPairs===null)||
+    validationRows!==null&&(!Array.isArray(validationRows)||!Array.isArray(validationPairs)||
+      validationRows.length<20||validationPairs.length<10))
+    throw new TypeError('TCN_LSTM_ORDERED_RANKING_VALIDATION_SUPPORT_INVALID');
+  let validationRawVectors=null;
+  if(validationRows!==null){
+    assertRows(validationRows,'ORDERED_RANKER_INTERNAL_VALIDATION');
+    const fitIds=new Set(rows.map(sampleIdentity));
+    if(validationRows.some(row=>fitIds.has(sampleIdentity(row)))||
+      !(Math.max(...rows.map(row=>Number(row.resolved_at)))<
+        Math.min(...validationRows.map(row=>Number(row.at)))))
+      throw new TypeError('TCN_LSTM_ORDERED_RANKING_VALIDATION_PURGE_VIOLATION');
+    for(const pair of validationPairs){
+      if(!Number.isInteger(pair.high_index)||!Number.isInteger(pair.low_index)||
+        pair.high_index<0||pair.low_index<0||
+        pair.high_index>=validationRows.length||pair.low_index>=validationRows.length||
+        pair.high_index===pair.low_index)
+        throw new TypeError('TCN_LSTM_ORDERED_RANKING_VALIDATION_PAIR_INDEX_INVALID');
+    }
+    validationRawVectors=validationRows.map(row=>buildTcnLstmFlattenedFeatures(row.sequence));
+    if(validationRawVectors.some(row=>!Array.isArray(row)||row.length!==featureCount||
+      row.some(value=>!finite(value))))
+      throw new TypeError('TCN_LSTM_ORDERED_RANKING_VALIDATION_FEATURE_MATRIX_INVALID');
+  }
   const moments=Array.from({length:featureCount},(_,column)=>{
     let mean=0;
     for(const vector of rawVectors)mean+=vector[column]/rawVectors.length;
@@ -3056,27 +3081,33 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
   const vectors=rawVectors.map(row=>row.map((value,index)=>
     (value-means[index])/stds[index]
   ));
+  const validationVectors=validationRawVectors?.map(row=>row.map((value,index)=>
+    (value-means[index])/stds[index]
+  ))??null;
   let weights=Array.isArray(model.orderedRankingHeadWeights)
     ?[...model.orderedRankingHeadWeights]:Array(featureCount).fill(0);
   if(weights.length!==featureCount||weights.some(value=>!finite(value)))
     throw new TypeError('TCN_LSTM_ORDERED_RANKING_INITIAL_WEIGHTS_INVALID');
-  const score=(index,currentWeights)=>{
+  const score=(index,currentWeights,featureVectors=vectors)=>{
     let value=0;
-    const vector=vectors[index];
+    const vector=featureVectors[index];
     for(let column=0;column<featureCount;column++)
       value+=currentWeights[column]*vector[column];
     return clamp(value,-LOGIT_LIMIT,LOGIT_LIMIT);
   };
-  const evaluate=currentWeights=>{
+  const evaluate=(currentWeights,pairRows=pairs,featureVectors=vectors)=>{
     let loss=0;
-    for(const pair of pairs)
+    for(const pair of pairRows)
       loss+=tcnLstmPairwiseLogitRankingLoss(
-        score(pair.high_index,currentWeights),score(pair.low_index,currentWeights)
+        score(pair.high_index,currentWeights,featureVectors),
+        score(pair.low_index,currentWeights,featureVectors)
       ).loss;
-    return loss/pairs.length;
+    return loss/pairRows.length;
   };
-  let bestLoss=evaluate(weights),bestWeights=[...weights],wait=0,completed=0;
-  const initialLoss=bestLoss;
+  const initialTrainingLoss=evaluate(weights);
+  const initialValidationLoss=validationPairs
+    ?evaluate(weights,validationPairs,validationVectors):initialTrainingLoss;
+  let bestLoss=initialValidationLoss,bestWeights=[...weights],wait=0,completed=0,bestEpoch=0;
   const firstMoment=Array(featureCount).fill(0),secondMoment=Array(featureCount).fill(0);
   const beta1=0.9,beta2=0.999,epsilon=1e-8;
   for(let epoch=1;epoch<=epochs;epoch++){
@@ -3104,12 +3135,14 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       weights[column]=clamp(weights[column]-
         learningRate*correctedFirst/(Math.sqrt(correctedSecond)+epsilon),-8,8);
     }
-    const currentLoss=evaluate(weights);
-    if(!finite(currentLoss)||weights.some(value=>!finite(value)))
+    const trainingLoss=evaluate(weights);
+    const currentLoss=validationPairs
+      ?evaluate(weights,validationPairs,validationVectors):trainingLoss;
+    if(!finite(trainingLoss)||!finite(currentLoss)||weights.some(value=>!finite(value)))
       throw new TypeError('TCN_LSTM_ORDERED_RANKING_HEAD_NON_FINITE');
     completed=epoch;
     if(currentLoss<bestLoss-1e-9){
-      bestLoss=currentLoss;bestWeights=[...weights];wait=0;
+      bestLoss=currentLoss;bestWeights=[...weights];wait=0;bestEpoch=epoch;
     }else wait++;
     if(wait>=patience)break;
   }
@@ -3118,7 +3151,10 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
   model.orderedRankingFeatureStd=stds;
   model.rankingRepresentation='RAW_ORDERED_696_V1';
   const finalLoss=evaluate(bestWeights);
-  if(!finite(finalLoss)||bestWeights.some(value=>!finite(value)))
+  const finalValidationLoss=validationPairs
+    ?evaluate(bestWeights,validationPairs,validationVectors):null;
+  if(!finite(finalLoss)||finalValidationLoss!==null&&!finite(finalValidationLoss)||
+    bestWeights.some(value=>!finite(value)))
     throw new TypeError('TCN_LSTM_ORDERED_RANKING_HEAD_FINAL_STATE_INVALID');
   return {
     schema:'RADARX_TCN_LSTM_INDEPENDENT_ORDERED_696_RETURN_RANKER_V1',
@@ -3137,8 +3173,16 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     training_rows:rows.length,training_pairs:pairs.length,
     learning_rate:learningRate,epochs_requested:epochs,epochs_completed:completed,
     l2,patience,early_stopped:completed<epochs,
-    initial_pairwise_log_loss:Number(initialLoss.toFixed(8)),
+    best_epoch:bestEpoch||completed,
+    selection_metric:validationPairs
+      ?'PURGED_INTERNAL_TRAINING_VALIDATION_PAIRWISE_LOG_LOSS'
+      :'TRAINING_PAIRWISE_LOG_LOSS',
+    initial_pairwise_log_loss:Number(initialTrainingLoss.toFixed(8)),
     final_pairwise_log_loss:Number(finalLoss.toFixed(8)),
+    best_validation_pairwise_log_loss:finalValidationLoss===null
+      ?null:Number(finalValidationLoss.toFixed(8)),
+    internal_validation_rows:validationRows?.length??0,
+    internal_validation_pairs:validationPairs?.length??0,
     weight_l2_norm:Number(Math.sqrt(bestWeights.reduce((sum,value)=>sum+value*value,0)).toFixed(8)),
     parameter_count:featureCount,
     classifier_parameters_updated:false,validation_or_holdout_used:false
