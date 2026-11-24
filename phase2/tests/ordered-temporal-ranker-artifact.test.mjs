@@ -46,7 +46,7 @@ function makeProfile(overrides={}){
     representation:'RAW_ORDERED_696_V1',
     fit_boundary:'TRAINING_PARTITION_ONLY',
     feature_count:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
-    training_rows,
+    training_rows:trainingRows,
     training_pairs:96,
     standardization:{
       method:'TRAIN_ONLY_POPULATION_ZSCORE',
