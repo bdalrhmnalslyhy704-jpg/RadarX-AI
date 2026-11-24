@@ -3231,7 +3231,8 @@ export function trainTcnLstmHybrid(trainingRows, {
   rankingPairStrategy='RETURN_EXTREMES_V1',
   rankingRepresentation='LATENT_MULTI_SCALE_V2',
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001,
-  fitIndependentRankingHead=true,executionHeadRoundTripCostBps=30,executionHeadLearningRate=0.015,
+  fitIndependentRankingHead=true,preFittedIndependentRankingHead=null,
+  executionHeadRoundTripCostBps=30,executionHeadLearningRate=0.015,
   executionHeadEpochs=100,executionHeadL2=0.002
 } = {}) {
   assertRows(trainingRows, 'TRAINING');
@@ -3285,16 +3286,64 @@ export function trainTcnLstmHybrid(trainingRows, {
     !TCN_LSTM_RANKING_REPRESENTATIONS.includes(rankingRepresentation)||
     typeof fitIndependentRankingHead!=='boolean')
     throw new TypeError('TCN_LSTM_RANKING_HEAD_CONFIGURATION_INVALID');
-  const ranking=Array.isArray(rankingRows)
-    ?buildTcnLstmReturnRankingPairs(rows,rankingRows,{
-      roundTripCostBps:rankingRoundTripCostBps,
-      minimumReturnGapPct:rankingMinimumReturnGapPct,
-      maxPairsPerTimestamp:rankingPairsPerTimestamp,
-      pairStrategy:rankingPairStrategy
-    })
-    :{schema:'RADARX_TCN_LSTM_TRAINING_RETURN_RANK_PAIRS_V1',
-      pair_strategy:rankingPairStrategy,
-      source_partition:'DISABLED',decision_group_count:0,comparison_pairs:0,pairs:[]};
+  if(preFittedIndependentRankingHead!==null){
+    const prefit=preFittedIndependentRankingHead;
+    const state=prefit?.model_state;
+    const metadata=prefit?.training;
+    if(rankingRepresentation!=='RAW_ORDERED_696_V1'||
+      prefit?.schema!=='RADARX_TCN_LSTM_PRE_EXECUTION_ORDERED_RANKER_FIT_V1'||
+      prefit?.fitted!==true||
+      prefit?.source_partition!=='PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
+      prefit?.feature_scoring_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'||
+      !Array.isArray(state?.orderedRankingHeadWeights)||
+      state.orderedRankingHeadWeights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      state.orderedRankingHeadWeights.some(value=>!finite(value))||
+      !Array.isArray(state?.orderedRankingFeatureMean)||
+      state.orderedRankingFeatureMean.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      state.orderedRankingFeatureMean.some(value=>!finite(value))||
+      !Array.isArray(state?.orderedRankingFeatureStd)||
+      state.orderedRankingFeatureStd.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      state.orderedRankingFeatureStd.some(value=>!finite(value)||value<=0)||
+      metadata?.schema!=='RADARX_TCN_LSTM_INDEPENDENT_ORDERED_696_RETURN_RANKER_V1'||
+      metadata?.fitted!==true||
+      metadata?.representation!=='RAW_ORDERED_696_V1'||
+      metadata?.feature_count!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      metadata?.training_rows!==Number(prefit.training_rows)||
+      metadata?.training_pairs!==Number(prefit.training_pairs)||
+      metadata?.standardization?.fit_partition!=='TRAINING_PARTITION_ONLY'||
+      metadata?.standardization?.fit_rows!==Number(prefit.training_rows)||
+      metadata?.validation_or_holdout_used!==false||
+      metadata?.classifier_parameters_updated!==false||
+      prefit?.pair_support?.pair_strategy!==rankingPairStrategy||
+      prefit?.pair_support?.round_trip_cost_bps!==rankingRoundTripCostBps||
+      prefit?.pair_support?.minimum_return_gap_pct!==rankingMinimumReturnGapPct||
+      prefit?.pair_support?.maximum_pairs_per_timestamp!==rankingPairsPerTimestamp)
+      throw new TypeError('TCN_LSTM_PREFITTED_ORDERED_RANKER_CONTRACT_INVALID');
+  }
+  const ranking=preFittedIndependentRankingHead!==null
+    ?{
+      schema:preFittedIndependentRankingHead.pair_support.schema,
+      pair_strategy:preFittedIndependentRankingHead.pair_support.pair_strategy,
+      source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION',
+      decision_group_count:preFittedIndependentRankingHead.pair_support.decision_group_count,
+      comparison_pairs:preFittedIndependentRankingHead.pair_support.comparison_pairs,
+      positive_opportunity_groups:preFittedIndependentRankingHead.pair_support.positive_opportunity_groups,
+      mixed_decision_groups:preFittedIndependentRankingHead.pair_support.mixed_decision_groups,
+      round_trip_cost_bps:preFittedIndependentRankingHead.pair_support.round_trip_cost_bps,
+      minimum_return_gap_pct:preFittedIndependentRankingHead.pair_support.minimum_return_gap_pct,
+      maximum_pairs_per_timestamp:preFittedIndependentRankingHead.pair_support.maximum_pairs_per_timestamp,
+      pairs:[]
+    }
+    :Array.isArray(rankingRows)
+      ?buildTcnLstmReturnRankingPairs(rows,rankingRows,{
+        roundTripCostBps:rankingRoundTripCostBps,
+        minimumReturnGapPct:rankingMinimumReturnGapPct,
+        maxPairsPerTimestamp:rankingPairsPerTimestamp,
+        pairStrategy:rankingPairStrategy
+      })
+      :{schema:'RADARX_TCN_LSTM_TRAINING_RETURN_RANK_PAIRS_V1',
+        pair_strategy:rankingPairStrategy,
+        source_partition:'DISABLED',decision_group_count:0,comparison_pairs:0,pairs:[]};
   if(Array.isArray(rankingRows)&&ranking.comparison_pairs<10)
     throw new TypeError('TCN_LSTM_RETURN_RANKING_PAIR_SUPPORT_TOO_SMALL');
   const rankingPairs=ranking.pairs;
@@ -3501,17 +3550,32 @@ export function trainTcnLstmHybrid(trainingRows, {
   }
 
   Object.assign(model, cloneTree(bestModel));
-  const rankingHeadFit=fitIndependentRankingHead&&rankingPairs.length
-    ?rankingRepresentation==='RAW_ORDERED_696_V1'
-      ?fitTcnLstmOrderedPairwiseRankingHead(rows,rankingPairs,model,{
-        learningRate:rankingHeadLearningRate,epochs:rankingHeadEpochs,
-        l2:rankingHeadL2,patience:Math.min(20,Math.max(5,earlyStoppingPatience*2))
-      })
-      :fitTcnLstmPairwiseRankingHead(rows,rankingPairs,model,anchor,{
-        learningRate:rankingHeadLearningRate,epochs:rankingHeadEpochs,
-        l2:rankingHeadL2,patience:Math.min(20,Math.max(5,earlyStoppingPatience*2))
-      })
-    :{
+  let rankingHeadFit;
+  if(preFittedIndependentRankingHead!==null){
+    Object.assign(model,cloneTree(preFittedIndependentRankingHead.model_state));
+    rankingHeadFit={
+      ...cloneTree(preFittedIndependentRankingHead.training),
+      fitted:true,
+      representation:'RAW_ORDERED_696_V1',
+      feature_count:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
+      parameter_count:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
+      source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION',
+      feature_scoring_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+      classifier_parameters_updated:false,
+      validation_or_holdout_used:false
+    };
+  }else{
+    rankingHeadFit=fitIndependentRankingHead&&rankingPairs.length
+      ?rankingRepresentation==='RAW_ORDERED_696_V1'
+        ?fitTcnLstmOrderedPairwiseRankingHead(rows,rankingPairs,model,{
+          learningRate:rankingHeadLearningRate,epochs:rankingHeadEpochs,
+          l2:rankingHeadL2,patience:Math.min(20,Math.max(5,earlyStoppingPatience*2))
+        })
+        :fitTcnLstmPairwiseRankingHead(rows,rankingPairs,model,anchor,{
+          learningRate:rankingHeadLearningRate,epochs:rankingHeadEpochs,
+          l2:rankingHeadL2,patience:Math.min(20,Math.max(5,earlyStoppingPatience*2))
+        })
+      :{
       schema:rankingRepresentation==='RAW_ORDERED_696_V1'
         ?'RADARX_TCN_LSTM_INDEPENDENT_ORDERED_696_RETURN_RANKER_V1'
         :'RADARX_TCN_LSTM_INDEPENDENT_MULTISCALE_RETURN_RANKER_V2',
@@ -3524,6 +3588,7 @@ export function trainTcnLstmHybrid(trainingRows, {
       parameter_count:rankingRepresentation==='RAW_ORDERED_696_V1'
         ?TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT:TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT,
       validation_or_holdout_used:false};
+  }
   const executionHeadFit=Array.isArray(executionRows)
     ?{
       ...fitTcnLstmExecutionRegressionHeads(executionRows,executionRows,model,anchor,{
@@ -3636,7 +3701,10 @@ export function trainTcnLstmHybrid(trainingRows, {
       epochs_completed: history.length,
       best_epoch: bestEpoch,
       best_training_brier:Number(bestBrier.toFixed(8)),
-      best_training_pairwise_rank_loss:Number(finalRankingLoss.toFixed(8)),
+      best_training_pairwise_rank_loss:Number(
+        (preFittedIndependentRankingHead!==null
+          ?rankingHeadFit.final_pairwise_log_loss:finalRankingLoss).toFixed(8)
+      ),
       best_training_shared_classifier_pairwise_rank_loss:Number(bestSharedRankingLoss.toFixed(8)),
       best_training_classification_objective:Number(bestClassificationObjective.toFixed(8)),
       best_training_composite_objective:Number(bestObjective.toFixed(8)),
@@ -3680,7 +3748,13 @@ export function trainTcnLstmHybrid(trainingRows, {
         minimum_return_gap_pct:Number(rankingMinimumReturnGapPct),
         maximum_pairs_per_timestamp:rankingPairsPerTimestamp,
         ranking_head:rankingHeadFit,
-        training_pairwise_log_loss:Number(finalRankingLoss.toFixed(8)),
+        training_pairwise_log_loss:Number(
+          (preFittedIndependentRankingHead!==null
+            ?rankingHeadFit.final_pairwise_log_loss:finalRankingLoss).toFixed(8)
+        ),
+        independent_ranker_fit_mode:preFittedIndependentRankingHead!==null
+          ?'FITTED_ONCE_ON_COMPLETE_PRE_EXECUTION_MODEL_TRAINING_PARTITION'
+          :'CANDIDATE_LOCAL_TRAINING_PARTITION',
         ordered_feature_count:rankingRepresentation==='RAW_ORDERED_696_V1'
           ?TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT:null,
         ranking_labels_seen_outside_training_partition:false,
@@ -3699,7 +3773,10 @@ export function trainTcnLstmHybrid(trainingRows, {
       history
     },
     final_training_brier:Number(finalBrier.toFixed(8)),
-    final_training_pairwise_rank_loss:Number(finalRankingLoss.toFixed(8)),
+    final_training_pairwise_rank_loss:Number(
+      (preFittedIndependentRankingHead!==null
+        ?rankingHeadFit.final_pairwise_log_loss:finalRankingLoss).toFixed(8)
+    ),
     probability_ready: false,
     live_eligibility_ready: false,
     real_order_execution: false
