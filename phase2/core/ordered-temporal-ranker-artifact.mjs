@@ -145,8 +145,7 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
     !Array.isArray(stds)||stds.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
     !Array.isArray(standardization?.feature_mean)||!Array.isArray(standardization?.feature_std)||
     canonical(means)!==canonical(standardization.feature_mean)||
-    canonical(stds)!==canonical(standardization.feature_std)||
-    canonical(weights)!==canonical(weights))
+    canonical(stds)!==canonical(standardization.feature_std))
     throw new TypeError('ORDERED_RANKER_MODEL_AND_TRAINING_METADATA_MISMATCH');
   const required={
     sourceCommitSha:provenance?.sourceCommitSha,
