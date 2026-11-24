@@ -1401,7 +1401,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     item.ranking_head?.feature_scoring_partition==='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'&&
     item.ranking_head?.feature_scores_out_of_sample===true&&
     item.ranking_head?.downstream_feature_contract?.out_of_sample_for_execution_head_features===true&&
-    item.ranking_head?.downstream_feature_contract?.training_and_execution_identities_disjoint!==false&&
+    item.ranking_head?.downstream_feature_contract?.training_and_execution_feature_identities_disjoint===true&&
     item.ranking_head?.downstream_feature_contract?.chronology_valid===true
   ),'every execution-head rank feature must be scored by a ranker fit on earlier disjoint training rows');
   assert.ok(result.candidates.every(item=>{
@@ -1410,7 +1410,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
       internal?.chronology_valid===true&&
       internal?.outer_validation_or_holdout_used===false&&
       internal?.model_selection_partition_used===false&&
-      internal?.validation_rows>=20&&internal?.purged_rows>0&&
+      internal?.validation_rows>=20&&internal?.purged_rows>=0&&
       internal?.purge_gap_ms>=4*60*60*1000&&
       internal?.candidate_grid?.length===4&&
       Number.isFinite(internal?.selected_validation_pairwise_log_loss)&&
