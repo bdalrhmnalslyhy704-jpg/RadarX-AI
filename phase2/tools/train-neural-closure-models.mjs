@@ -1956,17 +1956,39 @@ async function main(){
     await atomicJson(outputPath,innerOnlyReport);
     const innerDiagnostic=innerOnlyReport.tcn_lstm_inner_diagnostics??{};
     const executionAblation=innerOnlyReport.hurdle_v2?.execution_ablation??{};
-    const candidateSummary=(innerDiagnostic.candidates??[]).map(candidate=>({
-      name:candidate.name??null,
-      selection_brier:candidate.selection_brier??null,
-      brier_improvement:candidate.brier_improvement??null,
-      pairwise_ranking_improvement:candidate.pairwise_ranking_improvement??null,
-      independent_ranking_signal_passed:
-        candidate.independent_ranking_signal_passed??null,
-      execution_head_context_ablation_passed:
-        candidate.execution_head_context_ablation_passed??null,
-      passed_inner_margin:candidate.passed_inner_margin??null
-    }));
+    const candidateSummary=(innerDiagnostic.candidates??[]).map(candidate=>{
+      const ranker=candidate.ranking_head??null;
+      const ranking=candidate.pairwise_ranking??null;
+      const logisticRanking=candidate.logistic_pairwise_ranking??null;
+      return {
+        name:candidate.name??null,
+        selection_brier:candidate.selection_brier??null,
+        brier_improvement:candidate.brier_improvement??null,
+        pairwise_ranking_improvement:candidate.pairwise_ranking_improvement??null,
+        pairwise_ranking_accuracy_improvement_pct:
+          candidate.pairwise_ranking_accuracy_improvement_pct??null,
+        candidate_pairwise_log_loss:ranking?.pairwise_log_loss??null,
+        candidate_pairwise_accuracy_pct:ranking?.pairwise_accuracy_pct??null,
+        logistic_pairwise_log_loss:logisticRanking?.pairwise_log_loss??null,
+        logistic_pairwise_accuracy_pct:logisticRanking?.pairwise_accuracy_pct??null,
+        ranker_fit:{
+          fitted:ranker?.fitted??false,
+          representation:ranker?.representation??null,
+          training_rows:ranker?.training_rows??null,
+          training_pairs:ranker?.training_pairs??null,
+          initial_pairwise_log_loss:ranker?.initial_pairwise_log_loss??null,
+          final_pairwise_log_loss:ranker?.final_pairwise_log_loss??null,
+          epochs_completed:ranker?.epochs_completed??null,
+          weight_l2_norm:ranker?.weight_l2_norm??null,
+          validation_or_holdout_used:ranker?.validation_or_holdout_used??null
+        },
+        independent_ranking_signal_passed:
+          candidate.independent_ranking_signal_passed??null,
+        execution_head_context_ablation_passed:
+          candidate.execution_head_context_ablation_passed??null,
+        passed_inner_margin:candidate.passed_inner_margin??null
+      };
+    });
     console.log(JSON.stringify({
       schema:innerOnlyReport.schema,
       status:innerOnlyReport.status,
