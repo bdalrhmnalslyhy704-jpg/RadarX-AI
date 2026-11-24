@@ -1980,6 +1980,7 @@ async function main(){
           final_pairwise_log_loss:ranker?.final_pairwise_log_loss??null,
           epochs_completed:ranker?.epochs_completed??null,
           weight_l2_norm:ranker?.weight_l2_norm??null,
+          internal_training_validation:ranker?.internal_training_validation??null,
           validation_or_holdout_used:ranker?.validation_or_holdout_used??null
         },
         independent_ranking_signal_passed:
