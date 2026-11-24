@@ -2939,7 +2939,21 @@ export function fitTcnLstmExecutionBlockRankingHead(modelTrainingRows,executionH
     }
   );
   if(ranking.comparison_pairs<10)
-    throw new TypeError('TCN_LSTM_EXECUTION_BLOCK_RANKER_PAIR_SUPPORT_TOO_SMALL');
+    return {
+      schema:'RADARX_TCN_LSTM_INDEPENDENT_MULTISCALE_RETURN_RANKER_V2',
+      status:'UNAVAILABLE',fitted:false,
+      reason:'EXECUTION_BLOCK_RANKING_PAIR_SUPPORT_TOO_SMALL',
+      fit_boundary:'TRAINING_PARTITION_ONLY',
+      source_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+      model_training_rows:modelTrainingRows.length,
+      execution_head_rows:executionHeadRows.length,
+      decision_group_count:ranking.decision_group_count,
+      comparison_pairs:ranking.comparison_pairs,
+      minimum_required_pairs:10,
+      chronology_valid:true,
+      training_and_model_fit_identities_disjoint:true,
+      validation_or_holdout_used:false
+    };
   // Refit from zero because the feature scaler is refit on this later block.
   // Carrying weights across different scalers would change their meaning.
   model.rankingHeadWeights=Array(TCN_LSTM_RANKING_FEATURE_COUNT).fill(0);
@@ -4041,15 +4055,27 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       executionHeadRoundTripCostBps:roundTripCostBps
     });
     const modelTrainingPartitionRanker=fit.training?.return_ranking?.ranking_head??null;
-    const executionBlockRanker=fitTcnLstmExecutionBlockRankingHead(
-      modelTrainingRows,executionHeadRowsWithLogisticContext,fit.model,{
-        roundTripCostBps,minimumReturnGapPct:rankingMinimumReturnGapPct,
-        maxPairsPerTimestamp:rankingPairsPerTimestamp,
-        learningRate:candidateRankingHeadLearningRate,
-        epochs:rankingHeadEpochs,l2:rankingHeadL2,
-        patience:Math.min(20,Math.max(5,5*2))
-      }
-    );
+    const executionBlockRanker=Array.isArray(executionHeadRowsWithLogisticContext)
+      ?fitTcnLstmExecutionBlockRankingHead(
+        modelTrainingRows,executionHeadRowsWithLogisticContext,fit.model,{
+          roundTripCostBps,minimumReturnGapPct:rankingMinimumReturnGapPct,
+          maxPairsPerTimestamp:rankingPairsPerTimestamp,
+          learningRate:candidateRankingHeadLearningRate,
+          epochs:rankingHeadEpochs,l2:rankingHeadL2,
+          patience:Math.min(20,Math.max(5,5*2))
+        }
+      )
+      :{
+        schema:'RADARX_TCN_LSTM_INDEPENDENT_MULTISCALE_RETURN_RANKER_V2',
+        status:'UNAVAILABLE',fitted:false,
+        reason:'PURGED_EXECUTION_HEAD_BLOCK_NOT_AVAILABLE',
+        fit_boundary:'TRAINING_PARTITION_ONLY',
+        source_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+        model_training_rows:modelTrainingRows.length,
+        execution_head_rows:0,decision_group_count:0,comparison_pairs:0,
+        chronology_valid:false,training_and_model_fit_identities_disjoint:false,
+        validation_or_holdout_used:false
+      };
     if(!fit.training?.return_ranking)
       throw new TypeError('TCN_LSTM_EXECUTION_BLOCK_RANKER_PROFILE_CONTRACT_MISSING');
     fit.training.return_ranking.model_training_partition_ranker=
