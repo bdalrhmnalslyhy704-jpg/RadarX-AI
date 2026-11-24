@@ -4945,6 +4945,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       execution_head_context_ablation_passed:execution_head_context_ablation?.passed===true,
       ranking_head_selection_qualified,
       ranking_head:fit.training?.return_ranking?.ranking_head??null,
+      independent_ranker_fit_mode:
+        fit.training?.return_ranking?.independent_ranker_fit_mode??null,
       shared_classifier_training:fit.training?.shared_classifier_loss??null,
       selection_score:Number(selection_score.toFixed(8)),
       logistic_selection_score:Number(logistic_selection_score.toFixed(8)),
