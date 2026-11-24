@@ -4884,7 +4884,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         :'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6',
       ranking_representation:rankingRepresentation,
       pair_strategy:rankingPairStrategy,
-      score_separation_method:'RAW_INDEPENDENT_MULTISCALE_RETURN_SCORE_NO_SIGMOID_NO_CLASSIFIER_LOGIT_ADDITION_V2',
+      score_separation_method:rankingRepresentation==='RAW_ORDERED_696_V1'
+        ?'RAW_ORDERED_696_RETURN_RANK_SCORE_NO_SIGMOID_NO_CLASSIFIER_LOGIT_ADDITION_V1'
+        :'RAW_INDEPENDENT_MULTISCALE_RETURN_SCORE_NO_SIGMOID_NO_CLASSIFIER_LOGIT_ADDITION_V2',
       pairwise_score_weight:rankingScoreAvailable?rankingScoreWeight:0,
       required_inner_brier_improvement:requiredImprovement,
       required_composite_improvement:requiredImprovement,
