@@ -3729,8 +3729,11 @@ export function trainTcnLstmHybrid(trainingRows, {
         weight:Number(rankingWeight),
         source_partition:'TRAINING_PARTITION_ONLY',
         pair_schema:ranking.schema,
-        comparison_pairs:ranking.comparison_pairs,
-        decision_group_count:ranking.decision_group_count,
+        comparison_pairs:rankingPairs.length,
+        decision_group_count:rankingPairsByTime.size,
+        pair_source_partition:preFittedIndependentRankingHead!==null
+          ?'OOF_FILTERED_CLASSIFIER_RESIDUAL_TRAINING_SUBSET'
+          :'TRAINING_PARTITION_ONLY',
         round_trip_cost_bps:Number(rankingRoundTripCostBps),
         minimum_return_gap_pct:Number(rankingMinimumReturnGapPct),
         maximum_pairs_per_timestamp:rankingPairsPerTimestamp,
