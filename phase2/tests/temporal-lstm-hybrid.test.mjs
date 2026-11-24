@@ -2054,6 +2054,7 @@ test('selective execution policy evaluates singleton 15m buckets without treatin
 
 test('ordered 696-feature pairwise ranker fits training-only normalization and leaves classifier parameters unchanged',()=>{
   const modelTrainingRows=makeRankedRows(0,12,'ordered-ranker-fit');
+  const executionFeatureRows=makeRankedRows(100,12,'ordered-ranker-execution');
   const fitRows=modelTrainingRows.map(({realized_return_pct,...row})=>row);
   const options={
     epochs:1,learningRate:0.0015,l2:0.0005,batchSize:8,
@@ -2077,6 +2078,8 @@ test('ordered 696-feature pairwise ranker fits training-only normalization and l
   assert.equal(ranker.training_pairs,48);
   assert.equal(ranker.standardization.fit_partition,'TRAINING_PARTITION_ONLY');
   assert.equal(ranker.standardization.fit_rows,modelTrainingRows.length);
+  assert.equal(ranker.feature_schema_id,
+    'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1');
   assert.equal(ranker.classifier_parameters_updated,false);
   assert.equal(ranker.validation_or_holdout_used,false);
   assert.equal(profile.model.rankingRepresentation,'RAW_ORDERED_696_V1');
@@ -2106,6 +2109,28 @@ test('ordered 696-feature pairwise ranker fits training-only normalization and l
   assert.equal(forward.ranking_representation,'RAW_ORDERED_696_V1');
   assert.equal(forward.ranking_score_feature_count,696);
   assert.equal(forward.ranking_score,score);
+
+  const trainingIds=new Set(modelTrainingRows.map(row=>String(row.id)));
+  assert.ok(executionFeatureRows.every(row=>!trainingIds.has(String(row.id))),
+    'later execution feature identities must be disjoint from the ranker fit rows');
+  const rankerMaxResolvedAt=Math.max(...modelTrainingRows.map(row=>row.resolved_at));
+  const executionMinAt=Math.min(...executionFeatureRows.map(row=>row.at));
+  assert.ok(rankerMaxResolvedAt<executionMinAt,
+    'all ranker labels must resolve before the later execution-feature block begins');
+  for(const row of executionFeatureRows.slice(0,4)){
+    const anchorLogit=predictTcnLstmLogisticLogit(row.sequence,profile.baseline_fit);
+    const executionFeatures=buildTcnLstmExecutionHeadInputFeatures(
+      row.sequence,profile.model,profile.baseline_fit,{
+        variant:'LOGIT_CONTEXT_AUGMENTED',
+        externalLogisticLogit:anchorLogit
+      }
+    );
+    const independentScore=predictTcnLstmHybridRankingScore(row.sequence,profile);
+    assert.equal(executionFeatures.independent_return_rank_score,independentScore);
+    assert.equal(executionFeatures.normalized_ranking_score,Math.tanh(independentScore/4));
+    assert.ok(Number.isFinite(executionFeatures.normalized_ranking_score));
+  }
+
   const restored=JSON.parse(JSON.stringify(profile));
   assert.equal(
     predictTcnLstmHybridRankingScore(modelTrainingRows[0].sequence,restored),
