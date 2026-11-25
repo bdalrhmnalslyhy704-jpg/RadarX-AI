@@ -67,6 +67,7 @@ test('60-day event schedule uses only matured 4h decisions on 15m close boundari
 
 test('prospective cohort schedule starts after the immutable legacy cohort and contains only matured 4h decisions',()=>{
   const legacyLastDecision=Date.parse('2026-11-17T16:14:59.999Z');
+  const legacyLastLabelResolved=legacyLastDecision+FOUR_HOURS();
   const prospectiveStart=Date.parse('2026-11-18T00:14:59.999Z');
   const serverTime=Date.parse('2026-11-26T06:00:00.000Z');
   const schedule=createNeuralClosureDecisionSchedule({
@@ -74,7 +75,10 @@ test('prospective cohort schedule starts after the immutable legacy cohort and c
   });
   assert.equal(schedule.mode,'PROSPECTIVE_LOCKED_OUT_OF_TIME');
   assert.equal(schedule.first_decision_at,prospectiveStart);
+  assert.equal(legacyLastLabelResolved,Date.parse('2026-11-17T20:14:59.999Z'));
   assert.ok(schedule.first_decision_at>legacyLastDecision);
+  assert.ok(schedule.first_decision_at-legacyLastLabelResolved>=FOUR_HOURS(),
+    'four-hour purge must follow maturity of every legacy label');
   assert.equal(schedule.start_boundary_was_rounded,false);
   assert.equal(schedule.decision_times[0],prospectiveStart);
   assert.equal(schedule.decision_times.at(-1),schedule.last_decision_at);
