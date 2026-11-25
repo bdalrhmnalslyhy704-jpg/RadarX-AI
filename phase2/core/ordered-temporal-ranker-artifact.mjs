@@ -121,7 +121,7 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
             Math.abs(parameters.feature_mean[current]-parameters.feature_mean[first])<=1e-12&&
             Math.abs(parameters.feature_std[current]-parameters.feature_std[first])<=1e-12;
         })
-      ));
+      );
     if(training?.fit_partition!=='TRAINING_PARTITION_ONLY'||
       training?.source_partition!=='PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
       training?.feature_scoring_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'||
