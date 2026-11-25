@@ -1406,8 +1406,10 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   ),'every execution-head rank feature must be scored by a ranker fit on earlier disjoint training rows');
   assert.ok(result.candidates.every(item=>{
     const internal=item.ranking_head?.internal_training_validation;
-    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V4'&&
-      internal?.method==='TWO_FOLD_EXPANDING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1'&&
+    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V5'&&
+      internal?.method==='TWO_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1'&&
+      internal?.epoch_selection_policy===
+        'NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS'&&
       internal?.chronology_valid===true&&
       internal?.outer_validation_or_holdout_used===false&&
       internal?.model_selection_partition_used===false&&
@@ -1421,6 +1423,13 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
         fold.logistic_baseline_training_rows===fold.tuning_rows&&
         fold.logistic_baseline_validation_labels_read===false&&
         fold.logistic_baseline_validation_or_holdout_used===false&&
+        fold.epoch_training_rows>=20&&fold.epoch_validation_rows>=20&&
+        fold.epoch_training_pairs>=10&&fold.epoch_validation_pairs>=10&&
+        fold.epoch_training_rows+fold.epoch_validation_rows+
+          fold.epoch_purged_rows+fold.epoch_unused_rows===fold.tuning_rows&&
+        fold.epoch_purge_gap_ms>=4*60*60*1000&&
+        fold.epoch_validation_min_at>fold.epoch_training_max_resolved_at&&
+        fold.epoch_validation_max_at<fold.validation_min_at&&
         fold.purge_gap_ms>=4*60*60*1000&&
         fold.validation_min_at>fold.tuning_max_resolved_at)&&
       internal.folds[0].validation_max_at<internal.folds[1].validation_min_at&&
@@ -1449,9 +1458,16 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
           Number.isFinite(fold.best_validation_pairwise_accuracy_pct)&&
           Number.isFinite(fold.logistic_validation_pairwise_accuracy_pct)&&
           Number.isFinite(fold.logistic_validation_pairwise_log_loss)&&
+          Number.isFinite(fold.epoch_selection_pairwise_accuracy_pct)&&
+          Number.isFinite(fold.epoch_selection_pairwise_log_loss)&&
+          fold.epoch_training_rows>=20&&fold.epoch_validation_rows>=20&&
+          fold.epoch_purge_gap_ms>=4*60*60*1000&&
           Number.isFinite(fold.training_pairwise_accuracy_pct)))&&
       internal?.final_refit_rows===result.model_training_rows&&
-      internal?.final_refit_pairs===item.ranking_head.training_pairs;
+      internal?.final_refit_pairs===item.ranking_head.training_pairs&&
+      internal?.final_refit_epoch_selection_mode===
+        'FIXED_EPOCHS_FROM_NESTED_PURGED_FOLD_EARLY_STOPPING'&&
+      item.ranking_head.epoch_selection_mode==='FIXED_EPOCHS';
   }),'the final ranker must be refit on all pre-execution training rows after purged training-only tuning');
   assert.ok(result.candidates.every(item=>
     item.ranking_score_method==='RAW_ORDERED_696_INDEPENDENT_PAIRWISE_RANK_SCORE_V1'&&

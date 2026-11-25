@@ -3027,7 +3027,8 @@ function fitTcnLstmPairwiseRankingHead(rows,pairs,model,anchor,{
  */
 function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
   learningRate=0.03,epochs=40,l2=0.001,patience=10,
-  validationRows=null,validationPairs=null,temporalBlockCount=24
+  validationRows=null,validationPairs=null,temporalBlockCount=24,
+  epochSelectionMode='VALIDATION_CHECKPOINT'
 }={}){
   const validTemporalBlockCounts=[1,2,3,4,6,8,12,24];
   if(!Array.isArray(rows)||!Array.isArray(pairs)||rows.length<20||pairs.length<10)
@@ -3036,7 +3037,9 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     !Number.isInteger(epochs)||epochs<1||epochs>200||
     !finite(l2)||l2<0||l2>1||
     !Number.isInteger(patience)||patience<1||patience>50||
-    !validTemporalBlockCounts.includes(temporalBlockCount))
+    !validTemporalBlockCounts.includes(temporalBlockCount)||
+    !['VALIDATION_CHECKPOINT','FIXED_EPOCHS'].includes(epochSelectionMode)||
+    epochSelectionMode==='FIXED_EPOCHS'&&validationRows!==null)
     throw new TypeError('TCN_LSTM_ORDERED_RANKING_HEAD_CONFIGURATION_INVALID');
   const rawVectors=rows.map(row=>buildTcnLstmFlattenedFeatures(row.sequence));
   const featureCount=TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT;
@@ -3200,15 +3203,23 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       initialWeights.some(value=>!finite(value)))
       throw new TypeError('TCN_LSTM_ORDERED_RANKING_HEAD_NON_FINITE');
     completed=epoch;
-    const currentAccuracy=validationMetrics.pairwise_accuracy_pct;
-    const currentLoss=validationMetrics.pairwise_log_loss;
-    const accuracyImproved=currentAccuracy>bestAccuracy+1e-9;
-    const accuracyTied=Math.abs(currentAccuracy-bestAccuracy)<=1e-9;
-    if(accuracyImproved||(accuracyTied&&currentLoss<bestLoss-1e-9)){
-      bestAccuracy=currentAccuracy;bestLoss=currentLoss;
-      bestWeights=[...initialWeights];wait=0;bestEpoch=epoch;
-    }else wait++;
-    if(wait>=patience)break;
+    if(epochSelectionMode==='FIXED_EPOCHS'){
+      // Final fold/full-partition refits use the already selected epoch count.
+      // Do not re-select a checkpoint on training loss or on the scoring fold.
+      bestAccuracy=trainingMetrics.pairwise_accuracy_pct;
+      bestLoss=trainingMetrics.pairwise_log_loss;
+      bestWeights=[...initialWeights];bestEpoch=epoch;wait=0;
+    }else{
+      const currentAccuracy=validationMetrics.pairwise_accuracy_pct;
+      const currentLoss=validationMetrics.pairwise_log_loss;
+      const accuracyImproved=currentAccuracy>bestAccuracy+1e-9;
+      const accuracyTied=Math.abs(currentAccuracy-bestAccuracy)<=1e-9;
+      if(accuracyImproved||(accuracyTied&&currentLoss<bestLoss-1e-9)){
+        bestAccuracy=currentAccuracy;bestLoss=currentLoss;
+        bestWeights=[...initialWeights];wait=0;bestEpoch=epoch;
+      }else wait++;
+    }
+    if(epochSelectionMode!=='FIXED_EPOCHS'&&wait>=patience)break;
   }
   const expandedWeights=Array(featureCount);
   for(let step=0;step<steps;step++){
@@ -3250,7 +3261,11 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     learning_rate:learningRate,epochs_requested:epochs,epochs_completed:completed,
     l2,patience,early_stopped:completed<epochs,
     best_epoch:bestEpoch||completed,
-    selection_metric:validationPairs?'PURGED_VALIDATION_PAIRWISE_ACCURACY_THEN_LOG_LOSS':'TRAINING_PAIRWISE_ACCURACY_THEN_LOG_LOSS',
+    epoch_selection_mode:epochSelectionMode,
+    selection_metric:epochSelectionMode==='FIXED_EPOCHS'
+      ?'FIXED_EPOCH_COUNT_NO_VALIDATION_CHECKPOINT'
+      :validationPairs?'NESTED_PURGED_EPOCH_VALIDATION_PAIRWISE_ACCURACY_THEN_LOG_LOSS'
+        :'TRAINING_PAIRWISE_ACCURACY_THEN_LOG_LOSS',
     initial_pairwise_log_loss:Number(initialTrainingMetrics.pairwise_log_loss.toFixed(8)),
     initial_pairwise_accuracy_pct:Number(initialTrainingMetrics.pairwise_accuracy_pct.toFixed(4)),
     final_pairwise_log_loss:Number(finalTrainingMetrics.pairwise_log_loss.toFixed(8)),
@@ -3361,10 +3376,83 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   if(!(folds[0].validation_max_at<folds[1].validation_min_at)||
     !(folds[1].tuning_max_at>=folds[0].validation_min_at))
     throw new TypeError('TCN_LSTM_ORDERED_RANKER_EXPANDING_FOLD_CHRONOLOGY_INVALID');
+  // Use a nested purged window to select epochs only. The later fold window is
+  // then untouched until candidate scoring; all candidates and Logistic are
+  // refit on the complete, identical outer-fold training rows before scoring.
+  const nestedEpochWindows=folds.map(fold=>{
+    const windowBuckets=[...new Set(fold.tuningRows.map(bucketAt))].sort((a,b)=>a-b);
+    const fitGroupCount=Math.max(5,Math.floor(windowBuckets.length*0.40));
+    const epochValidationGroupCount=Math.max(5,Math.floor(windowBuckets.length*0.20));
+    const fitGroups=new Set(windowBuckets.slice(0,fitGroupCount));
+    const epochTrainingRows=fold.tuningRows.filter(row=>fitGroups.has(bucketAt(row)));
+    const epochTrainingMaxAt=Math.max(...epochTrainingRows.map(row=>Number(row.at)));
+    const epochTrainingMaxResolvedAt=Math.max(...epochTrainingRows.map(row=>Number(row.resolved_at)));
+    const epochValidationStartAfter=Math.max(
+      epochTrainingMaxResolvedAt,epochTrainingMaxAt+purgeHorizonMs
+    );
+    const epochValidationBuckets=windowBuckets.filter(bucket=>bucket>epochValidationStartAfter)
+      .slice(0,epochValidationGroupCount);
+    const epochValidationBucketSet=new Set(epochValidationBuckets);
+    const epochValidationRows=fold.tuningRows.filter(row=>epochValidationBucketSet.has(bucketAt(row)));
+    const epochTrainingIds=new Set(epochTrainingRows.map(sampleIdentity));
+    const epochValidationIds=new Set(epochValidationRows.map(sampleIdentity));
+    const epochTrainingPairSupport=buildTcnLstmReturnRankingPairs(
+      epochTrainingRows,epochTrainingRows,{
+        roundTripCostBps,minimumReturnGapPct,maxPairsPerTimestamp,
+        pairStrategy:'PROFITABILITY_BOUNDARY_V1'
+      }
+    );
+    const epochValidationPairSupport=epochValidationRows.length>=20
+      ?buildTcnLstmReturnRankingPairs(epochValidationRows,epochValidationRows,{
+        roundTripCostBps,minimumReturnGapPct,maxPairsPerTimestamp,
+        pairStrategy:'PROFITABILITY_BOUNDARY_V1'
+      }):{comparison_pairs:0,pairs:[]};
+    if(epochTrainingRows.length<20||epochTrainingPairSupport.comparison_pairs<10||
+      epochValidationRows.length<20||epochValidationPairSupport.comparison_pairs<10||
+      epochValidationBuckets.length!==epochValidationGroupCount)
+      throw new TypeError('TCN_LSTM_ORDERED_RANKER_NESTED_EPOCH_WINDOW_SUPPORT_TOO_SMALL:'+String(fold.fold_index));
+    const epochValidationMinAt=Math.min(...epochValidationRows.map(row=>Number(row.at)));
+    const epochValidationMaxAt=Math.max(...epochValidationRows.map(row=>Number(row.at)));
+    const epochPurgeGapMs=epochValidationMinAt-epochTrainingMaxAt;
+    if(!(epochTrainingMaxResolvedAt<epochValidationMinAt)||
+      epochPurgeGapMs<purgeHorizonMs||
+      !(epochValidationMaxAt<fold.validation_min_at)||
+      epochValidationRows.some(row=>epochTrainingIds.has(sampleIdentity(row)))||
+      epochTrainingRows.some(row=>epochValidationIds.has(sampleIdentity(row))))
+      throw new TypeError('TCN_LSTM_ORDERED_RANKER_NESTED_EPOCH_WINDOW_PURGE_VIOLATION:'+String(fold.fold_index));
+    const epochPurgedRows=fold.tuningRows.filter(row=>
+      !epochTrainingIds.has(sampleIdentity(row))&&
+      bucketAt(row)<=epochValidationStartAfter
+    ).length;
+    const epochUnusedRows=fold.tuningRows.length-
+      epochTrainingRows.length-epochValidationRows.length-epochPurgedRows;
+    if(epochUnusedRows<0)
+      throw new TypeError('TCN_LSTM_ORDERED_RANKER_NESTED_EPOCH_WINDOW_ROW_ACCOUNTING_INVALID');
+    return {
+      epochTrainingRows,epochTrainingPairSupport,
+      epochValidationRows,epochValidationPairSupport,
+      epoch_training_rows:epochTrainingRows.length,
+      epoch_training_pairs:epochTrainingPairSupport.comparison_pairs,
+      epoch_validation_rows:epochValidationRows.length,
+      epoch_validation_pairs:epochValidationPairSupport.comparison_pairs,
+      epoch_purged_rows:epochPurgedRows,
+      epoch_unused_rows:epochUnusedRows,
+      epoch_training_max_at:epochTrainingMaxAt,
+      epoch_training_max_resolved_at:epochTrainingMaxResolvedAt,
+      epoch_validation_min_at:epochValidationMinAt,
+      epoch_validation_max_at:epochValidationMaxAt,
+      epoch_purge_gap_ms:epochPurgeGapMs
+    };
+  });
+  folds.forEach((fold,index)=>Object.assign(fold,nestedEpochWindows[index],{
+    epochTrainingRows:nestedEpochWindows[index].epochTrainingRows,
+    epochTrainingPairSupport:nestedEpochWindows[index].epochTrainingPairSupport,
+    epochValidationRows:nestedEpochWindows[index].epochValidationRows,
+    epochValidationPairSupport:nestedEpochWindows[index].epochValidationPairSupport
+  }));
   // Fit the fixed project Logistic specification separately inside each
-  // purged tuning fold. Candidate rankers and Logistic are scored on the exact
-  // same forward profitability-boundary pairs; the independent selection
-  // partition remains qualification-only and is not used for this choice.
+  // purged outer fold. Both models train on all rows in that fold's fit window
+  // and are evaluated on identical later profitability-boundary pairs.
   const foldLogisticBaselines=folds.map(fold=>{
     const trainingVectors=fold.tuningRows.map(row=>
       buildTcnLstmFlattenedFeatures(row.sequence)
@@ -3403,6 +3491,20 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   for(const temporalBlockCount of temporalBlockCounts)
     for(const candidateL2 of l2Grid){
       const foldResults=folds.map((fold,index)=>{
+        const epochModel={
+          orderedRankingHeadWeights:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0),
+          orderedRankingFeatureMean:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0),
+          orderedRankingFeatureStd:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(1),
+          rankingRepresentation:'RAW_ORDERED_696_V1'
+        };
+        const epochSelection=fitTcnLstmOrderedPairwiseRankingHead(
+          fold.epochTrainingRows,fold.epochTrainingPairSupport.pairs,epochModel,{
+            learningRate,epochs,l2:candidateL2,patience,
+            validationRows:fold.epochValidationRows,
+            validationPairs:fold.epochValidationPairSupport.pairs,
+            temporalBlockCount
+          }
+        );
         const tuningModel={
           orderedRankingHeadWeights:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0),
           orderedRankingFeatureMean:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0),
@@ -3411,18 +3513,34 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         };
         const tuned=fitTcnLstmOrderedPairwiseRankingHead(
           fold.tuningRows,fold.tuningPairSupport.pairs,tuningModel,{
-            learningRate,epochs,l2:candidateL2,patience,
-            validationRows:fold.validationRows,
-            validationPairs:fold.validationPairSupport.pairs,
-            temporalBlockCount
+            learningRate,epochs:epochSelection.best_epoch,l2:candidateL2,
+            patience:Math.max(1,epochSelection.best_epoch),
+            temporalBlockCount,epochSelectionMode:'FIXED_EPOCHS'
           }
         );
+        const externalLogits=fold.validationRows.map(row=>
+          inspectTcnLstmForward(row.sequence,tuningModel,0).ranking_score
+        );
+        let externalLoss=0,externalCorrect=0;
+        for(const pair of fold.validationPairSupport.pairs){
+          const metric=tcnLstmPairwiseLogitRankingLoss(
+            externalLogits[pair.high_index],externalLogits[pair.low_index]
+          );
+          externalLoss+=metric.loss;
+          externalCorrect+=metric.accuracy_contribution;
+        }
+        const externalMetrics={
+          pairwise_log_loss:externalLoss/fold.validationPairSupport.comparison_pairs,
+          pairwise_accuracy_pct:100*externalCorrect/fold.validationPairSupport.comparison_pairs
+        };
         const logistic=foldLogisticBaselines[index];
         return {
           fold_index:fold.fold_index,
-          best_epoch:tuned.best_epoch,
-          best_validation_pairwise_log_loss:tuned.best_validation_pairwise_log_loss,
-          best_validation_pairwise_accuracy_pct:tuned.best_validation_pairwise_accuracy_pct,
+          best_epoch:epochSelection.best_epoch,
+          best_validation_pairwise_log_loss:Number(externalMetrics.pairwise_log_loss.toFixed(8)),
+          best_validation_pairwise_accuracy_pct:Number(externalMetrics.pairwise_accuracy_pct.toFixed(4)),
+          epoch_selection_pairwise_log_loss:epochSelection.best_validation_pairwise_log_loss,
+          epoch_selection_pairwise_accuracy_pct:epochSelection.best_validation_pairwise_accuracy_pct,
           logistic_validation_pairwise_log_loss:logistic.pairwise_log_loss,
           logistic_validation_pairwise_accuracy_pct:logistic.pairwise_accuracy_pct,
           training_pairwise_log_loss:tuned.final_pairwise_log_loss,
@@ -3431,7 +3549,14 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
           validation_rows:fold.validation_rows,
           purged_rows:fold.purged_rows,
           training_pairs:fold.tuning_pairs,
-          validation_pairs:fold.validation_pairs
+          validation_pairs:fold.validation_pairs,
+          epoch_training_rows:fold.epoch_training_rows,
+          epoch_training_pairs:fold.epoch_training_pairs,
+          epoch_validation_rows:fold.epoch_validation_rows,
+          epoch_validation_pairs:fold.epoch_validation_pairs,
+          epoch_purged_rows:fold.epoch_purged_rows,
+          epoch_unused_rows:fold.epoch_unused_rows,
+          epoch_purge_gap_ms:fold.epoch_purge_gap_ms
         };
       });
       const totalValidationPairs=foldResults.reduce((sum,item)=>sum+item.validation_pairs,0);
@@ -3513,12 +3638,15 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   const training=fitTcnLstmOrderedPairwiseRankingHead(
     ordered,pairSupport.pairs,rankerModel,{
       learningRate,epochs:finalEpochs,l2:selectedTuning.l2,
-      patience:finalEpochs,temporalBlockCount:selectedTuning.temporal_block_count
+      patience:Math.min(50,finalEpochs),
+      temporalBlockCount:selectedTuning.temporal_block_count,
+      epochSelectionMode:'FIXED_EPOCHS'
     }
   );
-  training.selection_metric='MIN_FOLD_LOGISTIC_ACCURACY_MARGIN_THEN_PAIR_WEIGHTED_MARGIN_AND_LOG_LOSS_PURGED_EXPANDING_WINDOW_V4';
+  training.selection_metric='MIN_FOLD_LOGISTIC_ACCURACY_MARGIN_THEN_PAIR_WEIGHTED_MARGIN_AND_LOG_LOSS_NESTED_PURGED_EXPANDING_WINDOW_V5';
   const foldMetadata=folds.map(({tuningRows,tuningPairSupport,validationRows,
-    validationPairSupport,...metadata},index)=>({
+    validationPairSupport,epochTrainingRows,epochTrainingPairSupport,
+    epochValidationRows,epochValidationPairSupport,...metadata},index)=>({
       ...metadata,
       logistic_validation_pairwise_log_loss:foldLogisticBaselines[index].pairwise_log_loss,
       logistic_validation_pairwise_accuracy_pct:foldLogisticBaselines[index].pairwise_accuracy_pct,
@@ -3533,15 +3661,17 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   const internalValidationPairs=foldMetadata.reduce((sum,item)=>sum+item.validation_pairs,0);
   const internalPurgeGapMs=Math.min(...foldMetadata.map(item=>item.purge_gap_ms));
   training.internal_training_validation={
-    schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V4',
-    method:'TWO_FOLD_EXPANDING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1',
+    schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V5',
+    method:'TWO_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1',
+    epoch_selection_policy:'NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS',
     logistic_baseline_config:{
       schema:'RADARX_FOLD_LOCAL_RAW_TEMPORAL_LOGISTIC_RANKING_REFERENCE_V1',
       feature_schema_id:TCN_LSTM_ORDERED_RANKING_FEATURE_SCHEMA_ID,
       feature_count:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
       l2:1,learning_rate:0.03,max_epochs:160,
-      fit_partition:'EACH_FOLD_TUNING_ROWS_ONLY',
-      scoring_partition:'SAME_FOLD_PURGED_VALIDATION_PAIRS',
+      fit_partition:'EACH_COMPLETE_OUTER_FOLD_TUNING_WINDOW_ONLY',
+      epoch_selection_partition:'EARLIER_NESTED_PURGED_SUBWINDOW_WITHIN_OUTER_FOLD_TRAINING_WINDOW',
+      scoring_partition:'SAME_LATER_OUTER_FOLD_PURGED_VALIDATION_PAIRS',
       validation_labels_read:false,
       outer_validation_or_holdout_used:false
     },
@@ -3578,6 +3708,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     selected_steps_per_block:selectedTuning.steps_per_block,
     selected_parameterization_id:selectedTuning.parameterization_id,
     selected_parameter_count:selectedTuning.parameter_count,
+    final_refit_epoch_selection_mode:'FIXED_EPOCHS_FROM_NESTED_PURGED_FOLD_EARLY_STOPPING',
     final_refit_rows:ordered.length,
     final_refit_pairs:pairSupport.comparison_pairs
   };

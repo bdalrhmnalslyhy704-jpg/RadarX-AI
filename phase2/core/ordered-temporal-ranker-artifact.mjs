@@ -133,6 +133,23 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
         Number.isInteger(fold?.purged_rows)&&fold.purged_rows>=0&&
         Number.isInteger(fold?.tuning_pairs)&&fold.tuning_pairs>=10&&
         Number.isInteger(fold?.validation_pairs)&&fold.validation_pairs>=10&&
+        Number.isInteger(fold?.epoch_training_rows)&&fold.epoch_training_rows>=20&&
+        Number.isInteger(fold?.epoch_training_pairs)&&fold.epoch_training_pairs>=10&&
+        Number.isInteger(fold?.epoch_validation_rows)&&fold.epoch_validation_rows>=20&&
+        Number.isInteger(fold?.epoch_validation_pairs)&&fold.epoch_validation_pairs>=10&&
+        Number.isInteger(fold?.epoch_purged_rows)&&fold.epoch_purged_rows>=0&&
+        Number.isInteger(fold?.epoch_unused_rows)&&fold.epoch_unused_rows>=0&&
+        fold.epoch_training_rows+fold.epoch_validation_rows+
+          fold.epoch_purged_rows+fold.epoch_unused_rows===fold.tuning_rows&&
+        finite(fold?.epoch_training_max_at)&&finite(fold?.epoch_training_max_resolved_at)&&
+        finite(fold?.epoch_validation_min_at)&&finite(fold?.epoch_validation_max_at)&&
+        fold.epoch_validation_max_at>=fold.epoch_validation_min_at&&
+        fold.epoch_validation_min_at>fold.epoch_training_max_resolved_at&&
+        finite(fold?.epoch_purge_gap_ms)&&
+        Math.abs(fold.epoch_purge_gap_ms-
+          (fold.epoch_validation_min_at-fold.epoch_training_max_at))<=1e-6&&
+        fold.epoch_purge_gap_ms>=tuning?.purge_horizon_ms&&
+        fold.epoch_validation_max_at<fold.validation_min_at&&
         finite(fold?.tuning_max_resolved_at)&&finite(fold?.tuning_max_at)&&
         finite(fold?.validation_min_at)&&finite(fold?.validation_max_at)&&
         fold.validation_max_at>=fold.validation_min_at&&
@@ -190,6 +207,17 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
             result.logistic_validation_pairwise_log_loss===fold.logistic_validation_pairwise_log_loss&&
             finite(result?.training_pairwise_accuracy_pct)&&result.training_pairwise_accuracy_pct>=0&&
             result.training_pairwise_accuracy_pct<=100&&
+            finite(result?.epoch_selection_pairwise_log_loss)&&
+            finite(result?.epoch_selection_pairwise_accuracy_pct)&&
+            result.epoch_selection_pairwise_accuracy_pct>=0&&
+            result.epoch_selection_pairwise_accuracy_pct<=100&&
+            result?.epoch_training_rows===fold.epoch_training_rows&&
+            result?.epoch_training_pairs===fold.epoch_training_pairs&&
+            result?.epoch_validation_rows===fold.epoch_validation_rows&&
+            result?.epoch_validation_pairs===fold.epoch_validation_pairs&&
+            result?.epoch_purged_rows===fold.epoch_purged_rows&&
+            result?.epoch_unused_rows===fold.epoch_unused_rows&&
+            result?.epoch_purge_gap_ms===fold.epoch_purge_gap_ms&&
             finite(result?.best_validation_pairwise_log_loss)&&finite(result?.training_pairwise_log_loss)&&
             result?.training_rows===fold.tuning_rows&&result?.validation_rows===fold.validation_rows&&
             result?.purged_rows===fold.purged_rows&&result?.training_pairs===fold.tuning_pairs&&
@@ -262,16 +290,20 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       !Number.isInteger(trainingConfig.patience)||trainingConfig.patience<1||
       !tiedParameterizationValid||
       trainingConfig.steps_per_block!==temporalStepsPerBlock||
-      trainingConfig.selection_metric!=='MIN_FOLD_LOGISTIC_ACCURACY_MARGIN_THEN_PAIR_WEIGHTED_MARGIN_AND_LOG_LOSS_PURGED_EXPANDING_WINDOW_V4'||
-      tuning?.schema!=='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V4'||
-      tuning?.method!=='TWO_FOLD_EXPANDING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1'||
+      trainingConfig.epoch_selection_mode!=='FIXED_EPOCHS'||
+      trainingConfig.selection_metric!=='MIN_FOLD_LOGISTIC_ACCURACY_MARGIN_THEN_PAIR_WEIGHTED_MARGIN_AND_LOG_LOSS_NESTED_PURGED_EXPANDING_WINDOW_V5'||
+      tuning?.schema!=='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V5'||
+      tuning?.method!=='TWO_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1'||
+      tuning?.epoch_selection_policy!=='NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS'||
       tuning?.logistic_baseline_config?.schema!=='RADARX_FOLD_LOCAL_RAW_TEMPORAL_LOGISTIC_RANKING_REFERENCE_V1'||
       tuning?.logistic_baseline_config?.feature_schema_id!==TCN_LSTM_ORDERED_RANKING_FEATURE_SCHEMA_ID||
       tuning?.logistic_baseline_config?.feature_count!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
       tuning?.logistic_baseline_config?.l2!==1||tuning?.logistic_baseline_config?.learning_rate!==0.03||
       tuning?.logistic_baseline_config?.max_epochs!==160||
-      tuning?.logistic_baseline_config?.fit_partition!=='EACH_FOLD_TUNING_ROWS_ONLY'||
-      tuning?.logistic_baseline_config?.scoring_partition!=='SAME_FOLD_PURGED_VALIDATION_PAIRS'||
+      tuning?.logistic_baseline_config?.fit_partition!=='EACH_COMPLETE_OUTER_FOLD_TUNING_WINDOW_ONLY'||
+      tuning?.logistic_baseline_config?.epoch_selection_partition!==
+        'EARLIER_NESTED_PURGED_SUBWINDOW_WITHIN_OUTER_FOLD_TRAINING_WINDOW'||
+      tuning?.logistic_baseline_config?.scoring_partition!=='SAME_LATER_OUTER_FOLD_PURGED_VALIDATION_PAIRS'||
       tuning?.logistic_baseline_config?.validation_labels_read!==false||
       tuning?.logistic_baseline_config?.outer_validation_or_holdout_used!==false||
       tuning?.source_partition!=='PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY'||
@@ -312,6 +344,8 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       tuning.selected_steps_per_block!==temporalStepsPerBlock||
       tuning?.final_refit_rows!==training.training_rows||
       tuning?.final_refit_pairs!==training.training_pairs||
+      tuning?.final_refit_epoch_selection_mode!==
+        'FIXED_EPOCHS_FROM_NESTED_PURGED_FOLD_EARLY_STOPPING'||
       contract?.schema!=='RADARX_TCN_LSTM_EXECUTION_RANK_FEATURE_OUT_OF_SAMPLE_CONTRACT_V1'||
       contract?.out_of_sample_for_execution_head_features!==true||
       contract?.training_and_execution_feature_identities_disjoint!==true||
@@ -449,6 +483,7 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
         epochs_completed:ranker.epochs_completed,
         best_epoch:ranker.best_epoch,
         patience:ranker.patience,
+        epoch_selection_mode:ranker.epoch_selection_mode,
         parameterization_id:ranker.parameterization_id,
         temporal_block_count:ranker.temporal_block_count,
         steps_per_block:ranker.steps_per_block,

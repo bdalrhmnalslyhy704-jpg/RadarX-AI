@@ -76,21 +76,24 @@ function makeProfile(overrides={}){
     epochs_completed:8,
     best_epoch:8,
     patience:8,
-    selection_metric:'MIN_FOLD_LOGISTIC_ACCURACY_MARGIN_THEN_PAIR_WEIGHTED_MARGIN_AND_LOG_LOSS_PURGED_EXPANDING_WINDOW_V4',
+    epoch_selection_mode:'FIXED_EPOCHS',
+    selection_metric:'MIN_FOLD_LOGISTIC_ACCURACY_MARGIN_THEN_PAIR_WEIGHTED_MARGIN_AND_LOG_LOSS_NESTED_PURGED_EXPANDING_WINDOW_V5',
     parameterization_id:parameterizationId,
     temporal_block_count:temporalBlockCount,
     steps_per_block:stepsPerBlock,
     parameter_count:parameterCount,
     internal_training_validation:{
-      schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V4',
-      method:'TWO_FOLD_EXPANDING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1',
+      schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V5',
+      method:'TWO_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1',
+      epoch_selection_policy:'NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS',
       logistic_baseline_config:{
         schema:'RADARX_FOLD_LOCAL_RAW_TEMPORAL_LOGISTIC_RANKING_REFERENCE_V1',
         feature_schema_id:TCN_LSTM_ORDERED_RANKING_FEATURE_SCHEMA_ID,
         feature_count:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
         l2:1,learning_rate:0.03,max_epochs:160,
-        fit_partition:'EACH_FOLD_TUNING_ROWS_ONLY',
-        scoring_partition:'SAME_FOLD_PURGED_VALIDATION_PAIRS',
+        fit_partition:'EACH_COMPLETE_OUTER_FOLD_TUNING_WINDOW_ONLY',
+        epoch_selection_partition:'EARLIER_NESTED_PURGED_SUBWINDOW_WITHIN_OUTER_FOLD_TRAINING_WINDOW',
+        scoring_partition:'SAME_LATER_OUTER_FOLD_PURGED_VALIDATION_PAIRS',
         validation_labels_read:false,outer_validation_or_holdout_used:false
       },
       source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY',
@@ -101,27 +104,37 @@ function makeProfile(overrides={}){
       purge_horizon_ms:14400000,
       fold_count:2,
       folds:[
-        {fold_index:1,fit_end_fraction:0.4,tuning_rows:24,validation_rows:24,purged_rows:4,
+        {fold_index:1,fit_end_fraction:0.4,tuning_rows:64,validation_rows:24,purged_rows:8,
           tuning_pairs:48,validation_pairs:16,tuning_max_resolved_at:1000,tuning_max_at:500,
-          validation_min_at:14400501,validation_max_at:14499000,purge_gap_ms:14400001,
+          validation_min_at:28800501,validation_max_at:28899000,purge_gap_ms:28800001,
+          epoch_training_rows:20,epoch_training_pairs:24,epoch_validation_rows:20,
+          epoch_validation_pairs:16,epoch_purged_rows:24,epoch_unused_rows:0,
+          epoch_training_max_at:200,epoch_training_max_resolved_at:1000,
+          epoch_validation_min_at:14400501,epoch_validation_max_at:14499000,
+          epoch_purge_gap_ms:14400301,
           logistic_validation_pairwise_log_loss:0.66,logistic_validation_pairwise_accuracy_pct:60,
-          logistic_baseline_training_rows:24,logistic_baseline_validation_labels_read:false,
+          logistic_baseline_training_rows:64,logistic_baseline_validation_labels_read:false,
           logistic_baseline_validation_or_holdout_used:false},
-        {fold_index:2,fit_end_fraction:0.6,tuning_rows:24,validation_rows:24,purged_rows:4,
-          tuning_pairs:48,validation_pairs:16,tuning_max_resolved_at:14500500,tuning_max_at:14500000,
-          validation_min_at:28900501,validation_max_at:28999000,purge_gap_ms:14400501,
+        {fold_index:2,fit_end_fraction:0.6,tuning_rows:64,validation_rows:24,purged_rows:8,
+          tuning_pairs:48,validation_pairs:16,tuning_max_resolved_at:28900500,tuning_max_at:28900000,
+          validation_min_at:57700501,validation_max_at:57799000,purge_gap_ms:28800501,
+          epoch_training_rows:20,epoch_training_pairs:24,epoch_validation_rows:20,
+          epoch_validation_pairs:16,epoch_purged_rows:24,epoch_unused_rows:0,
+          epoch_training_max_at:28900000,epoch_training_max_resolved_at:28900500,
+          epoch_validation_min_at:43300501,epoch_validation_max_at:43399000,
+          epoch_purge_gap_ms:14400501,
           logistic_validation_pairwise_log_loss:0.64,logistic_validation_pairwise_accuracy_pct:61,
-          logistic_baseline_training_rows:24,logistic_baseline_validation_labels_read:false,
+          logistic_baseline_training_rows:64,logistic_baseline_validation_labels_read:false,
           logistic_baseline_validation_or_holdout_used:false}
       ],
-      tuning_max_resolved_at:14500500,
-      tuning_max_at:14500000,
-      validation_min_at:14400501,
-      purge_gap_ms:14400001,
+      tuning_max_resolved_at:28900500,
+      tuning_max_at:28900000,
+      validation_min_at:28800501,
+      purge_gap_ms:28800001,
       chronology_valid:true,
-      tuning_rows:48,
+      tuning_rows:128,
       validation_rows:48,
-      purged_rows:8,
+      purged_rows:16,
       tuning_pairs:96,
       validation_pairs:32,
       candidate_grid:[
@@ -131,18 +144,28 @@ function makeProfile(overrides={}){
           logistic_validation_pairwise_log_loss:0.65,best_validation_pairwise_accuracy_improvement_pct:0.5,
           minimum_fold_pairwise_accuracy_improvement_pct:-1,best_validation_pairwise_log_loss_improvement:0.035,
           training_pairwise_accuracy_pct:69,best_validation_pairwise_log_loss:0.615,
-          training_pairwise_log_loss:0.635,training_rows:48,validation_rows:48,purged_rows:8,
+          training_pairwise_log_loss:0.635,training_rows:128,validation_rows:48,purged_rows:16,
           training_pairs:96,validation_pairs:32,fold_count:2,
           fold_results:[
             {fold_index:1,best_epoch:6,best_validation_pairwise_log_loss:0.61,
               best_validation_pairwise_accuracy_pct:62,logistic_validation_pairwise_log_loss:0.66,
               logistic_validation_pairwise_accuracy_pct:60,training_pairwise_log_loss:0.63,
-              training_pairwise_accuracy_pct:70,training_rows:24,validation_rows:24,purged_rows:4,
+              training_pairwise_accuracy_pct:70,
+              epoch_selection_pairwise_log_loss:0.62,epoch_selection_pairwise_accuracy_pct:65,
+              epoch_training_rows:20,epoch_training_pairs:24,epoch_validation_rows:20,
+              epoch_validation_pairs:16,epoch_purged_rows:24,epoch_unused_rows:0,
+              epoch_purge_gap_ms:14400301,
+              training_rows:64,validation_rows:24,purged_rows:8,
               training_pairs:48,validation_pairs:16},
             {fold_index:2,best_epoch:6,best_validation_pairwise_log_loss:0.62,
               best_validation_pairwise_accuracy_pct:60,logistic_validation_pairwise_log_loss:0.64,
               logistic_validation_pairwise_accuracy_pct:61,training_pairwise_log_loss:0.64,
-              training_pairwise_accuracy_pct:68,training_rows:24,validation_rows:24,purged_rows:4,
+              training_pairwise_accuracy_pct:68,
+              epoch_selection_pairwise_log_loss:0.63,epoch_selection_pairwise_accuracy_pct:65,
+              epoch_training_rows:20,epoch_training_pairs:24,epoch_validation_rows:20,
+              epoch_validation_pairs:16,epoch_purged_rows:24,epoch_unused_rows:0,
+              epoch_purge_gap_ms:14400501,
+              training_rows:64,validation_rows:24,purged_rows:8,
               training_pairs:48,validation_pairs:16}
           ]},
         {temporal_block_count:4,steps_per_block:6,parameterization_id:parameterizationId,
@@ -151,18 +174,28 @@ function makeProfile(overrides={}){
           logistic_validation_pairwise_log_loss:0.65,best_validation_pairwise_accuracy_improvement_pct:5.5,
           minimum_fold_pairwise_accuracy_improvement_pct:4,best_validation_pairwise_log_loss_improvement:0.065,
           training_pairwise_accuracy_pct:70.5,best_validation_pairwise_log_loss:0.585,
-          training_pairwise_log_loss:0.605,training_rows:48,validation_rows:48,purged_rows:8,
+          training_pairwise_log_loss:0.605,training_rows:128,validation_rows:48,purged_rows:16,
           training_pairs:96,validation_pairs:32,fold_count:2,
           fold_results:[
             {fold_index:1,best_epoch:8,best_validation_pairwise_log_loss:0.58,
               best_validation_pairwise_accuracy_pct:67,logistic_validation_pairwise_log_loss:0.66,
               logistic_validation_pairwise_accuracy_pct:60,training_pairwise_log_loss:0.60,
-              training_pairwise_accuracy_pct:71,training_rows:24,validation_rows:24,purged_rows:4,
+              training_pairwise_accuracy_pct:71,
+              epoch_selection_pairwise_log_loss:0.62,epoch_selection_pairwise_accuracy_pct:65,
+              epoch_training_rows:20,epoch_training_pairs:24,epoch_validation_rows:20,
+              epoch_validation_pairs:16,epoch_purged_rows:24,epoch_unused_rows:0,
+              epoch_purge_gap_ms:14400301,
+              training_rows:64,validation_rows:24,purged_rows:8,
               training_pairs:48,validation_pairs:16},
             {fold_index:2,best_epoch:8,best_validation_pairwise_log_loss:0.59,
               best_validation_pairwise_accuracy_pct:65,logistic_validation_pairwise_log_loss:0.64,
               logistic_validation_pairwise_accuracy_pct:61,training_pairwise_log_loss:0.61,
-              training_pairwise_accuracy_pct:70,training_rows:24,validation_rows:24,purged_rows:4,
+              training_pairwise_accuracy_pct:70,
+              epoch_selection_pairwise_log_loss:0.63,epoch_selection_pairwise_accuracy_pct:65,
+              epoch_training_rows:20,epoch_training_pairs:24,epoch_validation_rows:20,
+              epoch_validation_pairs:16,epoch_purged_rows:24,epoch_unused_rows:0,
+              epoch_purge_gap_ms:14400501,
+              training_rows:64,validation_rows:24,purged_rows:8,
               training_pairs:48,validation_pairs:16}
           ]}
       ],
@@ -181,6 +214,7 @@ function makeProfile(overrides={}){
       selected_parameterization_id:parameterizationId,
       selected_parameter_count:116,
       temporal_block_count:4,
+      final_refit_epoch_selection_mode:'FIXED_EPOCHS_FROM_NESTED_PURGED_FOLD_EARLY_STOPPING',
       final_refit_rows:trainingRows,
       final_refit_pairs:96
     }
@@ -238,15 +272,18 @@ test('ordered raw 696 ranker exports a fully checksummed training-only artifact'
   assert.equal(artifact.training_provenance.validation_or_holdout_used,false);
   assert.equal(artifact.training_provenance.ranker_training_config.l2,0.05);
   assert.equal(artifact.training_provenance.ranker_training_config.epochs_requested,8);
+  assert.equal(artifact.training_provenance.ranker_training_config.epoch_selection_mode,'FIXED_EPOCHS');
   assert.equal(artifact.training_provenance.ranker_training_config.parameter_count,116);
   assert.equal(artifact.training_provenance.ranker_training_config.temporal_block_count,4);
   assert.equal(artifact.training_provenance.ranker_training_config.parameterization_id,parameterizationId);
   assert.equal(artifact.training_provenance.internal_training_validation.selected_l2,0.05);
   assert.equal(artifact.training_provenance.internal_training_validation.selected_epochs,8);
-  assert.equal(artifact.training_provenance.internal_training_validation.purge_gap_ms,14400001);
+  assert.equal(artifact.training_provenance.internal_training_validation.purge_gap_ms,28800001);
   assert.equal(artifact.training_provenance.internal_training_validation.fold_count,2);
   assert.equal(artifact.training_provenance.internal_training_validation.method,
-    'TWO_FOLD_EXPANDING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1');
+    'TWO_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1');
+  assert.equal(artifact.training_provenance.internal_training_validation.epoch_selection_policy,
+    'NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS');
   assert.equal(artifact.training_provenance.internal_training_validation.selected_minimum_fold_pairwise_accuracy_improvement_pct,4);
   assert.equal(artifact.training_provenance.internal_training_validation.selected_validation_pairwise_accuracy_improvement_pct,5.5);
   assert.equal(artifact.training_provenance.internal_training_validation.selected_validation_pairwise_accuracy_pct,66);
