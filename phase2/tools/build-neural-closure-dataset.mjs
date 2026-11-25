@@ -71,8 +71,7 @@ function parseArgs(argv){
       throw new Error('PROSPECTIVE_START_AT_REQUIRED');
     if(result.startAt<=LEGACY_COHORT_LAST_DECISION_AT)
       throw new Error('PROSPECTIVE_COHORT_OVERLAPS_OR_PRECEDES_LEGACY_COHORT');
-    if(result.startAt!==Date.parse('2026-11-17T20:14:59.999Z')&&
-      result.startAt% (4*60*60_000)!==(15*60_000-1))
+    if(result.startAt%(4*60*60_000)!==(15*60_000-1))
       throw new Error('PROSPECTIVE_START_AT_NOT_ON_4H_DECISION_GRID');
   }else if(result.startAt!==null){
     throw new Error('START_AT_REQUIRES_PROSPECTIVE_ONLY_MODE');
