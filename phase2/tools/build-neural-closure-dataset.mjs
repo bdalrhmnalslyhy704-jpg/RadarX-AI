@@ -281,9 +281,13 @@ async function main(){
   if(universe.selected.length<args.minSymbols)
     throw new Error('LIQUIDITY_UNIVERSE_BELOW_MIN_SYMBOLS:'+universe.selected.length);
 
-  const schedule=createNeuralClosureDecisionSchedule({
-    serverTime:serverTimeAtStart,days:args.days
-  });
+  const schedule=createNeuralClosureDecisionSchedule(args.prospectiveOnly
+    ?{serverTime:serverTimeAtStart,startAt:args.startAt}
+    :{serverTime:serverTimeAtStart,days:args.days});
+  if(args.prospectiveOnly&&
+    (schedule.mode!=='PROSPECTIVE_LOCKED_OUT_OF_TIME'||
+      schedule.first_decision_at<=LEGACY_COHORT_LAST_DECISION_AT))
+    throw new Error('PROSPECTIVE_SCHEDULE_LEGACY_COHORT_OVERLAP');
   const rawArchiveRecords=[];
   const symbolSummaries=[];
   const rows=[];
@@ -482,6 +486,152 @@ async function main(){
   // Validation clones only row envelopes; release the prevalidated envelopes
   // before split/hash/output allocations while preserving shared feature data.
   rows.length=0;
+
+  if(args.prospectiveOnly){
+    const sourceCommitSha=String(process.env.GITHUB_SHA||'').toLowerCase();
+    if(sourceCommitSha&&!/^[a-f0-9]{40}$/.test(sourceCommitSha))
+      throw new Error('GITHUB_SOURCE_COMMIT_SHA_INVALID');
+    if(!validated.length||validated.some(row=>Number(row.at)<args.startAt||
+      Number(row.at)>schedule.last_decision_at))
+      throw new Error('PROSPECTIVE_COHORT_ROW_BOUNDARY_INVALID');
+    const datasetSha=sha256CanonicalArrayMapped(validated,row=>({
+      id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
+      outcome:row.outcome,target:row.target,
+      source_audit_sha256:row.source_audit.raw_klines_sha256,
+      feature_information_cutoff_at:row.feature_information_cutoff_at,
+      features:row.features,temporal_sequence:row.temporal_sequence,
+      quote_volume_24h:row.quote_volume_24h,
+      historical_liquidity:row.historical_liquidity??null,
+      feature_snapshot_sha:row.feature_snapshot_sha??null,
+      realized_return_pct:row.realized_return_pct
+    }));
+    const finalServerTime=await getServerTime();
+    if(validated.some(row=>Number(row.resolved_at)>finalServerTime))
+      throw new Error('PROSPECTIVE_LABELS_NOT_MATURED_AT_FINAL_VERIFICATION');
+    const counts={
+      rows:validated.length,
+      included_symbols:included.length,
+      requested_symbols:universe.selected.length,
+      first_decision_at:Math.min(...validated.map(row=>Number(row.at))),
+      last_decision_at:Math.max(...validated.map(row=>Number(row.at))),
+      maximum_label_resolved_at:Math.max(...validated.map(row=>Number(row.resolved_at)))
+    };
+    const output={
+      schema:'RADARX_BUILD224_BINANCE_SPOT_4H_FIRST_TOUCH_PROSPECTIVE_COHORT_V1',
+      dataset_sha256:datasetSha,
+      source_commit_sha:sourceCommitSha||null,
+      created_at_server_time:finalServerTime,
+      market_data_endpoint:BASE_URL,
+      cohort_contract:{
+        schema:'RADARX_PROSPECTIVE_COHORT_LOCK_CONTRACT_V1',
+        status:'LOCKED_UNSCORED',
+        role:'PROSPECTIVE_OUT_OF_TIME_EVALUATION_ONLY',
+        legacy_cohort:{
+          dataset_sha256:LEGACY_COHORT_DATASET_SHA256,
+          last_decision_at:LEGACY_COHORT_LAST_DECISION_AT,
+          last_decision_at_iso:new Date(LEGACY_COHORT_LAST_DECISION_AT).toISOString()
+        },
+        requested_start_at:args.startAt,
+        requested_start_at_iso:new Date(args.startAt).toISOString(),
+        actual_first_decision_at:schedule.first_decision_at,
+        actual_last_decision_at:schedule.last_decision_at,
+        strictly_after_legacy_cohort:
+          schedule.first_decision_at>LEGACY_COHORT_LAST_DECISION_AT,
+        decision_rows_are_label_matured:true,
+        training_allowed:false,
+        model_selection_allowed:false,
+        calibration_allowed:false,
+        model_scoring_allowed:false,
+        outcome_distribution_reporting_allowed:false,
+        prior_holdout_opened:false,
+        prior_outer_validation_opened:false,
+        execution_allowed:false
+      },
+      schedule,
+      target:{
+        definition:validated[0].target_definition,
+        semantics:validated[0].target_semantics,
+        outcome_source:validated[0].outcome_source,
+        horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
+        take_profit_pct:3,stop_loss_pct:2,
+        execution_return_contract:validated[0].execution_return_contract
+      },
+      universe:{
+        selection:'CURRENT_TOP_100_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1',
+        candidate_prefilter:{
+          method:'CURRENT_BINANCE_SPOT_24H_TICKER_AT_COLLECTION_TIME',
+          minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
+          maximum_symbols:args.maxSymbols,
+          scope:'CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_ONLY'
+        },
+        historical_eligibility:{
+          method:'SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE',
+          interval:'15m',lookback_candles:96,
+          minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
+          future_or_unclosed_candles_used:false,
+          below_threshold_events_excluded:true
+        },
+        quote_asset:'USDT',
+        minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
+        maximum_symbols:args.maxSymbols,
+        survivorship_bias_warning:true,
+        historical_delisted_asset_coverage:false,
+        symbols:universe.selected.map(item=>({
+          symbol:item.symbol,base_asset:item.base_asset,quote_asset:item.quote_asset,
+          collection_time_quote_volume_24h_usdt:item.quote_volume_24h
+        })),
+        symbol_results:symbolSummaries
+      },
+      counts,
+      label_access:{
+        status:'LOCKED',
+        outcome_distribution_reported:false,
+        per-row_outcomes_not_summarized:true,
+        use_requires_separate_predeclared_evaluation_protocol:true
+      },
+      data_quality:{
+        source:'BINANCE_OFFICIAL_PUBLIC_REST_ONLY',
+        intervals:NEURAL_CLOSURE_DATASET_INTERVALS,
+        raw_archive_files:rawArchiveRecords.length,
+        raw_archive_records:rawArchiveRecords,
+        raw_archive_verification:rawArchiveVerification,
+        request_pages:pageCounts,
+        rejected_event_reasons:rejectedCounts,
+        feature_masks:{
+          micro_5m:'REAL_5M_KLINE_TAKER_BUY_QUOTE_VOLUME',
+          order_book:'UNAVAILABLE_MASKED_NO_IMPUTATION',
+          aggregate_trades:'UNAVAILABLE_MASKED_NO_IMPUTATION',
+          trade_level_volume_profile:'UNAVAILABLE_MASKED_CANDLE_PROXY_ONLY'
+        },
+        exact_240_closed_1m_bars_required:true,
+        no_synthetic_or_mock_rows:true
+      },
+      policy:{
+        ...NEURAL_CLOSURE_MARKET_DATA_POLICY,
+        paper_trading:true,real_order_execution:false
+      },
+      training_allowed:false,
+      model_scoring_allowed:false,
+      outer_validation_opened:false,
+      holdout_opened:false
+    };
+    await writeJsonObjectWithArrayStreaming(outputPath,{...output,rows:validated},'rows');
+    console.log(JSON.stringify({
+      status:'PROSPECTIVE_COHORT_CAPTURED_LOCKED',
+      output:outputPath,dataset_sha256:datasetSha,
+      source_commit_sha:sourceCommitSha||null,
+      counts:{
+        rows:counts.rows,included_symbols:counts.included_symbols,
+        requested_symbols:counts.requested_symbols
+      },
+      first_decision_at:counts.first_decision_at,
+      last_decision_at:counts.last_decision_at,
+      archive_files:rawArchiveRecords.length,
+      labels_matured:true,training_started:false,model_scoring_started:false
+    },null,2));
+    return;
+  }
+
   const split=splitFourHourRows(validated);
   const countClasses=part=>{
     const positives=part.filter(row=>row.target===1).length;
