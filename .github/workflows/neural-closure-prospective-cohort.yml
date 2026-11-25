@@ -1,0 +1,163 @@
+name: Build 224 — Capture Locked Prospective Neural Cohort
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_symbols:
+        description: "Maximum current Binance Spot USDT candidates (10–100)"
+        required: true
+        default: "100"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-prospective-neural-cohort
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    name: Capture a future-only, locked, unscored cohort
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      # Last closed 15m feature candle in the legacy 32,300-row cohort opened
+      # at 2026-11-17T16:00:00Z and closed at 16:14:59.999Z.
+      LEGACY_LAST_DECISION_AT: "2026-11-17T16:14:59.999Z"
+      LEGACY_LAST_LABEL_RESOLVED_AT: "2026-11-17T20:14:59.999Z"
+      PROSPECTIVE_START_AT: "2026-11-18T00:14:59.999Z"
+      EXPECTED_LEGACY_DATASET_SHA256: f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77
+    steps:
+      - name: Checkout exact workflow SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Verify prospective scheduler and raw collector contracts
+        run: |
+          node --check phase2/core/neural-closure-data-builder.mjs
+          node --check phase2/tools/build-neural-closure-dataset.mjs
+          node --test phase2/tests/neural-closure-data-builder.test.mjs
+
+      - name: Capture real Binance Spot candles after the legacy cohort boundary
+        env:
+          MAX_SYMBOLS: ${{ inputs.max_symbols }}
+        run: |
+          set -euo pipefail
+          test "$(date -u -d "$PROSPECTIVE_START_AT" +%s)" -gt "$(date -u -d "$LEGACY_LAST_LABEL_RESOLVED_AT" +%s)"
+          mkdir -p artifacts/neural-closure-prospective
+          node --expose-gc --max-old-space-size=3072 phase2/tools/build-neural-closure-dataset.mjs \
+            --prospectiveOnly true \
+            --startAt "$PROSPECTIVE_START_AT" \
+            --maxSymbols "$MAX_SYMBOLS" \
+            --minSymbols 20 \
+            --minQuoteVolumeUsdt 750000 \
+            --output artifacts/neural-closure-prospective/cohort.json \
+            --archiveDir artifacts/neural-closure-prospective/raw
+
+      - name: Verify cohort identity, lock state, maturity and hashes
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {sha256CanonicalArrayMapped} from './phase2/core/neural-closure-contracts.mjs';
+
+          const path='artifacts/neural-closure-prospective/cohort.json';
+          const cohort=JSON.parse(fs.readFileSync(path,'utf8'));
+          const legacyLast=Date.parse(process.env.LEGACY_LAST_DECISION_AT);
+          const legacyLastLabelResolved=Date.parse(process.env.LEGACY_LAST_LABEL_RESOLVED_AT);
+          const expectedStart=Date.parse(process.env.PROSPECTIVE_START_AT);
+          const rows=cohort.rows;
+          const failures=[];
+          if(cohort.schema!=='RADARX_BUILD224_BINANCE_SPOT_4H_FIRST_TOUCH_PROSPECTIVE_COHORT_V1')
+            failures.push('PROSPECTIVE_COHORT_SCHEMA_INVALID');
+          if(cohort.source_commit_sha!==process.env.EXPECTED_SOURCE_SHA)
+            failures.push('SOURCE_SHA_MISMATCH');
+          if(cohort.cohort_contract?.status!=='LOCKED_UNSCORED')
+            failures.push('COHORT_NOT_LOCKED');
+          if(cohort.cohort_contract?.training_allowed!==false||
+             cohort.cohort_contract?.model_selection_allowed!==false||
+             cohort.cohort_contract?.calibration_allowed!==false||
+             cohort.cohort_contract?.model_scoring_allowed!==false||
+             cohort.cohort_contract?.execution_allowed!==false)
+            failures.push('LOCK_POLICY_MISMATCH');
+          if(cohort.cohort_contract?.legacy_cohort?.dataset_sha256!==
+             process.env.EXPECTED_LEGACY_DATASET_SHA256)
+            failures.push('LEGACY_COHORT_IDENTITY_MISMATCH');
+          if(cohort.cohort_contract?.legacy_cohort?.last_decision_at!==legacyLast||
+             cohort.cohort_contract?.legacy_cohort?.last_label_resolved_at!==legacyLastLabelResolved)
+            failures.push('LEGACY_CUTOFF_OR_LABEL_MATURITY_MISMATCH');
+          if(cohort.cohort_contract?.requested_start_at!==expectedStart||
+             cohort.schedule?.first_decision_at!==expectedStart||
+             !(expectedStart>legacyLastLabelResolved)||
+             cohort.cohort_contract?.strictly_after_legacy_label_maturity!==true)
+            failures.push('PROSPECTIVE_START_BOUNDARY_MISMATCH');
+          if(!Array.isArray(rows)||rows.length<200)
+            failures.push('PROSPECTIVE_ROW_SUPPORT_TOO_SMALL');
+          if(rows?.some(row=>Number(row.at)<=legacyLast||
+             Number(row.at)<expectedStart||
+             Number(row.resolved_at)>Number(cohort.created_at_server_time)))
+            failures.push('PROSPECTIVE_ROW_TIME_BOUNDARY_OR_MATURITY_INVALID');
+          if(cohort.schedule?.last_decision_at+14400000>
+             Number(cohort.created_at_server_time))
+            failures.push('LAST_DECISION_LABEL_NOT_MATURE');
+          if(cohort.partitions!==undefined||cohort.models_expected!==undefined||
+             cohort.class_support!==undefined)
+            failures.push('TRAINING_OR_EVALUATION_PARTITIONS_MUST_NOT_BE_CREATED');
+          if(cohort.label_access?.status!=='LOCKED'||
+             cohort.label_access?.outcome_distribution_reported!==false||
+             cohort.cohort_contract?.outcome_distribution_reporting_allowed!==false)
+            failures.push('LABEL_ACCESS_NOT_LOCKED');
+          if(cohort.data_quality?.raw_archive_verification?.verified_count!==
+             cohort.data_quality?.raw_archive_files)
+            failures.push('RAW_ARCHIVE_VERIFICATION_INCOMPLETE');
+          const digest=sha256CanonicalArrayMapped(rows,row=>({
+            id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
+            outcome:row.outcome,target:row.target,
+            source_audit_sha256:row.source_audit.raw_klines_sha256,
+            feature_information_cutoff_at:row.feature_information_cutoff_at,
+            features:row.features,temporal_sequence:row.temporal_sequence,
+            quote_volume_24h:row.quote_volume_24h,
+            historical_liquidity:row.historical_liquidity??null,
+            feature_snapshot_sha:row.feature_snapshot_sha??null,
+            realized_return_pct:row.realized_return_pct
+          }));
+          if(digest!==cohort.dataset_sha256)
+            failures.push('CANONICAL_DATASET_SHA_MISMATCH');
+          if(failures.length)
+            throw new Error('PROSPECTIVE_COHORT_VERIFICATION_FAILED:'+failures.join(','));
+          console.log(JSON.stringify({
+            status:'PROSPECTIVE_COHORT_CAPTURED_LOCKED',
+            dataset_sha256:digest,
+            rows:rows.length,
+            included_symbols:cohort.counts?.included_symbols,
+            first_decision_at:cohort.cohort_contract.actual_first_decision_at,
+            last_decision_at:cohort.cohort_contract.actual_last_decision_at,
+            label_maturity_verified:true,
+            training_started:false,
+            model_scoring_started:false,
+            outer_validation_opened:false,
+            holdout_opened:false
+          },null,2));
+          NODE
+
+      - name: Upload locked prospective cohort and verified raw candle archives
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-prospective-locked-cohort-${{ github.sha }}
+          path: artifacts/neural-closure-prospective/
+          if-no-files-found: error
+          retention-days: 90
