@@ -94,16 +94,8 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
     const tuning=training?.internal_training_validation;
     const trainingConfig=training?.ranker_training_config;
     const tuningGrid=tuning?.candidate_grid;
-    const selectedTuningCandidate=Array.isArray(tuningGrid)
-      ?tuningGrid.find(item=>item?.l2===tuning?.selected_l2&&
-        item?.best_epoch===tuning?.selected_epochs&&
-        item?.temporal_block_count===tuning?.selected_temporal_block_count&&
-        item?.parameter_count===tuning?.selected_parameter_count&&
-        item?.parameterization_id===tuning?.selected_parameterization_id&&
-        item?.best_validation_pairwise_log_loss===tuning?.selected_validation_pairwise_log_loss)
-      :null;
-    const tuningMinimumLoss=Array.isArray(tuningGrid)&&tuningGrid.length
-      ?Math.min(...tuningGrid.map(item=>Number(item?.best_validation_pairwise_log_loss))):NaN;
+    const tuningFolds=tuning?.folds;
+    const foldCount=tuning?.fold_count;
     const validTemporalBlockCounts=[1,2,3,4,6,8,12,24];
     const temporalBlockCount=trainingConfig?.temporal_block_count;
     const temporalStepsPerBlock=Number.isInteger(temporalBlockCount)&&temporalBlockCount>0
@@ -122,6 +114,93 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
             Math.abs(parameters.feature_std[current]-parameters.feature_std[first])<=1e-12;
         })
       );
+    const foldContractValid=Array.isArray(tuningFolds)&&foldCount===2&&
+      tuningFolds.length===foldCount&&
+      tuningFolds.every((fold,index)=>
+        fold?.fold_index===index+1&&
+        finite(fold?.fit_end_fraction)&&fold.fit_end_fraction>0&&fold.fit_end_fraction<1&&
+        Number.isInteger(fold?.tuning_rows)&&fold.tuning_rows>=20&&
+        Number.isInteger(fold?.validation_rows)&&fold.validation_rows>=20&&
+        Number.isInteger(fold?.purged_rows)&&fold.purged_rows>=0&&
+        Number.isInteger(fold?.tuning_pairs)&&fold.tuning_pairs>=10&&
+        Number.isInteger(fold?.validation_pairs)&&fold.validation_pairs>=10&&
+        finite(fold?.tuning_max_resolved_at)&&finite(fold?.tuning_max_at)&&
+        finite(fold?.validation_min_at)&&finite(fold?.validation_max_at)&&
+        fold.validation_max_at>=fold.validation_min_at&&
+        fold.validation_min_at>fold.tuning_max_resolved_at&&
+        finite(fold?.purge_gap_ms)&&
+        Math.abs(fold.purge_gap_ms-(fold.validation_min_at-fold.tuning_max_at))<=1e-6&&
+        fold.purge_gap_ms>=tuning?.purge_horizon_ms
+      )&&
+      tuningFolds[0].validation_max_at<tuningFolds[1].validation_min_at&&
+      tuningFolds[1].tuning_max_at>=tuningFolds[0].validation_min_at;
+    const foldTotalsValid=foldContractValid&&
+      tuning?.tuning_rows===tuningFolds.reduce((sum,fold)=>sum+fold.tuning_rows,0)&&
+      tuning?.validation_rows===tuningFolds.reduce((sum,fold)=>sum+fold.validation_rows,0)&&
+      tuning?.purged_rows===tuningFolds.reduce((sum,fold)=>sum+fold.purged_rows,0)&&
+      tuning?.tuning_pairs===tuningFolds.reduce((sum,fold)=>sum+fold.tuning_pairs,0)&&
+      tuning?.validation_pairs===tuningFolds.reduce((sum,fold)=>sum+fold.validation_pairs,0)&&
+      tuning?.purge_gap_ms===Math.min(...tuningFolds.map(fold=>fold.purge_gap_ms));
+    const candidateGridValid=Array.isArray(tuningGrid)&&tuningGrid.length>=2&&
+      new Set(tuningGrid.map(item=>String(item?.temporal_block_count)+'|'+String(item?.l2))).size===tuningGrid.length&&
+      tuningGrid.every(item=>{
+        const foldResults=item?.fold_results;
+        if(!validTemporalBlockCounts.includes(item?.temporal_block_count)||
+          item?.parameter_count!==item?.temporal_block_count*TCN_LSTM_INPUT_CHANNELS||
+          item?.steps_per_block!==TCN_LSTM_STEPS/item?.temporal_block_count||
+          item?.parameterization_id!=='TEMPORAL_BLOCK_TIED_'+item?.temporal_block_count+'X'+TCN_LSTM_INPUT_CHANNELS+'_V1'||
+          !finite(item?.l2)||item.l2<0||item.l2>1||
+          !Number.isInteger(item?.best_epoch)||item.best_epoch<1||
+          !finite(item?.best_validation_pairwise_log_loss)||
+          !finite(item?.training_pairwise_log_loss)||
+          item?.fold_count!==foldCount||!Array.isArray(foldResults)||foldResults.length!==foldCount)
+          return false;
+        const foldResultsValid=foldResults.every((result,index)=>{
+          const fold=tuningFolds[index];
+          return result?.fold_index===fold.fold_index&&
+            Number.isInteger(result?.best_epoch)&&result.best_epoch>=1&&
+            finite(result?.best_validation_pairwise_log_loss)&&
+            finite(result?.training_pairwise_log_loss)&&
+            result?.training_rows===fold.tuning_rows&&
+            result?.validation_rows===fold.validation_rows&&
+            result?.purged_rows===fold.purged_rows&&
+            result?.training_pairs===fold.tuning_pairs&&
+            result?.validation_pairs===fold.validation_pairs;
+        });
+        if(!foldResultsValid)return false;
+        const validationPairs=foldResults.reduce((sum,result)=>sum+result.validation_pairs,0);
+        const trainingPairs=foldResults.reduce((sum,result)=>sum+result.training_pairs,0);
+        const expectedValidationLoss=foldResults.reduce((sum,result)=>
+          sum+result.best_validation_pairwise_log_loss*result.validation_pairs,0)/validationPairs;
+        const expectedTrainingLoss=foldResults.reduce((sum,result)=>
+          sum+result.training_pairwise_log_loss*result.training_pairs,0)/trainingPairs;
+        const epochs=foldResults.map(result=>result.best_epoch).sort((a,b)=>a-b);
+        const middle=Math.floor(epochs.length/2);
+        const expectedMedianEpoch=epochs.length%2?epochs[middle]:
+          Math.max(1,Math.round((epochs[middle-1]+epochs[middle])/2));
+        return item?.best_epoch===expectedMedianEpoch&&
+          Math.abs(item.best_validation_pairwise_log_loss-
+            Number(expectedValidationLoss.toFixed(8)))<=1e-9&&
+          Math.abs(item.training_pairwise_log_loss-
+            Number(expectedTrainingLoss.toFixed(8)))<=1e-9&&
+          item?.training_rows===foldResults.reduce((sum,result)=>sum+result.training_rows,0)&&
+          item?.validation_rows===foldResults.reduce((sum,result)=>sum+result.validation_rows,0)&&
+          item?.purged_rows===foldResults.reduce((sum,result)=>sum+result.purged_rows,0)&&
+          item?.training_pairs===trainingPairs&&item?.validation_pairs===validationPairs;
+      });
+    const selectedTuningCandidate=Array.isArray(tuningGrid)
+      ?tuningGrid.find(item=>item?.l2===tuning?.selected_l2&&
+        item?.best_epoch===tuning?.selected_epochs&&
+        item?.temporal_block_count===tuning?.selected_temporal_block_count&&
+        item?.parameter_count===tuning?.selected_parameter_count&&
+        item?.parameterization_id===tuning?.selected_parameterization_id&&
+        item?.best_validation_pairwise_log_loss===tuning?.selected_validation_pairwise_log_loss)
+      :null;
+    const tuningMinimumLoss=Array.isArray(tuningGrid)&&tuningGrid.length
+      ?Math.min(...tuningGrid.map(item=>Number(item?.best_validation_pairwise_log_loss))):NaN;
+    const bestTuningCandidate=candidateGridValid?[...tuningGrid].sort((a,b)=>
+      a.best_validation_pairwise_log_loss-b.best_validation_pairwise_log_loss||
+      a.parameter_count-b.parameter_count||b.l2-a.l2||a.best_epoch-b.best_epoch)[0]:null;
     if(training?.fit_partition!=='TRAINING_PARTITION_ONLY'||
       training?.source_partition!=='PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
       training?.feature_scoring_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'||
@@ -139,42 +218,24 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       !Number.isInteger(trainingConfig.patience)||trainingConfig.patience<1||
       !tiedParameterizationValid||
       trainingConfig.steps_per_block!==temporalStepsPerBlock||
-      trainingConfig.selection_metric!=='PURGED_INTERNAL_TRAINING_VALIDATION_PAIRWISE_LOG_LOSS'||
-      tuning?.schema!=='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_TRAINING_VALIDATION_V1'||
+      trainingConfig.selection_metric!=='PAIR_WEIGHTED_MEAN_PURGED_EXPANDING_WINDOW_PAIRWISE_LOG_LOSS'||
+      tuning?.schema!=='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V2'||
+      tuning?.method!=='TWO_FOLD_EXPANDING_WINDOW_PAIR_WEIGHTED_VALIDATION_LOSS_V1'||
       tuning?.source_partition!=='PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY'||
-      tuning?.fit_partition!=='EARLIER_SUBSET_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
-      tuning?.validation_partition!=='LATER_PURGED_SUBSET_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
+      tuning?.fit_partition!=='EXPANDING_EARLIER_SUBSETS_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
+      tuning?.validation_partition!=='TWO_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
       tuning?.outer_validation_or_holdout_used!==false||
       tuning?.model_selection_partition_used!==false||
       tuning?.chronology_valid!==true||
       !finite(tuning?.purge_horizon_ms)||tuning.purge_horizon_ms<4*60*60*1000||
-      !finite(tuning?.tuning_max_resolved_at)||
-      !finite(tuning?.tuning_max_at)||
-      !finite(tuning?.validation_min_at)||
-      tuning.validation_min_at<=tuning.tuning_max_resolved_at||
-      !finite(tuning?.purge_gap_ms)||
-      Math.abs(tuning.purge_gap_ms-(tuning.validation_min_at-tuning.tuning_max_at))>1e-6||
-      tuning.purge_gap_ms<tuning.purge_horizon_ms||
+      !foldContractValid||!foldTotalsValid||!candidateGridValid||
       !Number.isInteger(tuning?.tuning_rows)||tuning.tuning_rows<20||
       !Number.isInteger(tuning?.validation_rows)||tuning.validation_rows<20||
       !Number.isInteger(tuning?.purged_rows)||tuning.purged_rows<0||
       !Number.isInteger(tuning?.tuning_pairs)||tuning.tuning_pairs<10||
       !Number.isInteger(tuning?.validation_pairs)||tuning.validation_pairs<10||
-      !Array.isArray(tuningGrid)||tuningGrid.length<2||
-      new Set(tuningGrid.map(item=>String(item?.temporal_block_count)+'|'+String(item?.l2))).size!==tuningGrid.length||
-      tuningGrid.some(item=>!validTemporalBlockCounts.includes(item?.temporal_block_count)||
-        item?.parameter_count!==item?.temporal_block_count*TCN_LSTM_INPUT_CHANNELS||
-        item?.steps_per_block!==TCN_LSTM_STEPS/item?.temporal_block_count||
-        item?.parameterization_id!=='TEMPORAL_BLOCK_TIED_'+item?.temporal_block_count+'X'+TCN_LSTM_INPUT_CHANNELS+'_V1'||
-        !finite(item?.l2)||item.l2<0||item.l2>1||
-        !Number.isInteger(item?.best_epoch)||item.best_epoch<1||
-        !finite(item?.best_validation_pairwise_log_loss)||
-        item?.training_rows!==tuning.tuning_rows||
-        item?.validation_rows!==tuning.validation_rows||
-        item?.purged_rows!==tuning.purged_rows||
-        item?.training_pairs!==tuning.tuning_pairs||
-        item?.validation_pairs!==tuning.validation_pairs)||
-      !selectedTuningCandidate||!finite(tuningMinimumLoss)||
+      !selectedTuningCandidate||!finite(tuningMinimumLoss)||!bestTuningCandidate||
+      selectedTuningCandidate!==bestTuningCandidate||
       Math.abs(tuningMinimumLoss-tuning.selected_validation_pairwise_log_loss)>1e-9||
       trainingConfig.l2!==tuning.selected_l2||
       trainingConfig.epochs_requested!==tuning.selected_epochs||
@@ -325,7 +386,7 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
         temporal_block_count:ranker.temporal_block_count,
         steps_per_block:ranker.steps_per_block,
         parameter_count:ranker.parameter_count,
-        selection_metric:'PURGED_INTERNAL_TRAINING_VALIDATION_PAIRWISE_LOG_LOSS'
+        selection_metric:ranker.selection_metric
       },
       internal_training_validation:ranker.internal_training_validation,
       downstream_feature_contract:downstreamContract,
