@@ -1406,18 +1406,28 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   ),'every execution-head rank feature must be scored by a ranker fit on earlier disjoint training rows');
   assert.ok(result.candidates.every(item=>{
     const internal=item.ranking_head?.internal_training_validation;
-    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_TRAINING_VALIDATION_V1'&&
+    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V2'&&
+      internal?.method==='TWO_FOLD_EXPANDING_WINDOW_PAIR_WEIGHTED_VALIDATION_LOSS_V1'&&
       internal?.chronology_valid===true&&
       internal?.outer_validation_or_holdout_used===false&&
       internal?.model_selection_partition_used===false&&
-      internal?.validation_rows>=20&&internal?.purged_rows>=0&&
+      internal?.fold_count===2&&internal?.folds?.length===2&&
+      internal?.folds.every((fold,index)=>
+        fold.fold_index===index+1&&fold.tuning_rows>=20&&fold.validation_rows>=20&&
+        fold.tuning_pairs>=10&&fold.validation_pairs>=10&&
+        fold.purge_gap_ms>=4*60*60*1000&&
+        fold.validation_min_at>fold.tuning_max_resolved_at)&&
+      internal.folds[0].validation_max_at<internal.folds[1].validation_min_at&&
+      internal.folds[1].tuning_max_at>=internal.folds[0].validation_min_at&&
+      internal?.validation_rows>=40&&internal?.purged_rows>=0&&
       internal?.purge_gap_ms>=4*60*60*1000&&
       internal?.candidate_grid?.length===32&&
       [1,2,3,4,6,8,12,24].every(blockCount=>
         internal.candidate_grid.some(candidate=>candidate.temporal_block_count===blockCount))&&
       internal.candidate_grid.every(candidate=>
         candidate.parameter_count===candidate.temporal_block_count*29&&
-        candidate.steps_per_block===24/candidate.temporal_block_count)&&
+        candidate.steps_per_block===24/candidate.temporal_block_count&&
+        candidate.fold_count===2&&candidate.fold_results?.length===2)&&
       Number.isFinite(internal?.selected_validation_pairwise_log_loss)&&
       internal?.final_refit_rows===result.model_training_rows&&
       internal?.final_refit_pairs===item.ranking_head.training_pairs;
