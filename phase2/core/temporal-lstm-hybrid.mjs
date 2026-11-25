@@ -3292,7 +3292,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   l2Grid=[0.001,0.01,0.05,0.10],
   // Include intermediate temporal resolutions; selection remains inside the purged training partition.
   temporalBlockCounts=[1,2,3,4,6,8,12,24],
-  validationFraction=0.10,purgeHorizonMs=4*60*60*1000
+  validationFraction=0.08,purgeHorizonMs=4*60*60*1000
 }={}){
   const validTemporalBlockCounts=[1,2,3,4,6,8,12,24];
   if(!Array.isArray(rows)||rows.length<20)
@@ -3303,7 +3303,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     !Array.isArray(temporalBlockCounts)||!temporalBlockCounts.length||
     temporalBlockCounts.some(value=>!validTemporalBlockCounts.includes(value))||
     new Set(temporalBlockCounts).size!==temporalBlockCounts.length||
-    !finite(validationFraction)||validationFraction<0.10||validationFraction>0.40||
+    !finite(validationFraction)||validationFraction<0.08||validationFraction>0.40||
     !finite(purgeHorizonMs)||purgeHorizonMs<0)
     throw new TypeError('TCN_LSTM_ORDERED_RANKER_TUNING_CONFIGURATION_INVALID');
   assertRows(rows,'ORDERED_RANKER_TRAINING_PARTITION');
@@ -3322,10 +3322,10 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     TCN_LSTM_RANKING_BUCKET_MS;
   const groups=[...new Set(ordered.map(bucketAt))].sort((a,b)=>a-b);
   const validationGroupCount=Math.max(4,Math.floor(groups.length*validationFraction));
-  // Two expanding, non-overlapping validation windows reduce dependence on a
-  // single lucky chronological cut. Both folds remain wholly inside the
-  // pre-execution model-training partition and each receives its own 4h purge.
-  const foldFitFractions=[0.35,0.55,0.75];
+  // Three expanding forward windows cover early, middle and late training periods.
+  // Each later fit window contains the previous scored window, then applies its own
+  // four-hour maturity purge before scoring the next disjoint validation window.
+  const foldFitFractions=[0.35,0.56,0.77];
   const folds=foldFitFractions.map((fitFraction,index)=>{
     const fitGroupCount=Math.max(1,Math.floor(groups.length*fitFraction));
     const fitGroups=new Set(groups.slice(0,fitGroupCount));
@@ -3375,7 +3375,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   });
   if(!folds.slice(0,-1).every((fold,index)=>
     fold.validation_max_at<folds[index+1].validation_min_at&&
-    folds[index+1].tuning_max_at>=fold.validation_min_at))
+    folds[index+1].tuning_max_at>=fold.validation_max_at))
     throw new TypeError('TCN_LSTM_ORDERED_RANKER_EXPANDING_FOLD_CHRONOLOGY_INVALID');
   // Use a nested purged window to select epochs only. The later fold window is
   // then untouched until candidate scoring; all candidates and Logistic are
