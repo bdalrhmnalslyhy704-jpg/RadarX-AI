@@ -2181,6 +2181,27 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
   assert.equal(ranker.training_pairs,ranker.pair_support.comparison_pairs);
   assert.ok(ranker.training_pairs>=10);
   assert.equal(ranker.source_partition,'PRE_EXECUTION_MODEL_TRAINING_PARTITION');
+  const chosenBlocks=ranker.training.temporal_block_count;
+  const chosenStepsPerBlock=24/chosenBlocks;
+  assert.equal(ranker.training.parameter_count,chosenBlocks*29);
+  assert.equal(ranker.training.steps_per_block,chosenStepsPerBlock);
+  assert.equal(ranker.training.parameterization_id,
+    'TEMPORAL_BLOCK_TIED_'+chosenBlocks+'X29_V1');
+  assert.equal(ranker.training.internal_training_validation.selected_temporal_block_count,
+    chosenBlocks);
+  assert.ok(ranker.training.internal_training_validation.candidate_grid.length>=8);
+  for(let step=0;step<24;step++){
+    const firstStep=Math.floor(step/chosenStepsPerBlock)*chosenStepsPerBlock;
+    for(let channel=0;channel<29;channel++){
+      const current=step*29+channel,first=firstStep*29+channel;
+      assert.equal(ranker.model_state.orderedRankingHeadWeights[current],
+        ranker.model_state.orderedRankingHeadWeights[first]);
+      assert.equal(ranker.model_state.orderedRankingFeatureMean[current],
+        ranker.model_state.orderedRankingFeatureMean[first]);
+      assert.equal(ranker.model_state.orderedRankingFeatureStd[current],
+        ranker.model_state.orderedRankingFeatureStd[first]);
+    }
+  }
   assert.equal(ranker.training.validation_or_holdout_used,false);
   assert.equal(ranker.training.classifier_parameters_updated,false);
   const rankerMaxResolvedAt=Math.max(...completePartition.map(row=>row.resolved_at));
