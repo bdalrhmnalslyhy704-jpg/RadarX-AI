@@ -31,6 +31,8 @@ const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 
 const LEGACY_COHORT_DATASET_SHA256='f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77';
 const LEGACY_COHORT_LAST_DECISION_AT=Date.parse('2026-11-17T16:14:59.999Z');
+const LEGACY_COHORT_LAST_LABEL_RESOLVED_AT=
+  LEGACY_COHORT_LAST_DECISION_AT+4*60*60_000;
 function parseArgs(argv){
   const result={days:180,maxSymbols:100,minSymbols:40,
     minQuoteVolumeUsdt:750_000,prospectiveOnly:false,startAt:null,
@@ -69,8 +71,8 @@ function parseArgs(argv){
   if(result.prospectiveOnly){
     if(result.startAt===null)
       throw new Error('PROSPECTIVE_START_AT_REQUIRED');
-    if(result.startAt<=LEGACY_COHORT_LAST_DECISION_AT)
-      throw new Error('PROSPECTIVE_COHORT_OVERLAPS_OR_PRECEDES_LEGACY_COHORT');
+    if(result.startAt<=LEGACY_COHORT_LAST_LABEL_RESOLVED_AT)
+      throw new Error('PROSPECTIVE_COHORT_OVERLAPS_OR_PRECEDES_LEGACY_LABEL_MATURITY');
     if(result.startAt%(4*60*60_000)!==(15*60_000-1))
       throw new Error('PROSPECTIVE_START_AT_NOT_ON_4H_DECISION_GRID');
   }else if(result.startAt!==null){
@@ -528,7 +530,9 @@ async function main(){
         legacy_cohort:{
           dataset_sha256:LEGACY_COHORT_DATASET_SHA256,
           last_decision_at:LEGACY_COHORT_LAST_DECISION_AT,
-          last_decision_at_iso:new Date(LEGACY_COHORT_LAST_DECISION_AT).toISOString()
+          last_decision_at_iso:new Date(LEGACY_COHORT_LAST_DECISION_AT).toISOString(),
+          last_label_resolved_at:LEGACY_COHORT_LAST_LABEL_RESOLVED_AT,
+          last_label_resolved_at_iso:new Date(LEGACY_COHORT_LAST_LABEL_RESOLVED_AT).toISOString()
         },
         requested_start_at:args.startAt,
         requested_start_at_iso:new Date(args.startAt).toISOString(),
