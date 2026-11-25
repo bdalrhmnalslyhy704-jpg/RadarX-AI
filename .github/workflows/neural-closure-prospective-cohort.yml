@@ -26,7 +26,8 @@ jobs:
       # Last closed 15m feature candle in the legacy 32,300-row cohort opened
       # at 2026-11-17T16:00:00Z and closed at 16:14:59.999Z.
       LEGACY_LAST_DECISION_AT: "2026-11-17T16:14:59.999Z"
-      PROSPECTIVE_START_AT: "2026-11-17T20:14:59.999Z"
+      LEGACY_LAST_LABEL_RESOLVED_AT: "2026-11-17T20:14:59.999Z"
+      PROSPECTIVE_START_AT: "2026-11-18T00:14:59.999Z"
       EXPECTED_LEGACY_DATASET_SHA256: f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77
     steps:
       - name: Checkout exact workflow SHA
@@ -54,7 +55,7 @@ jobs:
           MAX_SYMBOLS: ${{ inputs.max_symbols }}
         run: |
           set -euo pipefail
-          test "$(date -u -d "$PROSPECTIVE_START_AT" +%s)" -gt "$(date -u -d "$LEGACY_LAST_DECISION_AT" +%s)"
+          test "$(date -u -d "$PROSPECTIVE_START_AT" +%s)" -gt "$(date -u -d "$LEGACY_LAST_LABEL_RESOLVED_AT" +%s)"
           mkdir -p artifacts/neural-closure-prospective
           node --expose-gc --max-old-space-size=3072 phase2/tools/build-neural-closure-dataset.mjs \
             --prospectiveOnly true \
@@ -76,6 +77,7 @@ jobs:
           const path='artifacts/neural-closure-prospective/cohort.json';
           const cohort=JSON.parse(fs.readFileSync(path,'utf8'));
           const legacyLast=Date.parse(process.env.LEGACY_LAST_DECISION_AT);
+          const legacyLastLabelResolved=Date.parse(process.env.LEGACY_LAST_LABEL_RESOLVED_AT);
           const expectedStart=Date.parse(process.env.PROSPECTIVE_START_AT);
           const rows=cohort.rows;
           const failures=[];
@@ -94,11 +96,13 @@ jobs:
           if(cohort.cohort_contract?.legacy_cohort?.dataset_sha256!==
              process.env.EXPECTED_LEGACY_DATASET_SHA256)
             failures.push('LEGACY_COHORT_IDENTITY_MISMATCH');
-          if(cohort.cohort_contract?.legacy_cohort?.last_decision_at!==legacyLast)
-            failures.push('LEGACY_CUTOFF_MISMATCH');
+          if(cohort.cohort_contract?.legacy_cohort?.last_decision_at!==legacyLast||
+             cohort.cohort_contract?.legacy_cohort?.last_label_resolved_at!==legacyLastLabelResolved)
+            failures.push('LEGACY_CUTOFF_OR_LABEL_MATURITY_MISMATCH');
           if(cohort.cohort_contract?.requested_start_at!==expectedStart||
              cohort.schedule?.first_decision_at!==expectedStart||
-             !(expectedStart>legacyLast))
+             !(expectedStart>legacyLastLabelResolved)||
+             cohort.cohort_contract?.strictly_after_legacy_label_maturity!==true)
             failures.push('PROSPECTIVE_START_BOUNDARY_MISMATCH');
           if(!Array.isArray(rows)||rows.length<200)
             failures.push('PROSPECTIVE_ROW_SUPPORT_TOO_SMALL');
