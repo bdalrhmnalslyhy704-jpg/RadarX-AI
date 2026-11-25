@@ -97,10 +97,31 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
     const selectedTuningCandidate=Array.isArray(tuningGrid)
       ?tuningGrid.find(item=>item?.l2===tuning?.selected_l2&&
         item?.best_epoch===tuning?.selected_epochs&&
+        item?.temporal_block_count===tuning?.selected_temporal_block_count&&
+        item?.parameter_count===tuning?.selected_parameter_count&&
+        item?.parameterization_id===tuning?.selected_parameterization_id&&
         item?.best_validation_pairwise_log_loss===tuning?.selected_validation_pairwise_log_loss)
       :null;
     const tuningMinimumLoss=Array.isArray(tuningGrid)&&tuningGrid.length
       ?Math.min(...tuningGrid.map(item=>Number(item?.best_validation_pairwise_log_loss))):NaN;
+    const validTemporalBlockCounts=[1,2,3,4,6,8,12,24];
+    const temporalBlockCount=trainingConfig?.temporal_block_count;
+    const temporalStepsPerBlock=Number.isInteger(temporalBlockCount)&&temporalBlockCount>0
+      ?TCN_LSTM_STEPS/temporalBlockCount:NaN;
+    const tiedParameterizationValid=validTemporalBlockCounts.includes(temporalBlockCount)&&
+      Number.isInteger(temporalStepsPerBlock)&&
+      trainingConfig?.parameter_count===temporalBlockCount*TCN_LSTM_INPUT_CHANNELS&&
+      trainingConfig?.parameterization_id===
+        'TEMPORAL_BLOCK_TIED_'+temporalBlockCount+'X'+TCN_LSTM_INPUT_CHANNELS+'_V1'&&
+      Array.from({length:TCN_LSTM_STEPS},(_,step)=>step).every(step=>
+        Array.from({length:TCN_LSTM_INPUT_CHANNELS},(_,channel)=>channel).every(channel=>{
+          const first=(Math.floor(step/temporalStepsPerBlock)*temporalStepsPerBlock)*TCN_LSTM_INPUT_CHANNELS+channel;
+          const current=step*TCN_LSTM_INPUT_CHANNELS+channel;
+          return Math.abs(parameters.weights[current]-parameters.weights[first])<=1e-12&&
+            Math.abs(parameters.feature_mean[current]-parameters.feature_mean[first])<=1e-12&&
+            Math.abs(parameters.feature_std[current]-parameters.feature_std[first])<=1e-12;
+        })
+      ));
     if(training?.fit_partition!=='TRAINING_PARTITION_ONLY'||
       training?.source_partition!=='PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
       training?.feature_scoring_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'||
@@ -116,6 +137,8 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       !Number.isInteger(trainingConfig.best_epoch)||trainingConfig.best_epoch<1||
       trainingConfig.best_epoch>trainingConfig.epochs_completed||
       !Number.isInteger(trainingConfig.patience)||trainingConfig.patience<1||
+      !tiedParameterizationValid||
+      trainingConfig.steps_per_block!==temporalStepsPerBlock||
       trainingConfig.selection_metric!=='PURGED_INTERNAL_TRAINING_VALIDATION_PAIRWISE_LOG_LOSS'||
       tuning?.schema!=='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_TRAINING_VALIDATION_V1'||
       tuning?.source_partition!=='PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY'||
@@ -138,8 +161,12 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       !Number.isInteger(tuning?.tuning_pairs)||tuning.tuning_pairs<10||
       !Number.isInteger(tuning?.validation_pairs)||tuning.validation_pairs<10||
       !Array.isArray(tuningGrid)||tuningGrid.length<2||
-      new Set(tuningGrid.map(item=>item?.l2)).size!==tuningGrid.length||
-      tuningGrid.some(item=>!finite(item?.l2)||item.l2<0||item.l2>1||
+      new Set(tuningGrid.map(item=>String(item?.temporal_block_count)+'|'+String(item?.l2))).size!==tuningGrid.length||
+      tuningGrid.some(item=>!validTemporalBlockCounts.includes(item?.temporal_block_count)||
+        item?.parameter_count!==item?.temporal_block_count*TCN_LSTM_INPUT_CHANNELS||
+        item?.steps_per_block!==TCN_LSTM_STEPS/item?.temporal_block_count||
+        item?.parameterization_id!=='TEMPORAL_BLOCK_TIED_'+item?.temporal_block_count+'X'+TCN_LSTM_INPUT_CHANNELS+'_V1'||
+        !finite(item?.l2)||item.l2<0||item.l2>1||
         !Number.isInteger(item?.best_epoch)||item.best_epoch<1||
         !finite(item?.best_validation_pairwise_log_loss)||
         item?.training_rows!==tuning.tuning_rows||
@@ -151,6 +178,10 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       Math.abs(tuningMinimumLoss-tuning.selected_validation_pairwise_log_loss)>1e-9||
       trainingConfig.l2!==tuning.selected_l2||
       trainingConfig.epochs_requested!==tuning.selected_epochs||
+      temporalBlockCount!==tuning.selected_temporal_block_count||
+      trainingConfig.parameter_count!==tuning.selected_parameter_count||
+      trainingConfig.parameterization_id!==tuning.selected_parameterization_id||
+      tuning.selected_steps_per_block!==temporalStepsPerBlock||
       tuning?.final_refit_rows!==training.training_rows||
       tuning?.final_refit_pairs!==training.training_pairs||
       contract?.schema!=='RADARX_TCN_LSTM_EXECUTION_RANK_FEATURE_OUT_OF_SAMPLE_CONTRACT_V1'||
@@ -239,7 +270,7 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
     artifact_schema:ORDERED_TEMPORAL_RANKER_ARTIFACT_SCHEMA,
     artifact_schema_version:1,
     model_family:'TCN_LSTM_INDEPENDENT_RAW_ORDERED_RETURN_RANKER',
-    model_version:'RAW_ORDERED_696_PAIRWISE_RANKER_V1',
+    model_version:'RAW_ORDERED_696_TEMPORAL_BLOCK_TIED_PAIRWISE_RANKER_V1',
     code_commit_sha:String(required.sourceCommitSha).toLowerCase(),
     dataset_sha256:String(required.datasetSha256).toLowerCase(),
     input_file_sha256:String(required.inputFileSha256).toLowerCase(),
@@ -290,6 +321,10 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
         epochs_completed:ranker.epochs_completed,
         best_epoch:ranker.best_epoch,
         patience:ranker.patience,
+        parameterization_id:ranker.parameterization_id,
+        temporal_block_count:ranker.temporal_block_count,
+        steps_per_block:ranker.steps_per_block,
+        parameter_count:ranker.parameter_count,
         selection_metric:'PURGED_INTERNAL_TRAINING_VALIDATION_PAIRWISE_LOG_LOSS'
       },
       internal_training_validation:ranker.internal_training_validation,
