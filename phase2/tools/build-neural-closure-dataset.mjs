@@ -538,8 +538,8 @@ async function main(){
         requested_start_at_iso:new Date(args.startAt).toISOString(),
         actual_first_decision_at:schedule.first_decision_at,
         actual_last_decision_at:schedule.last_decision_at,
-        strictly_after_legacy_cohort:
-          schedule.first_decision_at>LEGACY_COHORT_LAST_DECISION_AT,
+        strictly_after_legacy_label_maturity:
+          schedule.first_decision_at>LEGACY_COHORT_LAST_LABEL_RESOLVED_AT,
         decision_rows_are_label_matured:true,
         training_allowed:false,
         model_selection_allowed:false,
