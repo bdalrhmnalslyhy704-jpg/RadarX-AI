@@ -83,8 +83,9 @@ export function createNeuralClosureDecisionSchedule({serverTime,days=60,startAt=
   if(prospectiveStartAt!==null){
     // Prospective cohorts start at an exact predeclared 4h decision boundary.
     // Do not silently round a requested boundary or admit an unmatured label.
-    const aligned=Math.round(prospectiveStartAt)%FOUR_HOURS_MS===DECISION_OFFSET_MS;
-    if(!finite(prospectiveStartAt)||prospectiveStartAt<=0||!aligned||
+    const aligned=Number.isSafeInteger(prospectiveStartAt)&&
+      prospectiveStartAt%FOUR_HOURS_MS===DECISION_OFFSET_MS;
+    if(!aligned||prospectiveStartAt<=0||
       prospectiveStartAt+FOUR_HOURS_MS>now||endAt<prospectiveStartAt)
       throw new TypeError('NEURAL_CLOSURE_PROSPECTIVE_SCHEDULE_BOUNDARY_INVALID');
     firstAt=prospectiveStartAt;
