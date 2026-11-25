@@ -1275,7 +1275,7 @@ test('ordered ranker selection fails closed unless the selected V6 candidate bea
       candidate_grid:[{
         temporal_block_count:2,l2:0.05,best_epoch:11,
         parameterization_id:'TEMPORAL_BLOCK_TIED_2X29_V1',
-        parameter_count:58,fold_results
+        parameter_count:58,fold_results:foldResults
       }]
     }
   };
