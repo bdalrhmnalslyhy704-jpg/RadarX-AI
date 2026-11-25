@@ -3321,7 +3321,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   const bucketAt=row=>Math.floor(Number(row.at)/TCN_LSTM_RANKING_BUCKET_MS)*
     TCN_LSTM_RANKING_BUCKET_MS;
   const groups=[...new Set(ordered.map(bucketAt))].sort((a,b)=>a-b);
-  const validationGroupCount=Math.max(4,Math.floor(groups.length*validationFraction));
+  const validationGroupCount=Math.max(5,Math.floor(groups.length*validationFraction));
   // Three expanding forward windows cover early, middle and late training periods.
   // Each later fit window contains the previous scored window, then applies its own
   // four-hour maturity purge before scoring the next disjoint validation window.
@@ -3377,9 +3377,9 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     fold.validation_max_at<folds[index+1].validation_min_at&&
     folds[index+1].tuning_max_at>=fold.validation_max_at))
     throw new TypeError('TCN_LSTM_ORDERED_RANKER_EXPANDING_FOLD_CHRONOLOGY_INVALID');
-  // Use a nested purged window to select epochs only. The later fold window is
-  // then untouched until candidate scoring; all candidates and Logistic are
-  // refit on the complete, identical outer-fold training rows before scoring.
+  // Use a nested purged window to select epochs only. Each later fold window
+  // remains untouched until scoring; all candidates and Logistic are refit on
+  // the complete, identical outer-fold training rows before scoring.
   const nestedEpochWindows=folds.map(fold=>{
     const windowBuckets=[...new Set(fold.tuningRows.map(bucketAt))].sort((a,b)=>a-b);
     const fitGroupCount=Math.max(5,Math.floor(windowBuckets.length*0.40));
