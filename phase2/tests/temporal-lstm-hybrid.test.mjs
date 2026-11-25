@@ -52,6 +52,7 @@ import {
 import { topKRankingSignals,compareTcnLstmRankingExecutionMetrics,
   evaluateExternalExecutionRiskTopK } from '../core/neural-closure-contracts.mjs';
 import { fitHurdleReturnHead,fitHurdlePositiveReturnCalibration,predictHurdleExpectedNetReturn } from '../core/hurdle-return-head.mjs';
+import {createOrderedTemporalRankerArtifact,verifyOrderedTemporalRankerArtifact} from '../core/ordered-temporal-ranker-artifact.mjs';
 
 const DAY=86400000;
 const BASE=1_780_000_000_000;
@@ -2267,6 +2268,74 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
   const rankerMaxResolvedAt=Math.max(...completePartition.map(row=>row.resolved_at));
   const executionFeatureMinAt=Math.min(...executionFeatureRows.map(row=>row.at));
   assert.ok(rankerMaxResolvedAt<executionFeatureMinAt);
+
+  // Exercise the V6 three-fold provenance validator with an actual fitted ranker.
+  const artifactProfile={
+    model:{
+      rankingRepresentation:ranker.model_state.rankingRepresentation,
+      orderedRankingHeadWeights:[...ranker.model_state.orderedRankingHeadWeights],
+      orderedRankingFeatureMean:[...ranker.model_state.orderedRankingFeatureMean],
+      orderedRankingFeatureStd:[...ranker.model_state.orderedRankingFeatureStd]
+    },
+    training:{
+      return_ranking:{
+        representation:'RAW_ORDERED_696_V1',
+        pair_strategy:'PROFITABILITY_BOUNDARY_V1',
+        round_trip_cost_bps:30,
+        minimum_return_gap_pct:0.50,
+        maximum_pairs_per_timestamp:16,
+        ranking_head:{
+          ...ranker.training,
+          downstream_feature_contract:{
+            schema:'RADARX_TCN_LSTM_EXECUTION_RANK_FEATURE_OUT_OF_SAMPLE_CONTRACT_V1',
+            fit_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION',
+            feature_scoring_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+            ranker_training_rows:ranker.training_rows,
+            ranker_training_pairs:ranker.training_pairs,
+            ranker_standardizer_fit_rows:ranker.training.standardization.fit_rows,
+            ranker_standardizer_fit_partition:'TRAINING_PARTITION_ONLY',
+            model_training_max_resolved_at:rankerMaxResolvedAt,
+            execution_feature_min_at:executionFeatureMinAt,
+            purge_gap_ms:executionFeatureMinAt-rankerMaxResolvedAt,
+            training_and_execution_feature_identities_disjoint:true,
+            chronology_valid:true,
+            classifier_parameters_updated_by_ranker:false,
+            validation_or_holdout_used:false,
+            out_of_sample_for_execution_head_features:true
+          }
+        }
+      }
+    }
+  };
+  const artifactProvenance={
+    sourceCommitSha:'1'.repeat(40),
+    datasetSha256:'2'.repeat(64),
+    inputFileSha256:'3'.repeat(64),
+    datasetSourceCommitSha:'4'.repeat(40),
+    datasetRowCount:32300,
+    targetDefinition:'FIRST_TOUCH_PLUS_3_PCT_BEFORE_MINUS_2_PCT_WITHIN_4H_1M_V1',
+    targetSemantics:'UP_IF_PLUS_3_PCT_FIRST_BEFORE_MINUS_2_PCT_ELSE_NON_SUCCESS_WITHIN_4H_1M_V1',
+    featureNames:Array.from({length:696},(_,index)=>'STEP_FEATURE_'+String(index).padStart(3,'0')),
+    roundTripCostBps:30,
+    splitDefinition:{
+      schema:'RADARX_NEURAL_CLOSURE_PURGED_60_20_20_UTC_DAY_SPLIT_V1',
+      purge_ms:86400000,
+      counts:{train:19269,validation:6282,holdout:6389}
+    }
+  };
+  const v6Artifact=createOrderedTemporalRankerArtifact({
+    profile:artifactProfile,provenance:artifactProvenance
+  });
+  const v6Verification=verifyOrderedTemporalRankerArtifact(v6Artifact);
+  assert.equal(v6Verification.valid,true,v6Verification.reason);
+  const v6Tuning=v6Artifact.training_provenance.internal_training_validation;
+  assert.equal(v6Tuning.fold_count,3);
+  assert.equal(v6Tuning.schema,
+    'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6');
+  assert.equal(v6Tuning.selected_candidate_qualified,
+    v6Tuning.fold_stable_dual_metric_candidate_count>0);
+  assert.equal(v6Tuning.robustness_status,v6Tuning.selected_candidate_qualified
+    ?'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY':'ABSTAIN_NO_FOLD_STABLE_DUAL_SUPERIORITY');
 
   // Simulate Logistic OOF coverage filtering out early rows from the classifier
   // residual fit. The independent ranker remains fitted on the full earlier block.
