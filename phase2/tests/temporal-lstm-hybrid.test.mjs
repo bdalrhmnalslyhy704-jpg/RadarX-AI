@@ -41,6 +41,7 @@ import {
   summarizeTcnLstmPairwiseReturnRanking,
   summarizeTcnLstmPairwiseLogitRanking,
   summarizeTcnLstmRankingExecutionSelection,
+  hasFoldStableOrderedRankerQualification,
   benchmarkTcnLstmHybridChronological,
   evaluateTcnLstmHybridGeneralization,
   benchmarkTcnLstmHybridInference,
@@ -1246,6 +1247,69 @@ test('TCN-LSTM shared classifier pairwise ranking loss backpropagates through th
   assert.equal(shared.training.return_ranking.classifier_parameters_updated_by_shared_ranking_loss,true);
   assert.equal(shared.probability_ready,false);
   assert.equal(shared.real_order_execution,false);
+});
+
+test('ordered ranker selection fails closed unless the selected V6 candidate beats Logistic on both metrics in all three folds',()=>{
+  const foldResults=Array.from({length:3},(_,index)=>({
+    fold_index:index+1,
+    best_validation_pairwise_accuracy_pct:66+index,
+    logistic_validation_pairwise_accuracy_pct:64+index,
+    best_validation_pairwise_log_loss:0.60-index*0.005,
+    logistic_validation_pairwise_log_loss:0.62-index*0.005
+  }));
+  const rankHead={
+    schema:'RADARX_TCN_LSTM_INDEPENDENT_ORDERED_696_RETURN_RANKER_V1',
+    representation:'RAW_ORDERED_696_V1',
+    internal_training_validation:{
+      schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6',
+      fold_count:3,
+      selected_candidate_qualified:true,
+      fold_stable_dual_metric_superiority:true,
+      robustness_status:'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY',
+      fold_stable_dual_metric_candidate_count:1,
+      selected_temporal_block_count:2,
+      selected_l2:0.05,
+      selected_epochs:11,
+      selected_parameterization_id:'TEMPORAL_BLOCK_TIED_2X29_V1',
+      selected_parameter_count:58,
+      candidate_grid:[{
+        temporal_block_count:2,l2:0.05,best_epoch:11,
+        parameterization_id:'TEMPORAL_BLOCK_TIED_2X29_V1',
+        parameter_count:58,fold_results
+      }]
+    }
+  };
+
+  assert.equal(hasFoldStableOrderedRankerQualification(rankHead,'RAW_ORDERED_696_V1'),true);
+
+  const unqualified=structuredClone(rankHead);
+  unqualified.internal_training_validation.selected_candidate_qualified=false;
+  unqualified.internal_training_validation.fold_stable_dual_metric_superiority=false;
+  unqualified.internal_training_validation.robustness_status='ABSTAIN_NO_FOLD_STABLE_DUAL_SUPERIORITY';
+  unqualified.internal_training_validation.fold_stable_dual_metric_candidate_count=0;
+  assert.equal(hasFoldStableOrderedRankerQualification(unqualified,'RAW_ORDERED_696_V1'),false);
+
+  const accuracyRegression=structuredClone(rankHead);
+  accuracyRegression.internal_training_validation.candidate_grid[0]
+    .fold_results[1].best_validation_pairwise_accuracy_pct=65;
+  assert.equal(hasFoldStableOrderedRankerQualification(accuracyRegression,'RAW_ORDERED_696_V1'),false,
+    'one fold with no strict Logistic accuracy margin must force abstention');
+
+  const lossRegression=structuredClone(rankHead);
+  lossRegression.internal_training_validation.candidate_grid[0]
+    .fold_results[2].best_validation_pairwise_log_loss=0.62;
+  assert.equal(hasFoldStableOrderedRankerQualification(lossRegression,'RAW_ORDERED_696_V1'),false,
+    'one fold with no strict Logistic log-loss margin must force abstention');
+
+  const legacyTwoFold=structuredClone(rankHead);
+  legacyTwoFold.internal_training_validation.schema=
+    'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V5';
+  legacyTwoFold.internal_training_validation.fold_count=2;
+  assert.equal(hasFoldStableOrderedRankerQualification(legacyTwoFold,'RAW_ORDERED_696_V1'),false);
+
+  assert.equal(hasFoldStableOrderedRankerQualification(
+    {representation:'LATENT_MULTI_SCALE_V2'},'LATENT_MULTI_SCALE_V2'
+  ),true,'the V6 ordered-ranker gate must not alter the separate legacy ranker representation');
 });
 
 test('TCN-LSTM inner selector scores pairwise ranking on its own purged selection partition',()=>{

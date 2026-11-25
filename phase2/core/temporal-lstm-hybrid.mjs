@@ -4596,6 +4596,55 @@ export function summarizeTcnLstmSelectionReturns(rows, probabilities, {
  * Predeclared LR/L2 calibration on inner selection only. The frozen Logistic
  * anchor is fit once on training rows and reused for every challenger config.
  */
+/**
+ * Ordered 696-feature rankers may participate in selection only when their
+ * selected candidate beats the fold-local Logistic reference on BOTH ranking
+ * accuracy and pairwise log loss in every one of the three purged folds.
+ * Diagnostic artifacts remain exportable, but an unqualified ranker cannot
+ * qualify the enclosing classifier/Hurdle selection.
+ */
+export function hasFoldStableOrderedRankerQualification(rankHead, rankingRepresentation = null) {
+  const isOrderedRanker =
+    rankingRepresentation === 'RAW_ORDERED_696_V1' ||
+    rankHead?.representation === 'RAW_ORDERED_696_V1' ||
+    rankHead?.schema === 'RADARX_TCN_LSTM_INDEPENDENT_ORDERED_696_RETURN_RANKER_V1';
+  if (!isOrderedRanker) return true;
+
+  const tuning = rankHead?.internal_training_validation;
+  if (tuning?.schema !==
+      'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6' ||
+      tuning.fold_count !== 3 ||
+      tuning.selected_candidate_qualified !== true ||
+      tuning.fold_stable_dual_metric_superiority !== true ||
+      tuning.robustness_status !== 'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY' ||
+      !Number.isInteger(tuning.fold_stable_dual_metric_candidate_count) ||
+      tuning.fold_stable_dual_metric_candidate_count < 1 ||
+      !Array.isArray(tuning.candidate_grid)) return false;
+
+  const selected = tuning.candidate_grid.find(candidate =>
+    candidate?.temporal_block_count === tuning.selected_temporal_block_count &&
+    candidate?.l2 === tuning.selected_l2 &&
+    candidate?.best_epoch === tuning.selected_epochs &&
+    candidate?.parameterization_id === tuning.selected_parameterization_id &&
+    candidate?.parameter_count === tuning.selected_parameter_count
+  );
+  if (!Array.isArray(selected?.fold_results) || selected.fold_results.length !== 3) {
+    return false;
+  }
+
+  return selected.fold_results.every((fold, index) =>
+    fold?.fold_index === index + 1 &&
+    Number.isFinite(fold?.best_validation_pairwise_accuracy_pct) &&
+    Number.isFinite(fold?.logistic_validation_pairwise_accuracy_pct) &&
+    Number.isFinite(fold?.best_validation_pairwise_log_loss) &&
+    Number.isFinite(fold?.logistic_validation_pairwise_log_loss) &&
+    fold.best_validation_pairwise_accuracy_pct >
+      fold.logistic_validation_pairwise_accuracy_pct &&
+    fold.best_validation_pairwise_log_loss <
+      fold.logistic_validation_pairwise_log_loss
+  );
+}
+
 export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, {
   candidates = [
     { name: 'LR_0015_L2_0005_DROP00', learningRate: 0.0015, l2: 0.0005, dropout: 0, epochs: 6 },
@@ -5217,10 +5266,14 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   // metric; qualification additionally requires a trained, nonzero rank head,
   // accuracy above chance, and accuracy above the matched Logistic anchor.
   const independentRankingSignalPassed=item=>{
-    const rankHead=item.fit?.training?.return_ranking?.ranking_head??null;
+    const returnRanking=item.fit?.training?.return_ranking??null;
+    const rankHead=returnRanking?.ranking_head??null;
+    const orderedFoldGatePassed=hasFoldStableOrderedRankerQualification(
+      rankHead,returnRanking?.representation
+    );
     const accuracy=Number(item.pairwise_ranking?.pairwise_accuracy_pct);
     const logisticAccuracy=Number(item.logistic_pairwise_ranking?.pairwise_accuracy_pct);
-    return rankHead?.fitted===true&&finite(rankHead.weight_l2_norm)&&
+    return orderedFoldGatePassed&&rankHead?.fitted===true&&finite(rankHead.weight_l2_norm)&&
       rankHead.weight_l2_norm>1e-8&&
       finite(accuracy)&&accuracy>50&&finite(logisticAccuracy)&&
       accuracy>logisticAccuracy&&
