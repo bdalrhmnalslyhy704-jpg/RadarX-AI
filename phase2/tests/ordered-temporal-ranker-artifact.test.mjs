@@ -76,41 +76,68 @@ function makeProfile(overrides={}){
     epochs_completed:8,
     best_epoch:8,
     patience:8,
+    selection_metric:'PAIR_WEIGHTED_MEAN_PURGED_EXPANDING_WINDOW_PAIRWISE_LOG_LOSS',
     parameterization_id:parameterizationId,
     temporal_block_count:temporalBlockCount,
     steps_per_block:stepsPerBlock,
     parameter_count:parameterCount,
     internal_training_validation:{
-      schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_TRAINING_VALIDATION_V1',
+      schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V2',
+      method:'TWO_FOLD_EXPANDING_WINDOW_PAIR_WEIGHTED_VALIDATION_LOSS_V1',
       source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY',
-      fit_partition:'EARLIER_SUBSET_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
-      validation_partition:'LATER_PURGED_SUBSET_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
+      fit_partition:'EXPANDING_EARLIER_SUBSETS_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
+      validation_partition:'TWO_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
       outer_validation_or_holdout_used:false,
       model_selection_partition_used:false,
       purge_horizon_ms:14400000,
-      tuning_max_resolved_at:1000,
-      tuning_max_at:500,
+      fold_count:2,
+      folds:[
+        {fold_index:1,fit_end_fraction:0.4,tuning_rows:24,validation_rows:24,purged_rows:4,
+          tuning_pairs:48,validation_pairs:16,tuning_max_resolved_at:1000,tuning_max_at:500,
+          validation_min_at:14400501,validation_max_at:14499000,purge_gap_ms:14400001},
+        {fold_index:2,fit_end_fraction:0.6,tuning_rows:24,validation_rows:24,purged_rows:4,
+          tuning_pairs:48,validation_pairs:16,tuning_max_resolved_at:14500500,tuning_max_at:14500000,
+          validation_min_at:28900501,validation_max_at:28999000,purge_gap_ms:14400501}
+      ],
+      tuning_max_resolved_at:14500500,
+      tuning_max_at:14500000,
       validation_min_at:14400501,
       purge_gap_ms:14400001,
       chronology_valid:true,
-      tuning_rows:24,
-      validation_rows:24,
-      purged_rows:4,
-      tuning_pairs:48,
-      validation_pairs:16,
+      tuning_rows:48,
+      validation_rows:48,
+      purged_rows:8,
+      tuning_pairs:96,
+      validation_pairs:32,
       candidate_grid:[
         {temporal_block_count:4,steps_per_block:6,parameterization_id:parameterizationId,
-          parameter_count:116,l2:0.001,best_epoch:6,best_validation_pairwise_log_loss:0.61,
-          training_rows:24,validation_rows:24,purged_rows:4,
-          training_pairs:48,validation_pairs:16},
+          parameter_count:116,l2:0.001,best_epoch:6,best_validation_pairwise_log_loss:0.615,
+          training_pairwise_log_loss:0.635,training_rows:48,validation_rows:48,purged_rows:8,
+          training_pairs:96,validation_pairs:32,fold_count:2,
+          fold_results:[
+            {fold_index:1,best_epoch:6,best_validation_pairwise_log_loss:0.61,
+              training_pairwise_log_loss:0.63,training_rows:24,validation_rows:24,purged_rows:4,
+              training_pairs:48,validation_pairs:16},
+            {fold_index:2,best_epoch:6,best_validation_pairwise_log_loss:0.62,
+              training_pairwise_log_loss:0.64,training_rows:24,validation_rows:24,purged_rows:4,
+              training_pairs:48,validation_pairs:16}
+          ]},
         {temporal_block_count:4,steps_per_block:6,parameterization_id:parameterizationId,
-          parameter_count:116,l2:0.05,best_epoch:8,best_validation_pairwise_log_loss:0.58,
-          training_rows:24,validation_rows:24,purged_rows:4,
-          training_pairs:48,validation_pairs:16}
+          parameter_count:116,l2:0.05,best_epoch:8,best_validation_pairwise_log_loss:0.585,
+          training_pairwise_log_loss:0.605,training_rows:48,validation_rows:48,purged_rows:8,
+          training_pairs:96,validation_pairs:32,fold_count:2,
+          fold_results:[
+            {fold_index:1,best_epoch:8,best_validation_pairwise_log_loss:0.58,
+              training_pairwise_log_loss:0.60,training_rows:24,validation_rows:24,purged_rows:4,
+              training_pairs:48,validation_pairs:16},
+            {fold_index:2,best_epoch:8,best_validation_pairwise_log_loss:0.59,
+              training_pairwise_log_loss:0.61,training_rows:24,validation_rows:24,purged_rows:4,
+              training_pairs:48,validation_pairs:16}
+          ]}
       ],
       selected_l2:0.05,
       selected_epochs:8,
-      selected_validation_pairwise_log_loss:0.58,
+      selected_validation_pairwise_log_loss:0.585,
       selected_temporal_block_count:4,
       selected_steps_per_block:6,
       selected_parameterization_id:parameterizationId,
@@ -179,6 +206,9 @@ test('ordered raw 696 ranker exports a fully checksummed training-only artifact'
   assert.equal(artifact.training_provenance.internal_training_validation.selected_l2,0.05);
   assert.equal(artifact.training_provenance.internal_training_validation.selected_epochs,8);
   assert.equal(artifact.training_provenance.internal_training_validation.purge_gap_ms,14400001);
+  assert.equal(artifact.training_provenance.internal_training_validation.fold_count,2);
+  assert.equal(artifact.training_provenance.internal_training_validation.method,
+    'TWO_FOLD_EXPANDING_WINDOW_PAIR_WEIGHTED_VALIDATION_LOSS_V1');
   assert.equal(artifact.artifact_manifest.ranker_training_config_sha256.length,64);
   assert.equal(artifact.artifact_manifest.internal_training_validation_sha256.length,64);
   assert.equal(artifact.holdout_status,'LOCKED');
@@ -210,7 +240,7 @@ test('verifier rejects tampered parameters and an invalid OOS chronology contrac
   assert.throws(()=>createOrderedTemporalRankerArtifact({profile:broken,provenance}),
     /ORDERED_RANKER_ARTIFACT_VERIFY_FAILED:ORDERED_RANKER_TRAINING_BOUNDARY_INVALID/);
   const forgedTuning=structuredClone(artifact);
-  forgedTuning.training_provenance.internal_training_validation.purge_gap_ms=1;
+  forgedTuning.training_provenance.internal_training_validation.folds[0].purge_gap_ms=1;
   assert.equal(verifyOrderedTemporalRankerArtifact(forgedTuning).reason,
     'ORDERED_RANKER_TRAINING_BOUNDARY_INVALID',
     'a ranker artifact must reject a tuning record that does not preserve the four-hour internal purge');
@@ -223,10 +253,17 @@ test('verifier rejects tampered parameters and an invalid OOS chronology contrac
     'the verifier must reject weights that violate the declared tied temporal parameterization');
 
   const forgedPurgeClock=makeProfile();
-  forgedPurgeClock.training.return_ranking.ranking_head.internal_training_validation.validation_min_at+=1;
+  forgedPurgeClock.training.return_ranking.ranking_head.internal_training_validation.folds[0].validation_min_at+=1;
   assert.throws(()=>createOrderedTemporalRankerArtifact({profile:forgedPurgeClock,provenance}),
     /ORDERED_RANKER_ARTIFACT_VERIFY_FAILED:ORDERED_RANKER_TRAINING_BOUNDARY_INVALID/,
     'a one-millisecond timestamp change must invalidate a stale declared purge gap');
+  const forgedFoldLoss=structuredClone(artifact);
+  forgedFoldLoss.training_provenance.internal_training_validation.candidate_grid[1]
+    .fold_results[0].best_validation_pairwise_log_loss+=0.10;
+  forgedFoldLoss.artifact_content_hash=artifact.artifact_content_hash;
+  assert.equal(verifyOrderedTemporalRankerArtifact(forgedFoldLoss).reason,
+    'ORDERED_RANKER_TRAINING_BOUNDARY_INVALID',
+    'the verifier must recompute the pair-weighted fold mean and reject a forged fold loss');
 
   const inconsistentEpochs=makeProfile();
   inconsistentEpochs.training.return_ranking.ranking_head.epochs_completed=3;
