@@ -251,3 +251,14 @@ test('atomic sidecar export reloads and verifies both artifact and manifest',asy
     await rm(directory,{recursive:true,force:true});
   }
 });
+
+
+test('artifact verifier rejects confusing the expanded 696 inference width with tied free parameters',()=>{
+  const profile=makeProfile();
+  profile.training.return_ranking.ranking_head.parameter_count=
+    TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT;
+  assert.throws(
+    ()=>createOrderedTemporalRankerArtifact({profile,provenance}),
+    /ORDERED_RANKER_ARTIFACT_VERIFY_FAILED:ORDERED_RANKER_TRAINING_BOUNDARY_INVALID/
+  );
+});
