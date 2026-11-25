@@ -3292,7 +3292,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   l2Grid=[0.001,0.01,0.05,0.10],
   // Include intermediate temporal resolutions; selection remains inside the purged training partition.
   temporalBlockCounts=[1,2,3,4,6,8,12,24],
-  validationFraction=0.20,purgeHorizonMs=4*60*60*1000
+  validationFraction=0.10,purgeHorizonMs=4*60*60*1000
 }={}){
   const validTemporalBlockCounts=[1,2,3,4,6,8,12,24];
   if(!Array.isArray(rows)||rows.length<20)
@@ -3325,7 +3325,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   // Two expanding, non-overlapping validation windows reduce dependence on a
   // single lucky chronological cut. Both folds remain wholly inside the
   // pre-execution model-training partition and each receives its own 4h purge.
-  const foldFitFractions=[0.40,0.60];
+  const foldFitFractions=[0.35,0.55,0.75];
   const folds=foldFitFractions.map((fitFraction,index)=>{
     const fitGroupCount=Math.max(1,Math.floor(groups.length*fitFraction));
     const fitGroups=new Set(groups.slice(0,fitGroupCount));
@@ -3373,8 +3373,9 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       tuningRows,tuningPairSupport,validationRows,validationPairSupport
     };
   });
-  if(!(folds[0].validation_max_at<folds[1].validation_min_at)||
-    !(folds[1].tuning_max_at>=folds[0].validation_min_at))
+  if(!folds.slice(0,-1).every((fold,index)=>
+    fold.validation_max_at<folds[index+1].validation_min_at&&
+    folds[index+1].tuning_max_at>=fold.validation_min_at))
     throw new TypeError('TCN_LSTM_ORDERED_RANKER_EXPANDING_FOLD_CHRONOLOGY_INVALID');
   // Use a nested purged window to select epochs only. The later fold window is
   // then untouched until candidate scoring; all candidates and Logistic are
@@ -3586,6 +3587,9 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         item.best_validation_pairwise_accuracy_pct-item.logistic_validation_pairwise_accuracy_pct
       ));
       const weightedAccuracyImprovement=weightedValidationAccuracy-weightedLogisticValidationAccuracy;
+      const minimumFoldLogLossImprovement=Math.min(...foldResults.map(item=>
+        item.logistic_validation_pairwise_log_loss-item.best_validation_pairwise_log_loss
+      ));
       const weightedLogLossImprovement=weightedLogisticValidationLoss-weightedValidationLoss;
       const accuracyVariance=foldResults.reduce((sum,item)=>
         sum+item.validation_pairs*(item.best_validation_pairwise_accuracy_pct-weightedValidationAccuracy)**2,0)/totalValidationPairs;
@@ -3612,6 +3616,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         logistic_validation_pairwise_log_loss:Number(weightedLogisticValidationLoss.toFixed(8)),
         best_validation_pairwise_accuracy_improvement_pct:Number(weightedAccuracyImprovement.toFixed(4)),
         minimum_fold_pairwise_accuracy_improvement_pct:Number(minimumFoldAccuracyImprovement.toFixed(4)),
+        minimum_fold_pairwise_log_loss_improvement:Number(minimumFoldLogLossImprovement.toFixed(8)),
         best_validation_pairwise_log_loss_improvement:Number(weightedLogLossImprovement.toFixed(8)),
         best_validation_pairwise_log_loss:Number(weightedValidationLoss.toFixed(8)),
         validation_pairwise_log_loss_std:Number(Math.sqrt(Math.max(0,lossVariance)).toFixed(8)),
@@ -3626,16 +3631,22 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         fold_results:foldResults
       });
     }
-  tuningCandidates.sort((a,b)=>
+  const candidateOrder=(a,b)=>
     b.minimum_fold_pairwise_accuracy_improvement_pct-a.minimum_fold_pairwise_accuracy_improvement_pct||
+    b.minimum_fold_pairwise_log_loss_improvement-a.minimum_fold_pairwise_log_loss_improvement||
     b.best_validation_pairwise_accuracy_improvement_pct-a.best_validation_pairwise_accuracy_improvement_pct||
     b.best_validation_pairwise_log_loss_improvement-a.best_validation_pairwise_log_loss_improvement||
     b.minimum_fold_pairwise_accuracy_pct-a.minimum_fold_pairwise_accuracy_pct||
     b.best_validation_pairwise_accuracy_pct-a.best_validation_pairwise_accuracy_pct||
     a.best_validation_pairwise_log_loss-b.best_validation_pairwise_log_loss||
-    a.parameter_count-b.parameter_count||b.l2-a.l2||a.best_epoch-b.best_epoch
-  );
-  const selectedTuning=tuningCandidates[0];
+    a.parameter_count-b.parameter_count||b.l2-a.l2||a.best_epoch-b.best_epoch;
+  const foldStableDualMetricCandidates=tuningCandidates.filter(item=>
+    item.minimum_fold_pairwise_accuracy_improvement_pct>0&&
+    item.minimum_fold_pairwise_log_loss_improvement>0
+  ).sort(candidateOrder);
+  tuningCandidates.sort(candidateOrder);
+  const selectedTuning=foldStableDualMetricCandidates[0]??tuningCandidates[0];
+  const selectedCandidateQualified=foldStableDualMetricCandidates.length>0;
   const finalEpochs=Math.max(1,selectedTuning.best_epoch);
   const rankerModel={
     orderedRankingHeadWeights:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0),
@@ -3651,7 +3662,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       epochSelectionMode:'FIXED_EPOCHS'
     }
   );
-  training.selection_metric='MIN_FOLD_LOGISTIC_ACCURACY_MARGIN_THEN_PAIR_WEIGHTED_MARGIN_AND_LOG_LOSS_NESTED_PURGED_EXPANDING_WINDOW_V5';
+  training.selection_metric='THREE_FOLD_MINIMUM_LOGISTIC_ACCURACY_AND_LOG_LOSS_MARGIN_NESTED_PURGED_EXPANDING_WINDOW_V6';
   const foldMetadata=folds.map(({tuningRows,tuningPairSupport,validationRows,
     validationPairSupport,epochTrainingRows,epochTrainingPairSupport,
     epochValidationRows,epochValidationPairSupport,...metadata},index)=>({
@@ -3669,8 +3680,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   const internalValidationPairs=foldMetadata.reduce((sum,item)=>sum+item.validation_pairs,0);
   const internalPurgeGapMs=Math.min(...foldMetadata.map(item=>item.purge_gap_ms));
   training.internal_training_validation={
-    schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V5',
-    method:'TWO_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1',
+    schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6',
+    method:'THREE_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_DUAL_METRIC_VALIDATION_V1',
     epoch_selection_policy:'NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS',
     logistic_baseline_config:{
       schema:'RADARX_FOLD_LOCAL_RAW_TEMPORAL_LOGISTIC_RANKING_REFERENCE_V1',
@@ -3685,7 +3696,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     },
     source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY',
     fit_partition:'EXPANDING_EARLIER_SUBSETS_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
-    validation_partition:'TWO_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
+    validation_partition:'THREE_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
     outer_validation_or_holdout_used:false,
     model_selection_partition_used:false,
     purge_horizon_ms:purgeHorizonMs,
@@ -3702,6 +3713,10 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     tuning_pairs:internalTuningPairs,
     validation_pairs:internalValidationPairs,
     candidate_grid:tuningCandidates,
+    selection_rule:'REQUIRE_STRICT_POSITIVE_LOGISTIC_MARGINS_FOR_PAIRWISE_ACCURACY_AND_LOG_LOSS_IN_EVERY_PURGED_TRAINING_FOLD',
+    fold_stable_dual_metric_candidate_count:foldStableDualMetricCandidates.length,
+    fold_stable_dual_metric_superiority: selectedCandidateQualified,
+    robustness_status:selectedCandidateQualified?'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY':'ABSTAIN_NO_FOLD_STABLE_DUAL_SUPERIORITY',
     selected_l2:selectedTuning.l2,
     selected_epochs:finalEpochs,
     selected_validation_pairwise_log_loss:selectedTuning.best_validation_pairwise_log_loss,
@@ -3711,7 +3726,9 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     selected_logistic_validation_pairwise_log_loss:selectedTuning.logistic_validation_pairwise_log_loss,
     selected_validation_pairwise_accuracy_improvement_pct:selectedTuning.best_validation_pairwise_accuracy_improvement_pct,
     selected_minimum_fold_pairwise_accuracy_improvement_pct:selectedTuning.minimum_fold_pairwise_accuracy_improvement_pct,
+    selected_minimum_fold_pairwise_log_loss_improvement:selectedTuning.minimum_fold_pairwise_log_loss_improvement,
     selected_validation_pairwise_log_loss_improvement:selectedTuning.best_validation_pairwise_log_loss_improvement,
+    selected_candidate_qualified:selectedCandidateQualified,
     selected_temporal_block_count:selectedTuning.temporal_block_count,
     selected_steps_per_block:selectedTuning.steps_per_block,
     selected_parameterization_id:selectedTuning.parameterization_id,
