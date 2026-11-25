@@ -594,3 +594,11 @@ test('43. artifact retains candidate-level and Logistic baseline partition prove
   assert.equal(artifact.inner_qualification.baseline.scoring_partition, 'PURGED_INNER_SELECTION_ONLY');
   assert.equal(artifact.inner_qualification.baseline.holdout_values_used, false);
 });
+
+test('44. unavailable candidate diagnostics may omit a source label but may never use holdout values', () => {
+  const tampered = structuredClone(artifact);
+  delete tampered.inner_qualification.candidates[0].execution_head_context_ablation.source_partition;
+  tampered.inner_qualification.candidates[0].execution_head_context_ablation.status = 'UNAVAILABLE';
+  const result = verifyHurdleV2Artifact(resealArtifact(tampered));
+  assert.equal(result.valid, true, result.reason);
+});
