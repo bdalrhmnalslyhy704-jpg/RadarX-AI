@@ -688,7 +688,7 @@ export function verifyHurdleV2Artifact(artifact) {
     const validInnerPartitionRecord = record => Boolean(record) &&
       record.holdout_values_used === false &&
       (record.source_partition === 'INNER_SELECTION_ONLY' ||
-       (record.status === 'UNAVAILABLE' && record.source_partition === null));
+       (record.status === 'UNAVAILABLE' && record.source_partition == null));
     const validInnerPolicyRecord = record => Boolean(record) &&
       record.selection_partition_only === true &&
       record.holdout_values_used === false &&
