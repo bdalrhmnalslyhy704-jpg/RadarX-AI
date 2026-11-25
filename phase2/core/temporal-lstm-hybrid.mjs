@@ -3524,6 +3524,15 @@ export function trainTcnLstmHybrid(trainingRows, {
       metadata?.fitted!==true||
       metadata?.representation!=='RAW_ORDERED_696_V1'||
       metadata?.feature_count!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      ![1,2,3,4,6,8,12,24].includes(metadata?.temporal_block_count)||
+      metadata?.steps_per_block!==TCN_LSTM_STEPS/metadata.temporal_block_count||
+      metadata?.parameter_count!==metadata.temporal_block_count*TCN_LSTM_INPUT_CHANNELS||
+      metadata?.parameterization_id!=='TEMPORAL_BLOCK_TIED_'+
+        metadata.temporal_block_count+'X'+TCN_LSTM_INPUT_CHANNELS+'_V1'||
+      metadata?.internal_training_validation?.selected_temporal_block_count!==
+        metadata?.temporal_block_count||
+      metadata?.internal_training_validation?.selected_parameter_count!==
+        metadata?.parameter_count||
       metadata?.training_rows!==Number(prefit.training_rows)||
       metadata?.training_pairs!==Number(prefit.training_pairs)||
       metadata?.standardization?.fit_partition!=='TRAINING_PARTITION_ONLY'||
