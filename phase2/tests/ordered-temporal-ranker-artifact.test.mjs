@@ -76,14 +76,14 @@ function makeProfile(overrides={}){
     epochs_completed:8,
     best_epoch:8,
     patience:8,
-    selection_metric:'PAIR_WEIGHTED_MEAN_PURGED_EXPANDING_WINDOW_PAIRWISE_LOG_LOSS',
+    selection_metric:'MIN_FOLD_PAIRWISE_ACCURACY_THEN_PAIR_WEIGHTED_ACCURACY_AND_LOG_LOSS_PURGED_EXPANDING_WINDOW_V3',
     parameterization_id:parameterizationId,
     temporal_block_count:temporalBlockCount,
     steps_per_block:stepsPerBlock,
     parameter_count:parameterCount,
     internal_training_validation:{
-      schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V2',
-      method:'TWO_FOLD_EXPANDING_WINDOW_PAIR_WEIGHTED_VALIDATION_LOSS_V1',
+      schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V3',
+      method:'TWO_FOLD_EXPANDING_WINDOW_ACCURACY_GUARDED_PAIR_WEIGHTED_VALIDATION_V1',
       source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY',
       fit_partition:'EXPANDING_EARLIER_SUBSETS_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
       validation_partition:'TWO_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
@@ -111,33 +111,37 @@ function makeProfile(overrides={}){
       validation_pairs:32,
       candidate_grid:[
         {temporal_block_count:4,steps_per_block:6,parameterization_id:parameterizationId,
-          parameter_count:116,l2:0.001,best_epoch:6,best_validation_pairwise_log_loss:0.615,
-          training_pairwise_log_loss:0.635,training_rows:48,validation_rows:48,purged_rows:8,
+          parameter_count:116,l2:0.001,best_epoch:6,best_validation_pairwise_accuracy_pct:61,minimum_fold_pairwise_accuracy_pct:60,
+          validation_pairwise_accuracy_std_pct:1,training_pairwise_accuracy_pct:69,
+          best_validation_pairwise_log_loss:0.615,training_pairwise_log_loss:0.635,training_rows:48,validation_rows:48,purged_rows:8,
           training_pairs:96,validation_pairs:32,fold_count:2,
           fold_results:[
             {fold_index:1,best_epoch:6,best_validation_pairwise_log_loss:0.61,
-              training_pairwise_log_loss:0.63,training_rows:24,validation_rows:24,purged_rows:4,
+              best_validation_pairwise_accuracy_pct:62,training_pairwise_log_loss:0.63,training_pairwise_accuracy_pct:70,training_rows:24,validation_rows:24,purged_rows:4,
               training_pairs:48,validation_pairs:16},
             {fold_index:2,best_epoch:6,best_validation_pairwise_log_loss:0.62,
-              training_pairwise_log_loss:0.64,training_rows:24,validation_rows:24,purged_rows:4,
+              best_validation_pairwise_accuracy_pct:60,training_pairwise_log_loss:0.64,training_pairwise_accuracy_pct:68,training_rows:24,validation_rows:24,purged_rows:4,
               training_pairs:48,validation_pairs:16}
           ]},
         {temporal_block_count:4,steps_per_block:6,parameterization_id:parameterizationId,
-          parameter_count:116,l2:0.05,best_epoch:8,best_validation_pairwise_log_loss:0.585,
-          training_pairwise_log_loss:0.605,training_rows:48,validation_rows:48,purged_rows:8,
+          parameter_count:116,l2:0.05,best_epoch:8,best_validation_pairwise_accuracy_pct:66,minimum_fold_pairwise_accuracy_pct:65,
+          validation_pairwise_accuracy_std_pct:1,training_pairwise_accuracy_pct:70.5,
+          best_validation_pairwise_log_loss:0.585,training_pairwise_log_loss:0.605,training_rows:48,validation_rows:48,purged_rows:8,
           training_pairs:96,validation_pairs:32,fold_count:2,
           fold_results:[
             {fold_index:1,best_epoch:8,best_validation_pairwise_log_loss:0.58,
-              training_pairwise_log_loss:0.60,training_rows:24,validation_rows:24,purged_rows:4,
+              best_validation_pairwise_accuracy_pct:67,training_pairwise_log_loss:0.60,training_pairwise_accuracy_pct:71,training_rows:24,validation_rows:24,purged_rows:4,
               training_pairs:48,validation_pairs:16},
             {fold_index:2,best_epoch:8,best_validation_pairwise_log_loss:0.59,
-              training_pairwise_log_loss:0.61,training_rows:24,validation_rows:24,purged_rows:4,
+              best_validation_pairwise_accuracy_pct:65,training_pairwise_log_loss:0.61,training_pairwise_accuracy_pct:70,training_rows:24,validation_rows:24,purged_rows:4,
               training_pairs:48,validation_pairs:16}
           ]}
       ],
       selected_l2:0.05,
       selected_epochs:8,
       selected_validation_pairwise_log_loss:0.585,
+      selected_validation_pairwise_accuracy_pct:66,
+      selected_minimum_fold_pairwise_accuracy_pct:65,
       selected_temporal_block_count:4,
       selected_steps_per_block:6,
       selected_parameterization_id:parameterizationId,
@@ -208,7 +212,9 @@ test('ordered raw 696 ranker exports a fully checksummed training-only artifact'
   assert.equal(artifact.training_provenance.internal_training_validation.purge_gap_ms,14400001);
   assert.equal(artifact.training_provenance.internal_training_validation.fold_count,2);
   assert.equal(artifact.training_provenance.internal_training_validation.method,
-    'TWO_FOLD_EXPANDING_WINDOW_PAIR_WEIGHTED_VALIDATION_LOSS_V1');
+    'TWO_FOLD_EXPANDING_WINDOW_ACCURACY_GUARDED_PAIR_WEIGHTED_VALIDATION_V1');
+  assert.equal(artifact.training_provenance.internal_training_validation.selected_validation_pairwise_accuracy_pct,66);
+  assert.equal(artifact.training_provenance.internal_training_validation.selected_minimum_fold_pairwise_accuracy_pct,65);
   assert.equal(artifact.artifact_manifest.ranker_training_config_sha256.length,64);
   assert.equal(artifact.artifact_manifest.internal_training_validation_sha256.length,64);
   assert.equal(artifact.holdout_status,'LOCKED');
@@ -264,6 +270,13 @@ test('verifier rejects tampered parameters and an invalid OOS chronology contrac
   assert.equal(verifyOrderedTemporalRankerArtifact(forgedFoldLoss).reason,
     'ORDERED_RANKER_TRAINING_BOUNDARY_INVALID',
     'the verifier must recompute the pair-weighted fold mean and reject a forged fold loss');
+  const forgedFoldAccuracy=structuredClone(artifact);
+  forgedFoldAccuracy.training_provenance.internal_training_validation.candidate_grid[1]
+    .fold_results[0].best_validation_pairwise_accuracy_pct-=5;
+  forgedFoldAccuracy.artifact_content_hash=artifact.artifact_content_hash;
+  assert.equal(verifyOrderedTemporalRankerArtifact(forgedFoldAccuracy).reason,
+    'ORDERED_RANKER_TRAINING_BOUNDARY_INVALID',
+    'the verifier must recompute pair-weighted fold accuracy and reject a forged accuracy record');
 
   const inconsistentEpochs=makeProfile();
   inconsistentEpochs.training.return_ranking.ranking_head.epochs_completed=3;

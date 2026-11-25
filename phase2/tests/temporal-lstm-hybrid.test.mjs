@@ -1406,8 +1406,8 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   ),'every execution-head rank feature must be scored by a ranker fit on earlier disjoint training rows');
   assert.ok(result.candidates.every(item=>{
     const internal=item.ranking_head?.internal_training_validation;
-    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V2'&&
-      internal?.method==='TWO_FOLD_EXPANDING_WINDOW_PAIR_WEIGHTED_VALIDATION_LOSS_V1'&&
+    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V3'&&
+      internal?.method==='TWO_FOLD_EXPANDING_WINDOW_ACCURACY_GUARDED_PAIR_WEIGHTED_VALIDATION_V1'&&
       internal?.chronology_valid===true&&
       internal?.outer_validation_or_holdout_used===false&&
       internal?.model_selection_partition_used===false&&
@@ -1429,6 +1429,11 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
         candidate.steps_per_block===24/candidate.temporal_block_count&&
         candidate.fold_count===2&&candidate.fold_results?.length===2)&&
       Number.isFinite(internal?.selected_validation_pairwise_log_loss)&&
+      Number.isFinite(internal?.selected_validation_pairwise_accuracy_pct)&&
+      Number.isFinite(internal?.selected_minimum_fold_pairwise_accuracy_pct)&&
+      internal?.candidate_grid?.every(candidate=>Number.isFinite(candidate.best_validation_pairwise_accuracy_pct)&&
+        Number.isFinite(candidate.minimum_fold_pairwise_accuracy_pct)&&candidate.fold_results.every(fold=>
+          Number.isFinite(fold.best_validation_pairwise_accuracy_pct)&&Number.isFinite(fold.training_pairwise_accuracy_pct)))&&
       internal?.final_refit_rows===result.model_training_rows&&
       internal?.final_refit_pairs===item.ranking_head.training_pairs;
   }),'the final ranker must be refit on all pre-execution training rows after purged training-only tuning');

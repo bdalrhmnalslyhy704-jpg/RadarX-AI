@@ -3141,18 +3141,23 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     return clamp(value,-LOGIT_LIMIT,LOGIT_LIMIT);
   };
   const evaluate=(currentWeights,pairRows=pairs,featureVectors=vectors)=>{
-    let loss=0;
-    for(const pair of pairRows)
-      loss+=tcnLstmPairwiseLogitRankingLoss(
+    let loss=0,correct=0;
+    for(const pair of pairRows){
+      const metric=tcnLstmPairwiseLogitRankingLoss(
         score(pair.high_index,currentWeights,featureVectors),
         score(pair.low_index,currentWeights,featureVectors)
-      ).loss;
-    return loss/pairRows.length;
+      );
+      loss+=metric.loss;
+      correct+=metric.accuracy_contribution;
+    }
+    return {pairwise_log_loss:loss/pairRows.length,pairwise_accuracy_pct:100*correct/pairRows.length};
   };
-  const initialTrainingLoss=evaluate(initialWeights);
-  const initialValidationLoss=validationPairs
-    ?evaluate(initialWeights,validationPairs,validationVectors):initialTrainingLoss;
-  let bestLoss=initialValidationLoss,bestWeights=[...initialWeights],wait=0,completed=0,bestEpoch=0;
+  const initialTrainingMetrics=evaluate(initialWeights);
+  const initialValidationMetrics=validationPairs
+    ?evaluate(initialWeights,validationPairs,validationVectors):initialTrainingMetrics;
+  let bestLoss=initialValidationMetrics.pairwise_log_loss;
+  let bestAccuracy=initialValidationMetrics.pairwise_accuracy_pct;
+  let bestWeights=[...initialWeights],wait=0,completed=0,bestEpoch=0;
   const firstMoment=Array(parameterCount).fill(0),secondMoment=Array(parameterCount).fill(0);
   const beta1=0.9,beta2=0.999,epsilon=1e-8;
   for(let epoch=1;epoch<=epochs;epoch++){
@@ -3183,14 +3188,21 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       initialWeights[parameter]=clamp(initialWeights[parameter]-
         learningRate*correctedFirst/(Math.sqrt(correctedSecond)+epsilon),-8,8);
     }
-    const trainingLoss=evaluate(initialWeights);
-    const currentLoss=validationPairs
-      ?evaluate(initialWeights,validationPairs,validationVectors):trainingLoss;
-    if(!finite(trainingLoss)||!finite(currentLoss)||initialWeights.some(value=>!finite(value)))
+    const trainingMetrics=evaluate(initialWeights);
+    const validationMetrics=validationPairs
+      ?evaluate(initialWeights,validationPairs,validationVectors):trainingMetrics;
+    if(!finite(trainingMetrics.pairwise_log_loss)||!finite(trainingMetrics.pairwise_accuracy_pct)||
+      !finite(validationMetrics.pairwise_log_loss)||!finite(validationMetrics.pairwise_accuracy_pct)||
+      initialWeights.some(value=>!finite(value)))
       throw new TypeError('TCN_LSTM_ORDERED_RANKING_HEAD_NON_FINITE');
     completed=epoch;
-    if(currentLoss<bestLoss-1e-9){
-      bestLoss=currentLoss;bestWeights=[...initialWeights];wait=0;bestEpoch=epoch;
+    const currentAccuracy=validationMetrics.pairwise_accuracy_pct;
+    const currentLoss=validationMetrics.pairwise_log_loss;
+    const accuracyImproved=currentAccuracy>bestAccuracy+1e-9;
+    const accuracyTied=Math.abs(currentAccuracy-bestAccuracy)<=1e-9;
+    if(accuracyImproved||(accuracyTied&&currentLoss<bestLoss-1e-9)){
+      bestAccuracy=currentAccuracy;bestLoss=currentLoss;
+      bestWeights=[...initialWeights];wait=0;bestEpoch=epoch;
     }else wait++;
     if(wait>=patience)break;
   }
@@ -3205,10 +3217,11 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
   model.orderedRankingFeatureMean=means;
   model.orderedRankingFeatureStd=stds;
   model.rankingRepresentation='RAW_ORDERED_696_V1';
-  const finalLoss=evaluate(bestWeights);
-  const finalValidationLoss=validationPairs
-    ?evaluate(bestWeights,validationPairs,validationVectors):null;
-  if(!finite(finalLoss)||finalValidationLoss!==null&&!finite(finalValidationLoss)||
+  const finalTrainingMetrics=evaluate(bestWeights);
+  const finalValidationMetrics=validationPairs?evaluate(bestWeights,validationPairs,validationVectors):null;
+  if(!finite(finalTrainingMetrics.pairwise_log_loss)||!finite(finalTrainingMetrics.pairwise_accuracy_pct)||
+    finalValidationMetrics!==null&&(!finite(finalValidationMetrics.pairwise_log_loss)||
+      !finite(finalValidationMetrics.pairwise_accuracy_pct))||
     bestWeights.some(value=>!finite(value))||expandedWeights.some(value=>!finite(value)))
     throw new TypeError('TCN_LSTM_ORDERED_RANKING_HEAD_FINAL_STATE_INVALID');
   return {
@@ -3233,13 +3246,13 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     learning_rate:learningRate,epochs_requested:epochs,epochs_completed:completed,
     l2,patience,early_stopped:completed<epochs,
     best_epoch:bestEpoch||completed,
-    selection_metric:validationPairs
-      ?'PURGED_INTERNAL_TRAINING_VALIDATION_PAIRWISE_LOG_LOSS'
-      :'TRAINING_PAIRWISE_LOG_LOSS',
-    initial_pairwise_log_loss:Number(initialTrainingLoss.toFixed(8)),
-    final_pairwise_log_loss:Number(finalLoss.toFixed(8)),
-    best_validation_pairwise_log_loss:finalValidationLoss===null
-      ?null:Number(finalValidationLoss.toFixed(8)),
+    selection_metric:validationPairs?'PURGED_VALIDATION_PAIRWISE_ACCURACY_THEN_LOG_LOSS':'TRAINING_PAIRWISE_ACCURACY_THEN_LOG_LOSS',
+    initial_pairwise_log_loss:Number(initialTrainingMetrics.pairwise_log_loss.toFixed(8)),
+    initial_pairwise_accuracy_pct:Number(initialTrainingMetrics.pairwise_accuracy_pct.toFixed(4)),
+    final_pairwise_log_loss:Number(finalTrainingMetrics.pairwise_log_loss.toFixed(8)),
+    final_pairwise_accuracy_pct:Number(finalTrainingMetrics.pairwise_accuracy_pct.toFixed(4)),
+    best_validation_pairwise_log_loss:finalValidationMetrics===null?null:Number(finalValidationMetrics.pairwise_log_loss.toFixed(8)),
+    best_validation_pairwise_accuracy_pct:finalValidationMetrics===null?null:Number(finalValidationMetrics.pairwise_accuracy_pct.toFixed(4)),
     internal_validation_rows:validationRows?.length??0,
     internal_validation_pairs:validationPairs?.length??0,
     weight_l2_norm:Number(Math.sqrt(bestWeights.reduce((sum,value)=>sum+value*value,0)).toFixed(8)),
@@ -3366,7 +3379,9 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
           fold_index:fold.fold_index,
           best_epoch:tuned.best_epoch,
           best_validation_pairwise_log_loss:tuned.best_validation_pairwise_log_loss,
+          best_validation_pairwise_accuracy_pct:tuned.best_validation_pairwise_accuracy_pct,
           training_pairwise_log_loss:tuned.final_pairwise_log_loss,
+          training_pairwise_accuracy_pct:tuned.final_pairwise_accuracy_pct,
           training_rows:fold.tuning_rows,
           validation_rows:fold.validation_rows,
           purged_rows:fold.purged_rows,
@@ -3380,6 +3395,13 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         sum+item.best_validation_pairwise_log_loss*item.validation_pairs,0)/totalValidationPairs;
       const weightedTrainingLoss=foldResults.reduce((sum,item)=>
         sum+item.training_pairwise_log_loss*item.training_pairs,0)/totalTrainingPairs;
+      const weightedValidationAccuracy=foldResults.reduce((sum,item)=>
+        sum+item.best_validation_pairwise_accuracy_pct*item.validation_pairs,0)/totalValidationPairs;
+      const weightedTrainingAccuracy=foldResults.reduce((sum,item)=>
+        sum+item.training_pairwise_accuracy_pct*item.training_pairs,0)/totalTrainingPairs;
+      const minimumFoldValidationAccuracy=Math.min(...foldResults.map(item=>item.best_validation_pairwise_accuracy_pct));
+      const accuracyVariance=foldResults.reduce((sum,item)=>
+        sum+item.validation_pairs*(item.best_validation_pairwise_accuracy_pct-weightedValidationAccuracy)**2,0)/totalValidationPairs;
       const sortedEpochs=foldResults.map(item=>item.best_epoch).sort((a,b)=>a-b);
       const middle=Math.floor(sortedEpochs.length/2);
       const medianBestEpoch=sortedEpochs.length%2
@@ -3396,8 +3418,12 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         parameter_count:temporalBlockCount*TCN_LSTM_INPUT_CHANNELS,
         l2:candidateL2,
         best_epoch:medianBestEpoch,
+        best_validation_pairwise_accuracy_pct:Number(weightedValidationAccuracy.toFixed(4)),
+        minimum_fold_pairwise_accuracy_pct:Number(minimumFoldValidationAccuracy.toFixed(4)),
+        validation_pairwise_accuracy_std_pct:Number(Math.sqrt(Math.max(0,accuracyVariance)).toFixed(4)),
         best_validation_pairwise_log_loss:Number(weightedValidationLoss.toFixed(8)),
         validation_pairwise_log_loss_std:Number(Math.sqrt(Math.max(0,lossVariance)).toFixed(8)),
+        training_pairwise_accuracy_pct:Number(weightedTrainingAccuracy.toFixed(4)),
         training_pairwise_log_loss:Number(weightedTrainingLoss.toFixed(8)),
         training_rows:foldResults.reduce((sum,item)=>sum+item.training_rows,0),
         validation_rows:foldResults.reduce((sum,item)=>sum+item.validation_rows,0),
@@ -3409,9 +3435,10 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       });
     }
   tuningCandidates.sort((a,b)=>
+    b.minimum_fold_pairwise_accuracy_pct-a.minimum_fold_pairwise_accuracy_pct||
+    b.best_validation_pairwise_accuracy_pct-a.best_validation_pairwise_accuracy_pct||
     a.best_validation_pairwise_log_loss-b.best_validation_pairwise_log_loss||
-    a.parameter_count-b.parameter_count||
-    b.l2-a.l2||a.best_epoch-b.best_epoch
+    a.parameter_count-b.parameter_count||b.l2-a.l2||a.best_epoch-b.best_epoch
   );
   const selectedTuning=tuningCandidates[0];
   const finalEpochs=Math.max(1,selectedTuning.best_epoch);
@@ -3427,7 +3454,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       patience:finalEpochs,temporalBlockCount:selectedTuning.temporal_block_count
     }
   );
-  training.selection_metric='PAIR_WEIGHTED_MEAN_PURGED_EXPANDING_WINDOW_PAIRWISE_LOG_LOSS';
+  training.selection_metric='MIN_FOLD_PAIRWISE_ACCURACY_THEN_PAIR_WEIGHTED_ACCURACY_AND_LOG_LOSS_PURGED_EXPANDING_WINDOW_V3';
   const foldMetadata=folds.map(({tuningRows,tuningPairSupport,validationRows,
     validationPairSupport,...metadata})=>metadata);
   const internalTuningRows=foldMetadata.reduce((sum,item)=>sum+item.tuning_rows,0);
@@ -3437,8 +3464,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   const internalValidationPairs=foldMetadata.reduce((sum,item)=>sum+item.validation_pairs,0);
   const internalPurgeGapMs=Math.min(...foldMetadata.map(item=>item.purge_gap_ms));
   training.internal_training_validation={
-    schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V2',
-    method:'TWO_FOLD_EXPANDING_WINDOW_PAIR_WEIGHTED_VALIDATION_LOSS_V1',
+    schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V3',
+    method:'TWO_FOLD_EXPANDING_WINDOW_ACCURACY_GUARDED_PAIR_WEIGHTED_VALIDATION_V1',
     source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY',
     fit_partition:'EXPANDING_EARLIER_SUBSETS_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
     validation_partition:'TWO_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
@@ -3461,6 +3488,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     selected_l2:selectedTuning.l2,
     selected_epochs:finalEpochs,
     selected_validation_pairwise_log_loss:selectedTuning.best_validation_pairwise_log_loss,
+    selected_validation_pairwise_accuracy_pct:selectedTuning.best_validation_pairwise_accuracy_pct,
+    selected_minimum_fold_pairwise_accuracy_pct:selectedTuning.minimum_fold_pairwise_accuracy_pct,
     selected_temporal_block_count:selectedTuning.temporal_block_count,
     selected_steps_per_block:selectedTuning.steps_per_block,
     selected_parameterization_id:selectedTuning.parameterization_id,
