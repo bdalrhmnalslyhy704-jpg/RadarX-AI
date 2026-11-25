@@ -3518,9 +3518,17 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
             temporalBlockCount,epochSelectionMode:'FIXED_EPOCHS'
           }
         );
-        const externalLogits=fold.validationRows.map(row=>
-          inspectTcnLstmForward(row.sequence,tuningModel,0).ranking_score
-        );
+        const externalLogits=fold.validationRows.map(row=>{
+          const vector=buildTcnLstmFlattenedFeatures(row.sequence);
+          let score=0;
+          for(let feature=0;feature<vector.length;feature++){
+            score+=tuningModel.orderedRankingHeadWeights[feature]*
+              ((vector[feature]-tuningModel.orderedRankingFeatureMean[feature])/
+                tuningModel.orderedRankingFeatureStd[feature]);
+          }
+          if(!finite(score))throw new TypeError('TCN_LSTM_ORDERED_RANKER_OUTER_FOLD_SCORE_NON_FINITE');
+          return clamp(score,-LOGIT_LIMIT,LOGIT_LIMIT);
+        });
         let externalLoss=0,externalCorrect=0;
         for(const pair of fold.validationPairSupport.pairs){
           const metric=tcnLstmPairwiseLogitRankingLoss(
