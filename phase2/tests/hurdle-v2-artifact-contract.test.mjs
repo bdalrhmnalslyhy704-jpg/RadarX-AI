@@ -602,3 +602,11 @@ test('44. unavailable candidate diagnostics may omit a source label but may neve
   const result = verifyHurdleV2Artifact(resealArtifact(tampered));
   assert.equal(result.valid, true, result.reason);
 });
+
+test('45. verifier rejects a candidate diagnostic when its inner-selection marker is missing', () => {
+  const tampered = structuredClone(artifact);
+  delete tampered.inner_qualification.candidates[0].return_selection_diagnostics.selection_partition_only;
+  const result = verifyHurdleV2Artifact(resealArtifact(tampered));
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+});
