@@ -101,7 +101,7 @@ test('prospective schedule rejects unaligned or unmatured start boundaries',()=>
   }),/PROSPECTIVE_SCHEDULE_BOUNDARY_INVALID/);
   assert.throws(()=>createNeuralClosureDecisionSchedule({
     serverTime:Date.parse('2026-11-26T06:00:00Z'),
-    startAt:Date.parse('2026-11-26T04:14:59.999Z')
+    startAt:Date.parse('2026-11-26T00:14:59.999Z')
   }),/PROSPECTIVE_SCHEDULE_SUPPORT_INVALID/);
 });
 
