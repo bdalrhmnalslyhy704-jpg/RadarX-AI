@@ -1406,8 +1406,8 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   ),'every execution-head rank feature must be scored by a ranker fit on earlier disjoint training rows');
   assert.ok(result.candidates.every(item=>{
     const internal=item.ranking_head?.internal_training_validation;
-    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V3'&&
-      internal?.method==='TWO_FOLD_EXPANDING_WINDOW_ACCURACY_GUARDED_PAIR_WEIGHTED_VALIDATION_V1'&&
+    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V4'&&
+      internal?.method==='TWO_FOLD_EXPANDING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1'&&
       internal?.chronology_valid===true&&
       internal?.outer_validation_or_holdout_used===false&&
       internal?.model_selection_partition_used===false&&
@@ -1415,6 +1415,12 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
       internal?.folds.every((fold,index)=>
         fold.fold_index===index+1&&fold.tuning_rows>=20&&fold.validation_rows>=20&&
         fold.tuning_pairs>=10&&fold.validation_pairs>=10&&
+        Number.isFinite(fold.logistic_validation_pairwise_accuracy_pct)&&
+        fold.logistic_validation_pairwise_accuracy_pct>=0&&fold.logistic_validation_pairwise_accuracy_pct<=100&&
+        Number.isFinite(fold.logistic_validation_pairwise_log_loss)&&
+        fold.logistic_baseline_training_rows===fold.tuning_rows&&
+        fold.logistic_baseline_validation_labels_read===false&&
+        fold.logistic_baseline_validation_or_holdout_used===false&&
         fold.purge_gap_ms>=4*60*60*1000&&
         fold.validation_min_at>fold.tuning_max_resolved_at)&&
       internal.folds[0].validation_max_at<internal.folds[1].validation_min_at&&
@@ -1431,9 +1437,19 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
       Number.isFinite(internal?.selected_validation_pairwise_log_loss)&&
       Number.isFinite(internal?.selected_validation_pairwise_accuracy_pct)&&
       Number.isFinite(internal?.selected_minimum_fold_pairwise_accuracy_pct)&&
+      Number.isFinite(internal?.selected_validation_pairwise_accuracy_improvement_pct)&&
+      Number.isFinite(internal?.selected_minimum_fold_pairwise_accuracy_improvement_pct)&&
+      Number.isFinite(internal?.selected_validation_pairwise_log_loss_improvement)&&
       internal?.candidate_grid?.every(candidate=>Number.isFinite(candidate.best_validation_pairwise_accuracy_pct)&&
-        Number.isFinite(candidate.minimum_fold_pairwise_accuracy_pct)&&candidate.fold_results.every(fold=>
-          Number.isFinite(fold.best_validation_pairwise_accuracy_pct)&&Number.isFinite(fold.training_pairwise_accuracy_pct)))&&
+        Number.isFinite(candidate.minimum_fold_pairwise_accuracy_pct)&&
+        Number.isFinite(candidate.best_validation_pairwise_accuracy_improvement_pct)&&
+        Number.isFinite(candidate.minimum_fold_pairwise_accuracy_improvement_pct)&&
+        Number.isFinite(candidate.best_validation_pairwise_log_loss_improvement)&&
+        candidate.fold_results.every(fold=>
+          Number.isFinite(fold.best_validation_pairwise_accuracy_pct)&&
+          Number.isFinite(fold.logistic_validation_pairwise_accuracy_pct)&&
+          Number.isFinite(fold.logistic_validation_pairwise_log_loss)&&
+          Number.isFinite(fold.training_pairwise_accuracy_pct)))&&
       internal?.final_refit_rows===result.model_training_rows&&
       internal?.final_refit_pairs===item.ranking_head.training_pairs;
   }),'the final ranker must be refit on all pre-execution training rows after purged training-only tuning');

@@ -28,7 +28,10 @@ function hashObject(value){
 }
 function fail(reason){return {valid:false,reason};}
 function compareTuningCandidates(a,b){
- return b.minimum_fold_pairwise_accuracy_pct-a.minimum_fold_pairwise_accuracy_pct||
+ return b.minimum_fold_pairwise_accuracy_improvement_pct-a.minimum_fold_pairwise_accuracy_improvement_pct||
+ b.best_validation_pairwise_accuracy_improvement_pct-a.best_validation_pairwise_accuracy_improvement_pct||
+ b.best_validation_pairwise_log_loss_improvement-a.best_validation_pairwise_log_loss_improvement||
+ b.minimum_fold_pairwise_accuracy_pct-a.minimum_fold_pairwise_accuracy_pct||
  b.best_validation_pairwise_accuracy_pct-a.best_validation_pairwise_accuracy_pct||
  a.best_validation_pairwise_log_loss-b.best_validation_pairwise_log_loss||
  a.parameter_count-b.parameter_count||b.l2-a.l2||a.best_epoch-b.best_epoch;
@@ -134,6 +137,13 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
         finite(fold?.validation_min_at)&&finite(fold?.validation_max_at)&&
         fold.validation_max_at>=fold.validation_min_at&&
         fold.validation_min_at>fold.tuning_max_resolved_at&&
+        finite(fold?.logistic_validation_pairwise_log_loss)&&
+        finite(fold?.logistic_validation_pairwise_accuracy_pct)&&
+        fold.logistic_validation_pairwise_accuracy_pct>=0&&
+        fold.logistic_validation_pairwise_accuracy_pct<=100&&
+        fold.logistic_baseline_training_rows===fold.tuning_rows&&
+        fold.logistic_baseline_validation_labels_read===false&&
+        fold.logistic_baseline_validation_or_holdout_used===false&&
         finite(fold?.purge_gap_ms)&&
         Math.abs(fold.purge_gap_ms-(fold.validation_min_at-fold.tuning_max_at))<=1e-6&&
         fold.purge_gap_ms>=tuning?.purge_horizon_ms
@@ -159,6 +169,12 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
           !finite(item?.best_validation_pairwise_accuracy_pct)||item.best_validation_pairwise_accuracy_pct<0||
           item.best_validation_pairwise_accuracy_pct>100||!finite(item?.minimum_fold_pairwise_accuracy_pct)||
           item.minimum_fold_pairwise_accuracy_pct<0||item.minimum_fold_pairwise_accuracy_pct>100||
+          !finite(item?.logistic_validation_pairwise_accuracy_pct)||
+          item.logistic_validation_pairwise_accuracy_pct<0||item.logistic_validation_pairwise_accuracy_pct>100||
+          !finite(item?.logistic_validation_pairwise_log_loss)||
+          !finite(item?.best_validation_pairwise_accuracy_improvement_pct)||
+          !finite(item?.minimum_fold_pairwise_accuracy_improvement_pct)||
+          !finite(item?.best_validation_pairwise_log_loss_improvement)||
           !finite(item?.validation_pairwise_accuracy_std_pct)||item.validation_pairwise_accuracy_std_pct<0||
           !finite(item?.training_pairwise_accuracy_pct)||item.training_pairwise_accuracy_pct<0||
           item.training_pairwise_accuracy_pct>100||!finite(item?.best_validation_pairwise_log_loss)||
@@ -168,8 +184,12 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
           const fold=tuningFolds[index];
           return result?.fold_index===fold.fold_index&&Number.isInteger(result?.best_epoch)&&result.best_epoch>=1&&
             finite(result?.best_validation_pairwise_accuracy_pct)&&result.best_validation_pairwise_accuracy_pct>=0&&
-            result.best_validation_pairwise_accuracy_pct<=100&&finite(result?.training_pairwise_accuracy_pct)&&
-            result.training_pairwise_accuracy_pct>=0&&result.training_pairwise_accuracy_pct<=100&&
+            result.best_validation_pairwise_accuracy_pct<=100&&finite(result?.logistic_validation_pairwise_accuracy_pct)&&
+            result.logistic_validation_pairwise_accuracy_pct===fold.logistic_validation_pairwise_accuracy_pct&&
+            finite(result?.logistic_validation_pairwise_log_loss)&&
+            result.logistic_validation_pairwise_log_loss===fold.logistic_validation_pairwise_log_loss&&
+            finite(result?.training_pairwise_accuracy_pct)&&result.training_pairwise_accuracy_pct>=0&&
+            result.training_pairwise_accuracy_pct<=100&&
             finite(result?.best_validation_pairwise_log_loss)&&finite(result?.training_pairwise_log_loss)&&
             result?.training_rows===fold.tuning_rows&&result?.validation_rows===fold.validation_rows&&
             result?.purged_rows===fold.purged_rows&&result?.training_pairs===fold.tuning_pairs&&
@@ -182,7 +202,14 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
         const expectedTrainingLoss=foldResults.reduce((sum,result)=>sum+result.training_pairwise_log_loss*result.training_pairs,0)/trainingPairs;
         const expectedValidationAccuracy=foldResults.reduce((sum,result)=>sum+result.best_validation_pairwise_accuracy_pct*result.validation_pairs,0)/validationPairs;
         const expectedTrainingAccuracy=foldResults.reduce((sum,result)=>sum+result.training_pairwise_accuracy_pct*result.training_pairs,0)/trainingPairs;
+        const expectedLogisticValidationAccuracy=foldResults.reduce((sum,result)=>sum+result.logistic_validation_pairwise_accuracy_pct*result.validation_pairs,0)/validationPairs;
+        const expectedLogisticValidationLoss=foldResults.reduce((sum,result)=>sum+result.logistic_validation_pairwise_log_loss*result.validation_pairs,0)/validationPairs;
         const expectedMinimumFoldAccuracy=Math.min(...foldResults.map(result=>result.best_validation_pairwise_accuracy_pct));
+        const expectedMinimumFoldAccuracyImprovement=Math.min(...foldResults.map(result=>
+          result.best_validation_pairwise_accuracy_pct-result.logistic_validation_pairwise_accuracy_pct
+        ));
+        const expectedAccuracyImprovement=expectedValidationAccuracy-expectedLogisticValidationAccuracy;
+        const expectedLogLossImprovement=expectedLogisticValidationLoss-expectedValidationLoss;
         const accuracyVariance=foldResults.reduce((sum,result)=>sum+result.validation_pairs*(result.best_validation_pairwise_accuracy_pct-expectedValidationAccuracy)**2,0)/validationPairs;
         const epochs=foldResults.map(result=>result.best_epoch).sort((a,b)=>a-b);
         const middle=Math.floor(epochs.length/2);
@@ -190,6 +217,11 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
         return item?.best_epoch===expectedMedianEpoch&&
           Math.abs(item.best_validation_pairwise_accuracy_pct-Number(expectedValidationAccuracy.toFixed(4)))<=1e-9&&
           Math.abs(item.minimum_fold_pairwise_accuracy_pct-Number(expectedMinimumFoldAccuracy.toFixed(4)))<=1e-9&&
+          Math.abs(item.logistic_validation_pairwise_accuracy_pct-Number(expectedLogisticValidationAccuracy.toFixed(4)))<=1e-9&&
+          Math.abs(item.logistic_validation_pairwise_log_loss-Number(expectedLogisticValidationLoss.toFixed(8)))<=1e-9&&
+          Math.abs(item.best_validation_pairwise_accuracy_improvement_pct-Number(expectedAccuracyImprovement.toFixed(4)))<=1e-9&&
+          Math.abs(item.minimum_fold_pairwise_accuracy_improvement_pct-Number(expectedMinimumFoldAccuracyImprovement.toFixed(4)))<=1e-9&&
+          Math.abs(item.best_validation_pairwise_log_loss_improvement-Number(expectedLogLossImprovement.toFixed(8)))<=1e-9&&
           Math.abs(item.validation_pairwise_accuracy_std_pct-Number(Math.sqrt(Math.max(0,accuracyVariance)).toFixed(4)))<=1e-9&&
           Math.abs(item.training_pairwise_accuracy_pct-Number(expectedTrainingAccuracy.toFixed(4)))<=1e-9&&
           Math.abs(item.best_validation_pairwise_log_loss-Number(expectedValidationLoss.toFixed(8)))<=1e-9&&
@@ -206,7 +238,12 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
         item?.parameterization_id===tuning?.selected_parameterization_id&&
         item?.best_validation_pairwise_log_loss===tuning?.selected_validation_pairwise_log_loss&&
         item?.best_validation_pairwise_accuracy_pct===tuning?.selected_validation_pairwise_accuracy_pct&&
-        item?.minimum_fold_pairwise_accuracy_pct===tuning?.selected_minimum_fold_pairwise_accuracy_pct):null;
+        item?.minimum_fold_pairwise_accuracy_pct===tuning?.selected_minimum_fold_pairwise_accuracy_pct&&
+        item?.logistic_validation_pairwise_accuracy_pct===tuning?.selected_logistic_validation_pairwise_accuracy_pct&&
+        item?.logistic_validation_pairwise_log_loss===tuning?.selected_logistic_validation_pairwise_log_loss&&
+        item?.best_validation_pairwise_accuracy_improvement_pct===tuning?.selected_validation_pairwise_accuracy_improvement_pct&&
+        item?.minimum_fold_pairwise_accuracy_improvement_pct===tuning?.selected_minimum_fold_pairwise_accuracy_improvement_pct&&
+        item?.best_validation_pairwise_log_loss_improvement===tuning?.selected_validation_pairwise_log_loss_improvement):null;
     const bestTuningCandidate=candidateGridValid?[...tuningGrid].sort(compareTuningCandidates)[0]:null;
     if(training?.fit_partition!=='TRAINING_PARTITION_ONLY'||
       training?.source_partition!=='PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
@@ -225,9 +262,18 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       !Number.isInteger(trainingConfig.patience)||trainingConfig.patience<1||
       !tiedParameterizationValid||
       trainingConfig.steps_per_block!==temporalStepsPerBlock||
-      trainingConfig.selection_metric!=='MIN_FOLD_PAIRWISE_ACCURACY_THEN_PAIR_WEIGHTED_ACCURACY_AND_LOG_LOSS_PURGED_EXPANDING_WINDOW_V3'||
-      tuning?.schema!=='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V3'||
-      tuning?.method!=='TWO_FOLD_EXPANDING_WINDOW_ACCURACY_GUARDED_PAIR_WEIGHTED_VALIDATION_V1'||
+      trainingConfig.selection_metric!=='MIN_FOLD_LOGISTIC_ACCURACY_MARGIN_THEN_PAIR_WEIGHTED_MARGIN_AND_LOG_LOSS_PURGED_EXPANDING_WINDOW_V4'||
+      tuning?.schema!=='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V4'||
+      tuning?.method!=='TWO_FOLD_EXPANDING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1'||
+      tuning?.logistic_baseline_config?.schema!=='RADARX_FOLD_LOCAL_RAW_TEMPORAL_LOGISTIC_RANKING_REFERENCE_V1'||
+      tuning?.logistic_baseline_config?.feature_schema_id!==TCN_LSTM_ORDERED_RANKING_FEATURE_SCHEMA_ID||
+      tuning?.logistic_baseline_config?.feature_count!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      tuning?.logistic_baseline_config?.l2!==1||tuning?.logistic_baseline_config?.learning_rate!==0.03||
+      tuning?.logistic_baseline_config?.max_epochs!==160||
+      tuning?.logistic_baseline_config?.fit_partition!=='EACH_FOLD_TUNING_ROWS_ONLY'||
+      tuning?.logistic_baseline_config?.scoring_partition!=='SAME_FOLD_PURGED_VALIDATION_PAIRS'||
+      tuning?.logistic_baseline_config?.validation_labels_read!==false||
+      tuning?.logistic_baseline_config?.outer_validation_or_holdout_used!==false||
       tuning?.source_partition!=='PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY'||
       tuning?.fit_partition!=='EXPANDING_EARLIER_SUBSETS_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
       tuning?.validation_partition!=='TWO_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
@@ -243,10 +289,21 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       !Number.isInteger(tuning?.validation_pairs)||tuning.validation_pairs<10||
       !selectedTuningCandidate||!bestTuningCandidate||
       !finite(tuning?.selected_validation_pairwise_log_loss)||!finite(tuning?.selected_validation_pairwise_accuracy_pct)||
-      !finite(tuning?.selected_minimum_fold_pairwise_accuracy_pct)||selectedTuningCandidate!==bestTuningCandidate||
+      !finite(tuning?.selected_minimum_fold_pairwise_accuracy_pct)||
+      !finite(tuning?.selected_logistic_validation_pairwise_accuracy_pct)||
+      !finite(tuning?.selected_logistic_validation_pairwise_log_loss)||
+      !finite(tuning?.selected_validation_pairwise_accuracy_improvement_pct)||
+      !finite(tuning?.selected_minimum_fold_pairwise_accuracy_improvement_pct)||
+      !finite(tuning?.selected_validation_pairwise_log_loss_improvement)||
+      selectedTuningCandidate!==bestTuningCandidate||
       Math.abs(selectedTuningCandidate.best_validation_pairwise_log_loss-tuning.selected_validation_pairwise_log_loss)>1e-9||
       Math.abs(selectedTuningCandidate.best_validation_pairwise_accuracy_pct-tuning.selected_validation_pairwise_accuracy_pct)>1e-9||
       Math.abs(selectedTuningCandidate.minimum_fold_pairwise_accuracy_pct-tuning.selected_minimum_fold_pairwise_accuracy_pct)>1e-9||
+      Math.abs(selectedTuningCandidate.logistic_validation_pairwise_accuracy_pct-tuning.selected_logistic_validation_pairwise_accuracy_pct)>1e-9||
+      Math.abs(selectedTuningCandidate.logistic_validation_pairwise_log_loss-tuning.selected_logistic_validation_pairwise_log_loss)>1e-9||
+      Math.abs(selectedTuningCandidate.best_validation_pairwise_accuracy_improvement_pct-tuning.selected_validation_pairwise_accuracy_improvement_pct)>1e-9||
+      Math.abs(selectedTuningCandidate.minimum_fold_pairwise_accuracy_improvement_pct-tuning.selected_minimum_fold_pairwise_accuracy_improvement_pct)>1e-9||
+      Math.abs(selectedTuningCandidate.best_validation_pairwise_log_loss_improvement-tuning.selected_validation_pairwise_log_loss_improvement)>1e-9||
       trainingConfig.l2!==tuning.selected_l2||
       trainingConfig.epochs_requested!==tuning.selected_epochs||
       temporalBlockCount!==tuning.selected_temporal_block_count||
