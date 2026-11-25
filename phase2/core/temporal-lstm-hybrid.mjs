@@ -3402,7 +3402,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   const tuningCandidates=[];
   for(const temporalBlockCount of temporalBlockCounts)
     for(const candidateL2 of l2Grid){
-      const foldResults=folds.map(fold=>{
+      const foldResults=folds.map((fold,index)=>{
         const tuningModel={
           orderedRankingHeadWeights:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0),
           orderedRankingFeatureMean:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0),
