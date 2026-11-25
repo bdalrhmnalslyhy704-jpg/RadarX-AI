@@ -78,11 +78,12 @@ export function createNeuralClosureDecisionSchedule({serverTime,days=60,startAt=
   const decisionsPerDay=DAY_MS/FOUR_HOURS_MS;
   const endAt=Math.floor((now-FOUR_HOURS_MS-DECISION_OFFSET_MS)/FOUR_HOURS_MS)*
     FOUR_HOURS_MS+DECISION_OFFSET_MS;
-  const prospectiveStartAt=startAt===null?null:num(startAt);
+  const prospectiveStartProvided=startAt!==null&&startAt!==undefined;
+  const prospectiveStartAt=prospectiveStartProvided?num(startAt):null;
   let firstAt,decisionCount,durationDays,mode;
-  if(prospectiveStartAt!==null){
+  if(prospectiveStartProvided){
     // Prospective cohorts start at an exact predeclared 4h decision boundary.
-    // Do not silently round a requested boundary or admit an unmatured label.
+    // Do not silently round invalid input or admit an unmatured label.
     const aligned=Number.isSafeInteger(prospectiveStartAt)&&
       prospectiveStartAt%FOUR_HOURS_MS===DECISION_OFFSET_MS;
     if(!aligned||prospectiveStartAt<=0||
