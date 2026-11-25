@@ -78,7 +78,11 @@ jobs:
         run: |
           node --check phase2/core/temporal-neural-brain.mjs
           node --check phase2/core/temporal-lstm-hybrid.mjs
+          node --check phase2/core/neural-closure-data-builder.mjs
+          node --check phase2/tools/build-neural-closure-dataset.mjs
           node --check phase2/tools/train-neural-closure-models.mjs
+      - name: Verify real Binance cohort collection and prospective scheduling
+        run: node --test phase2/tests/neural-closure-data-builder.test.mjs
       - name: Verify V8-V11 and TCN-LSTM fixed-SHA wiring
         run: node --test phase2/tests/neural-closure-training-wiring.test.mjs
       - name: Verify recurrent TCN-LSTM gradients, calibration and chronology contracts
