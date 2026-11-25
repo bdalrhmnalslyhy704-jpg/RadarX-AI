@@ -1412,7 +1412,12 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
       internal?.model_selection_partition_used===false&&
       internal?.validation_rows>=20&&internal?.purged_rows>=0&&
       internal?.purge_gap_ms>=4*60*60*1000&&
-      internal?.candidate_grid?.length===20&&
+      internal?.candidate_grid?.length===32&&
+      [1,2,3,4,6,8,12,24].every(blockCount=>
+        internal.candidate_grid.some(candidate=>candidate.temporal_block_count===blockCount))&&
+      internal.candidate_grid.every(candidate=>
+        candidate.parameter_count===candidate.temporal_block_count*29&&
+        candidate.steps_per_block===24/candidate.temporal_block_count)&&
       Number.isFinite(internal?.selected_validation_pairwise_log_loss)&&
       internal?.final_refit_rows===result.model_training_rows&&
       internal?.final_refit_pairs===item.ranking_head.training_pairs;
