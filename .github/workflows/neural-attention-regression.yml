@@ -25,6 +25,10 @@ on:
       - 'phase2/core/temporal-logistic-baseline.mjs'
       - 'phase2/core/ordered-temporal-ranker-artifact.mjs'
       - 'phase2/tests/ordered-temporal-ranker-artifact.test.mjs'
+      - 'phase2/core/neural-closure-data-builder.mjs'
+      - 'phase2/tools/build-neural-closure-dataset.mjs'
+      - 'phase2/tests/neural-closure-data-builder.test.mjs'
+      - '.github/workflows/neural-closure-prospective-cohort.yml'
       - '.github/workflows/neural-attention-regression.yml'
   pull_request:
     paths:
