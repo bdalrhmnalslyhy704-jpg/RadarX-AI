@@ -114,7 +114,7 @@ jobs:
             failures.push('TRAINING_OR_EVALUATION_PARTITIONS_MUST_NOT_BE_CREATED');
           if(cohort.label_access?.status!=='LOCKED'||
              cohort.label_access?.outcome_distribution_reported!==false||
-             cohort.label_access?.outcome_distribution_reporting_allowed!==false)
+             cohort.cohort_contract?.outcome_distribution_reporting_allowed!==false)
             failures.push('LABEL_ACCESS_NOT_LOCKED');
           if(cohort.data_quality?.raw_archive_verification?.verified_count!==
              cohort.data_quality?.raw_archive_files)
