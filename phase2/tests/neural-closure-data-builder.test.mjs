@@ -366,3 +366,22 @@ test('Binance transient 5xx/408 retries are finite, exponential and never mask h
   assert.equal(binanceServerRetryDelayMs(500,1,'5'),5000);
   assert.equal(binanceServerRetryDelayMs(500,2,'0.2'),1500);
 });
+
+test('prospective cohort workflow is manual, locked, data-only and training-free',async()=>{
+  const workflow=await readFile(new URL(
+    '../../.github/workflows/neural-closure-prospective-cohort.yml',import.meta.url
+  ),'utf8');
+  assert.match(workflow,/workflow_dispatch:/);
+  assert.match(workflow,/2026-11-17T20:14:59\.999Z/);
+  assert.match(workflow,/--prospectiveOnly true/);
+  assert.match(workflow,/--startAt "\$PROSPECTIVE_START_AT"/);
+  assert.match(workflow,/PROSPECTIVE_COHORT_CAPTURED_LOCKED/);
+  assert.match(workflow,/LOCKED_UNSCORED/);
+  assert.match(workflow,/training_allowed!==false/);
+  assert.match(workflow,/model_scoring_allowed!==false/);
+  assert.match(workflow,/retention-days: 90/);
+  assert.doesNotMatch(workflow,/phase2\/tools\/train-neural-closure-models\.mjs/);
+  assert.doesNotMatch(workflow,/--hurdleInnerOnly/);
+  assert.doesNotMatch(workflow,/--openHoldout/);
+  assert.doesNotMatch(workflow,/real_order_execution:\s*true/);
+});
