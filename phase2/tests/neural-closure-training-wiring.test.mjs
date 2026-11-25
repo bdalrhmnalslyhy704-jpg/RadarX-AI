@@ -698,3 +698,22 @@ test('neural candidates cannot open outer validation before passing their purged
   assert.match(trainer,/qualificationByModel\.HYBRID_TCN_ATTENTION=\{\s*passed:false/);
   assert.match(trainer,/qualificationByModel\.DENSE_MLP=\{\s*passed:false/);
 });
+
+
+test('pre-fitted tied ordered ranker preserves effective parameter count separately from its 696 inference features',async()=>{
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
+  const mappingAnchor='  Object.assign(model, cloneTree(bestModel));\\n  let rankingHeadFit;';
+  const mappingStart=recurrent.indexOf(mappingAnchor);
+  assert.ok(mappingStart>=0,'pre-fitted ranker mapping must remain explicit and testable');
+  const branchStart=recurrent.indexOf('    rankingHeadFit={',mappingStart);
+  const branchEnd=recurrent.indexOf('\\n  }else{',branchStart);
+  assert.ok(branchStart>=0&&branchEnd>branchStart,
+    'the pre-fitted ranker mapping branch must be present');
+  const branch=recurrent.slice(branchStart,branchEnd);
+  assert.match(branch,/\.\.\.cloneTree\(preFittedIndependentRankingHead\.training\)/,
+    'the effective free-parameter count must be retained from the fitted ranker metadata');
+  assert.match(branch,/feature_count:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT/,
+    'the expanded inference feature count must stay 696');
+  assert.doesNotMatch(branch,/parameter_count\\s*:/,
+    'do not overwrite tied free parameters with the expanded 696-feature inference width');
+});
