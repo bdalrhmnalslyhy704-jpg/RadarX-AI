@@ -1406,14 +1406,14 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   ),'every execution-head rank feature must be scored by a ranker fit on earlier disjoint training rows');
   assert.ok(result.candidates.every(item=>{
     const internal=item.ranking_head?.internal_training_validation;
-    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V5'&&
-      internal?.method==='TWO_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1'&&
+    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6'&&
+      internal?.method==='THREE_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_DUAL_METRIC_VALIDATION_V1'&&
       internal?.epoch_selection_policy===
         'NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS'&&
       internal?.chronology_valid===true&&
       internal?.outer_validation_or_holdout_used===false&&
       internal?.model_selection_partition_used===false&&
-      internal?.fold_count===2&&internal?.folds?.length===2&&
+      internal?.fold_count===3&&internal?.folds?.length===3&&
       internal?.folds.every((fold,index)=>
         fold.fold_index===index+1&&fold.tuning_rows>=20&&fold.validation_rows>=20&&
         fold.tuning_pairs>=10&&fold.validation_pairs>=10&&
@@ -1432,8 +1432,9 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
         fold.epoch_validation_max_at<fold.validation_min_at&&
         fold.purge_gap_ms>=4*60*60*1000&&
         fold.validation_min_at>fold.tuning_max_resolved_at)&&
-      internal.folds[0].validation_max_at<internal.folds[1].validation_min_at&&
-      internal.folds[1].tuning_max_at>=internal.folds[0].validation_min_at&&
+      internal.folds.slice(0,-1).every((fold,index)=>
+        fold.validation_max_at<internal.folds[index+1].validation_min_at&&
+        internal.folds[index+1].tuning_max_at>=fold.validation_min_at)&&
       internal?.validation_rows>=40&&internal?.purged_rows>=0&&
       internal?.purge_gap_ms>=4*60*60*1000&&
       internal?.candidate_grid?.length===32&&
@@ -1442,17 +1443,24 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
       internal.candidate_grid.every(candidate=>
         candidate.parameter_count===candidate.temporal_block_count*29&&
         candidate.steps_per_block===24/candidate.temporal_block_count&&
-        candidate.fold_count===2&&candidate.fold_results?.length===2)&&
+        candidate.fold_count===3&&candidate.fold_results?.length===3&&
+        Number.isFinite(candidate.minimum_fold_pairwise_log_loss_improvement))&&
       Number.isFinite(internal?.selected_validation_pairwise_log_loss)&&
       Number.isFinite(internal?.selected_validation_pairwise_accuracy_pct)&&
       Number.isFinite(internal?.selected_minimum_fold_pairwise_accuracy_pct)&&
       Number.isFinite(internal?.selected_validation_pairwise_accuracy_improvement_pct)&&
       Number.isFinite(internal?.selected_minimum_fold_pairwise_accuracy_improvement_pct)&&
+      Number.isFinite(internal?.selected_minimum_fold_pairwise_log_loss_improvement)&&
       Number.isFinite(internal?.selected_validation_pairwise_log_loss_improvement)&&
+      internal?.selected_candidate_qualified===(internal?.fold_stable_dual_metric_candidate_count>0)&&
+      internal?.fold_stable_dual_metric_superiority===internal?.selected_candidate_qualified&&
+      internal?.robustness_status===(internal?.selected_candidate_qualified
+        ?'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY':'ABSTAIN_NO_FOLD_STABLE_DUAL_SUPERIORITY')&&
       internal?.candidate_grid?.every(candidate=>Number.isFinite(candidate.best_validation_pairwise_accuracy_pct)&&
         Number.isFinite(candidate.minimum_fold_pairwise_accuracy_pct)&&
         Number.isFinite(candidate.best_validation_pairwise_accuracy_improvement_pct)&&
         Number.isFinite(candidate.minimum_fold_pairwise_accuracy_improvement_pct)&&
+        Number.isFinite(candidate.minimum_fold_pairwise_log_loss_improvement)&&
         Number.isFinite(candidate.best_validation_pairwise_log_loss_improvement)&&
         candidate.fold_results.every(fold=>
           Number.isFinite(fold.best_validation_pairwise_accuracy_pct)&&
