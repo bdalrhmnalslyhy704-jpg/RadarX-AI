@@ -65,6 +65,46 @@ test('60-day event schedule uses only matured 4h decisions on 15m close boundari
   assert.equal((schedule.one_minute_end_open_at-schedule.one_minute_start_open_at)/MINUTE+1,60*24*60);
 });
 
+test('prospective cohort schedule starts after the immutable legacy cohort and contains only matured 4h decisions',()=>{
+  const legacyLastDecision=Date.parse('2026-11-17T16:14:59.999Z');
+  const prospectiveStart=Date.parse('2026-11-17T20:14:59.999Z');
+  const serverTime=Date.parse('2026-11-26T06:00:00.000Z');
+  const schedule=createNeuralClosureDecisionSchedule({
+    serverTime,startAt:prospectiveStart
+  });
+  assert.equal(schedule.mode,'PROSPECTIVE_LOCKED_OUT_OF_TIME');
+  assert.equal(schedule.first_decision_at,prospectiveStart);
+  assert.ok(schedule.first_decision_at>legacyLastDecision);
+  assert.equal(schedule.start_boundary_was_rounded,false);
+  assert.equal(schedule.decision_times[0],prospectiveStart);
+  assert.equal(schedule.decision_times.at(-1),schedule.last_decision_at);
+  assert.ok(schedule.last_decision_at+FOUR_HOURS()<=serverTime,
+    'the final event label must be mature at collection time');
+  assert.ok(schedule.decision_count>=12);
+  for(let index=1;index<schedule.decision_times.length;index++)
+    assert.equal(schedule.decision_times[index]-schedule.decision_times[index-1],
+      FOUR_HOURS());
+  assert.equal(schedule.one_minute_start_open_at,prospectiveStart+1);
+  assert.equal(schedule.fifteen_minute_end_open_at,
+    schedule.last_decision_at-FIFTEEN+1);
+});
+
+test('prospective schedule rejects unaligned or unmatured start boundaries',()=>{
+  const prospectiveStart=Date.parse('2026-11-17T20:14:59.999Z');
+  assert.throws(()=>createNeuralClosureDecisionSchedule({
+    serverTime:Date.parse('2026-11-26T06:00:00Z'),
+    startAt:prospectiveStart+1
+  }),/PROSPECTIVE_SCHEDULE_BOUNDARY_INVALID/);
+  assert.throws(()=>createNeuralClosureDecisionSchedule({
+    serverTime:prospectiveStart+60*60_000,
+    startAt:prospectiveStart
+  }),/PROSPECTIVE_SCHEDULE_BOUNDARY_INVALID/);
+  assert.throws(()=>createNeuralClosureDecisionSchedule({
+    serverTime:Date.parse('2026-11-26T06:00:00Z'),
+    startAt:Date.parse('2026-11-26T04:14:59.999Z')
+  }),/PROSPECTIVE_SCHEDULE_SUPPORT_INVALID/);
+});
+
 function FOUR_HOURS(){return 4*60*60_000;}
 
 test('raw coverage gate rejects a missing or duplicate candle rather than filling the gap',()=>{
