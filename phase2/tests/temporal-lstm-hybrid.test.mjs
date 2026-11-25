@@ -1434,7 +1434,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
         fold.validation_min_at>fold.tuning_max_resolved_at)&&
       internal.folds.slice(0,-1).every((fold,index)=>
         fold.validation_max_at<internal.folds[index+1].validation_min_at&&
-        internal.folds[index+1].tuning_max_at>=fold.validation_min_at)&&
+        internal.folds[index+1].tuning_max_at>=fold.validation_max_at)&&
       internal?.validation_rows>=40&&internal?.purged_rows>=0&&
       internal?.purge_gap_ms>=4*60*60*1000&&
       internal?.candidate_grid?.length===32&&
