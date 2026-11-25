@@ -18,9 +18,15 @@ import {
 const sha40='1'.repeat(40);
 const sha64='2'.repeat(64);
 const trainingRows=32;
-const means=Array.from({length:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT},(_,i)=>i*0.001);
-const stds=Array.from({length:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT},(_,i)=>1+(i%7)*0.05);
-const weights=Array.from({length:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT},(_,i)=>Math.sin(i*0.03)*0.015);
+const temporalBlockCount=4;
+const stepsPerBlock=TCN_LSTM_STEPS/temporalBlockCount;
+const parameterCount=temporalBlockCount*29;
+const parameterizationId='TEMPORAL_BLOCK_TIED_4X29_V1';
+const groupIndex=i=>Math.floor(Math.floor(i/29)/stepsPerBlock)*29+(i%29);
+const means=Array.from({length:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT},(_,i)=>groupIndex(i)*0.001);
+const stds=Array.from({length:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT},(_,i)=>1+(groupIndex(i)%7)*0.05);
+const weights=Array.from({length:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT},(_,i)=>
+  Math.sin(groupIndex(i)*0.03)*0.015/stepsPerBlock);
 const contract={
   schema:'RADARX_TCN_LSTM_EXECUTION_RANK_FEATURE_OUT_OF_SAMPLE_CONTRACT_V1',
   fit_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION',
@@ -69,6 +75,10 @@ function makeProfile(overrides={}){
     epochs_completed:8,
     best_epoch:8,
     patience:8,
+    parameterization_id:parameterizationId,
+    temporal_block_count:temporalBlockCount,
+    steps_per_block:stepsPerBlock,
+    parameter_count:parameterCount,
     internal_training_validation:{
       schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_TRAINING_VALIDATION_V1',
       source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY',
@@ -88,16 +98,23 @@ function makeProfile(overrides={}){
       tuning_pairs:48,
       validation_pairs:16,
       candidate_grid:[
-        {l2:0.001,best_epoch:6,best_validation_pairwise_log_loss:0.61,
+        {temporal_block_count:4,steps_per_block:6,parameterization_id:parameterizationId,
+          parameter_count:116,l2:0.001,best_epoch:6,best_validation_pairwise_log_loss:0.61,
           training_rows:24,validation_rows:24,purged_rows:4,
           training_pairs:48,validation_pairs:16},
-        {l2:0.05,best_epoch:8,best_validation_pairwise_log_loss:0.58,
+        {temporal_block_count:4,steps_per_block:6,parameterization_id:parameterizationId,
+          parameter_count:116,l2:0.05,best_epoch:8,best_validation_pairwise_log_loss:0.58,
           training_rows:24,validation_rows:24,purged_rows:4,
           training_pairs:48,validation_pairs:16}
       ],
       selected_l2:0.05,
       selected_epochs:8,
       selected_validation_pairwise_log_loss:0.58,
+      selected_temporal_block_count:4,
+      selected_steps_per_block:6,
+      selected_parameterization_id:parameterizationId,
+      selected_parameter_count:116,
+      temporal_block_count:4,
       final_refit_rows:trainingRows,
       final_refit_pairs:96
     }
@@ -155,6 +172,9 @@ test('ordered raw 696 ranker exports a fully checksummed training-only artifact'
   assert.equal(artifact.training_provenance.validation_or_holdout_used,false);
   assert.equal(artifact.training_provenance.ranker_training_config.l2,0.05);
   assert.equal(artifact.training_provenance.ranker_training_config.epochs_requested,8);
+  assert.equal(artifact.training_provenance.ranker_training_config.parameter_count,116);
+  assert.equal(artifact.training_provenance.ranker_training_config.temporal_block_count,4);
+  assert.equal(artifact.training_provenance.ranker_training_config.parameterization_id,parameterizationId);
   assert.equal(artifact.training_provenance.internal_training_validation.selected_l2,0.05);
   assert.equal(artifact.training_provenance.internal_training_validation.selected_epochs,8);
   assert.equal(artifact.training_provenance.internal_training_validation.purge_gap_ms,14400001);
@@ -180,7 +200,8 @@ test('artifact inference reproduces the exact raw ordered linear rank score',()=
 test('verifier rejects tampered parameters and an invalid OOS chronology contract',()=>{
   const artifact=createOrderedTemporalRankerArtifact({profile:makeProfile(),provenance});
   const changed=structuredClone(artifact);
-  changed.parameters.weights[0]+=0.1;
+  for(let step=0;step<stepsPerBlock;step++)
+    changed.parameters.weights[step*29]+=0.1;
   assert.equal(verifyOrderedTemporalRankerArtifact(changed).reason,
     'ORDERED_RANKER_CONTENT_HASH_MISMATCH');
   const broken=makeProfile();
@@ -192,6 +213,13 @@ test('verifier rejects tampered parameters and an invalid OOS chronology contrac
   assert.equal(verifyOrderedTemporalRankerArtifact(forgedTuning).reason,
     'ORDERED_RANKER_TRAINING_BOUNDARY_INVALID',
     'a ranker artifact must reject a tuning record that does not preserve the four-hour internal purge');
+
+  const untiedWeights=structuredClone(artifact);
+  untiedWeights.parameters.weights[0]+=0.01;
+  untiedWeights.artifact_content_hash=artifact.artifact_content_hash;
+  assert.equal(verifyOrderedTemporalRankerArtifact(untiedWeights).reason,
+    'ORDERED_RANKER_TRAINING_BOUNDARY_INVALID',
+    'the verifier must reject weights that violate the declared tied temporal parameterization');
 
   const forgedPurgeClock=makeProfile();
   forgedPurgeClock.training.return_ranking.ranking_head.internal_training_validation.validation_min_at+=1;
