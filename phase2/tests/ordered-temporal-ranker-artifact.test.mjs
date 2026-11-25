@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {
   TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
   TCN_LSTM_ORDERED_RANKING_FEATURE_SCHEMA_ID,
+  TCN_LSTM_STEPS,
   buildTcnLstmFlattenedFeatures
 } from '../core/temporal-lstm-hybrid.mjs';
 import {
@@ -55,7 +56,7 @@ function makeProfile(overrides={}){
     training_rows:trainingRows,
     training_pairs:96,
     standardization:{
-      method:'TRAIN_ONLY_POPULATION_ZSCORE',
+      method:'TRAIN_ONLY_TEMPORAL_BLOCK_CHANNEL_ZSCORE',
       feature_mean:means,
       feature_std:stds,
       fit_partition:'TRAINING_PARTITION_ONLY',
