@@ -29,9 +29,11 @@ const STABLE_BASE_ASSETS=new Set([
 const sleep=ms=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 
+const LEGACY_COHORT_DATASET_SHA256='f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77';
+const LEGACY_COHORT_LAST_DECISION_AT=Date.parse('2026-11-17T16:14:59.999Z');
 function parseArgs(argv){
   const result={days:180,maxSymbols:100,minSymbols:40,
-    minQuoteVolumeUsdt:750_000,
+    minQuoteVolumeUsdt:750_000,prospectiveOnly:false,startAt:null,
     output:'artifacts/neural-closure/dataset.json',
     archiveDir:'artifacts/neural-closure/raw'};
   for(let index=2;index<argv.length;index++){
@@ -43,6 +45,14 @@ function parseArgs(argv){
       const number=Number(value);
       if(!Number.isFinite(number))throw new Error('ARGUMENT_NOT_NUMERIC:'+token);
       result[name]=number;
+    }else if(name==='prospectiveOnly'){
+      if(!['true','false'].includes(value))throw new Error('PROSPECTIVE_ONLY_BOOLEAN_INVALID');
+      result.prospectiveOnly=value==='true';
+    }else if(name==='startAt'){
+      const parsed=Date.parse(value);
+      if(!Number.isSafeInteger(parsed)||new Date(parsed).toISOString()!==value)
+        throw new Error('PROSPECTIVE_START_AT_MUST_BE_CANONICAL_UTC_ISO8601');
+      result.startAt=parsed;
     }else if(name==='output'||name==='archiveDir')result[name]=value;
     else throw new Error('UNKNOWN_ARGUMENT:'+token);
     index++;
@@ -56,6 +66,17 @@ function parseArgs(argv){
     throw new Error('MIN_SYMBOLS_MUST_BE_AT_LEAST_10_AND_NOT_EXCEED_MAX_SYMBOLS');
   if(!Number.isFinite(result.minQuoteVolumeUsdt)||result.minQuoteVolumeUsdt<750_000)
     throw new Error('MINIMUM_QUOTE_VOLUME_CANNOT_BE_LOWER_THAN_750000_USDT');
+  if(result.prospectiveOnly){
+    if(result.startAt===null)
+      throw new Error('PROSPECTIVE_START_AT_REQUIRED');
+    if(result.startAt<=LEGACY_COHORT_LAST_DECISION_AT)
+      throw new Error('PROSPECTIVE_COHORT_OVERLAPS_OR_PRECEDES_LEGACY_COHORT');
+    if(result.startAt!==Date.parse('2026-11-17T20:14:59.999Z')&&
+      result.startAt% (4*60*60_000)!==(15*60_000-1))
+      throw new Error('PROSPECTIVE_START_AT_NOT_ON_4H_DECISION_GRID');
+  }else if(result.startAt!==null){
+    throw new Error('START_AT_REQUIRES_PROSPECTIVE_ONLY_MODE');
+  }
   return result;
 }
 
