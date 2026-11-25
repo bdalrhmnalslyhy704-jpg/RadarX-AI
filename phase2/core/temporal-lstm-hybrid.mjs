@@ -3783,8 +3783,10 @@ export function trainTcnLstmHybrid(trainingRows, {
       ...cloneTree(preFittedIndependentRankingHead.training),
       fitted:true,
       representation:'RAW_ORDERED_696_V1',
+      // The exported inference vector stays 696-wide, but parameter_count
+      // records the tied free parameters actually optimized (blocks x 29).
+      // Do not overwrite it with the expanded feature count.
       feature_count:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
-      parameter_count:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
       source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION',
       feature_scoring_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
       classifier_parameters_updated:false,
