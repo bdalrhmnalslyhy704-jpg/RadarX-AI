@@ -327,12 +327,31 @@ export function createHurdleV2Artifact({
         candidate.execution_head_context_ablation_passed === true,
       execution_risk_policy: candidate.execution_risk_policy ? {
         status: candidate.execution_risk_policy.status ?? null,
-        passed: candidate.execution_risk_policy.passed === true
+        passed: candidate.execution_risk_policy.passed === true,
+        selection_partition_only: candidate.execution_risk_policy.selection_partition_only === true,
+        source_partition: candidate.execution_risk_policy.source_partition ?? null,
+        holdout_values_used: candidate.execution_risk_policy.holdout_values_used ?? null
+      } : null,
+      pooled_only_execution_risk_policy: candidate.pooled_only_execution_risk_policy ? {
+        status: candidate.pooled_only_execution_risk_policy.status ?? null,
+        passed: candidate.pooled_only_execution_risk_policy.passed === true,
+        selection_partition_only: candidate.pooled_only_execution_risk_policy.selection_partition_only === true,
+        source_partition: candidate.pooled_only_execution_risk_policy.source_partition ?? null,
+        holdout_values_used: candidate.pooled_only_execution_risk_policy.holdout_values_used ?? null
       } : null,
       return_selection_diagnostics: candidate.return_selection_diagnostics ? {
         status: candidate.return_selection_diagnostics.status ?? null,
         preliminary_return_screen_candidates:
-          candidate.return_selection_diagnostics.preliminary_return_screen_candidates ?? null
+          candidate.return_selection_diagnostics.preliminary_return_screen_candidates ?? null,
+        selection_partition_only: candidate.return_selection_diagnostics.selection_partition_only === true,
+        source_partition: candidate.return_selection_diagnostics.source_partition ?? null,
+        holdout_values_used: candidate.return_selection_diagnostics.holdout_values_used ?? null
+      } : null,
+      ranking_execution_selection: candidate.ranking_execution_selection ? {
+        status: candidate.ranking_execution_selection.status ?? null,
+        passed: candidate.ranking_execution_selection.passed === true,
+        source_partition: candidate.ranking_execution_selection.source_partition ?? null,
+        holdout_values_used: candidate.ranking_execution_selection.holdout_values_used ?? null
       } : null,
       execution_head_context_ablation: candidate.execution_head_context_ablation ?? null
     })),
@@ -643,6 +662,55 @@ export function verifyHurdleV2Artifact(artifact) {
         artifact.execution_qualification_status !== expectedQualificationStatus ||
         artifact.training_status !== 'TRAINED')
       return fail('QUALIFICATION_STATUS_INCONSISTENT');
+
+    // Qualification is valid only when every decision was made on the frozen
+    // inner-selection partition. A sealed artifact must not be able to claim
+    // inner-only qualification while its evidence admits outer/holdout use.
+    const selectionScoring = qualification?.selection_scoring;
+    if (selectionScoring?.ranking_uses_inner_selection_partition_only !== true ||
+        selectionScoring?.outer_validation_or_holdout_used !== false)
+      return fail('QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+    const qualificationEvidence = [
+      qualification?.gate_results,
+      qualification?.gate_results?.result,
+      qualification?.context_ablation,
+      qualification?.ranking_head_selection_qualification
+    ];
+    if (qualificationEvidence.some(record => record &&
+        (record.source_partition !== 'INNER_SELECTION_ONLY' ||
+         record.holdout_values_used !== false)))
+      return fail('QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+
+    // Candidate-level evidence is part of the qualification decision too.
+    // Preserve and verify its partition markers instead of trusting only the
+    // top-level summary that could otherwise hide a resealed provenance drift.
+    const candidateRecords = qualification?.candidates;
+    const validInnerPartitionRecord = record => Boolean(record) &&
+      record.holdout_values_used === false &&
+      (record.source_partition === 'INNER_SELECTION_ONLY' ||
+       (record.status === 'UNAVAILABLE' && record.source_partition == null));
+    const validInnerPolicyRecord = record => Boolean(record) &&
+      record.selection_partition_only === true &&
+      record.holdout_values_used === false &&
+      (record.source_partition === null ||
+       record.source_partition === 'INNER_SELECTION_ONLY');
+    if (!Array.isArray(candidateRecords) ||
+        candidateRecords.some(candidate =>
+          !validInnerPolicyRecord(candidate?.execution_risk_policy) ||
+          !validInnerPolicyRecord(candidate?.pooled_only_execution_risk_policy) ||
+          !validInnerPolicyRecord(candidate?.return_selection_diagnostics) ||
+          !validInnerPartitionRecord(candidate?.execution_head_context_ablation) ||
+          !validInnerPartitionRecord(candidate?.ranking_execution_selection)))
+      return fail('QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+
+    // Logistic comparison is a selection baseline, not a validation metric.
+    // Its fitting/scoring partitions are explicit and holdout-free.
+    const selectionBaseline = qualification?.baseline;
+    if (!selectionBaseline ||
+        selectionBaseline.scoring_partition !== 'PURGED_INNER_SELECTION_ONLY' ||
+        selectionBaseline.holdout_values_used !== false)
+      return fail('QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+
     if (qualified) {
       const selected = qualification.candidates?.find(candidate =>
         candidate.name === qualification.selected_configuration);

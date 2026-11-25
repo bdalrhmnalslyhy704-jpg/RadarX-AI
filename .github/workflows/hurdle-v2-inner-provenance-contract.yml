@@ -1,0 +1,47 @@
+name: Build 224 Hurdle V2 — Inner partition provenance contract
+
+on:
+  push:
+    branches:
+      - fix/build224-hurdle-v2-inner-partition-provenance-20261124
+    paths:
+      - 'phase2/core/hurdle-v2-artifact-contract.mjs'
+      - 'phase2/tests/hurdle-v2-artifact-contract.test.mjs'
+      - '.github/workflows/hurdle-v2-inner-provenance-contract.yml'
+  pull_request:
+    paths:
+      - 'phase2/core/hurdle-v2-artifact-contract.mjs'
+      - 'phase2/tests/hurdle-v2-artifact-contract.test.mjs'
+      - '.github/workflows/hurdle-v2-inner-provenance-contract.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-hurdle-v2-inner-provenance-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  artifact-contract:
+    name: Verify nested Hurdle qualification provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax-check Hurdle artifact contract
+        run: node --check phase2/core/hurdle-v2-artifact-contract.mjs
+
+      - name: Syntax-check Hurdle contract tests
+        run: node --check phase2/tests/hurdle-v2-artifact-contract.test.mjs
+
+      - name: Run deterministic artifact and partition-provenance tests
+        run: node --test --test-timeout=180000 phase2/tests/hurdle-v2-artifact-contract.test.mjs

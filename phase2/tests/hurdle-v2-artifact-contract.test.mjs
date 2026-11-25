@@ -161,13 +161,22 @@ before(async () => {
     selection: {
       status: 'ABSTAIN_NO_INNER_SELECTION_SUPERIORITY',
       selection_scoring: {
-        method: 'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6'
+        method: 'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6',
+        ranking_uses_inner_selection_partition_only: true,
+        outer_validation_or_holdout_used: false
       },
       execution_head_context_ablation_qualification: {
-        passed: false, reason: 'CONTEXT_POLICY_FAILED_ABSOLUTE_GATES_VS_NO_EXPOSURE_REFERENCE'
+        qualified: false, status: 'EVALUATED',
+        reason: 'CONTEXT_POLICY_FAILED_ABSOLUTE_GATES_VS_NO_EXPOSURE_REFERENCE',
+        source_partition: 'INNER_SELECTION_ONLY', holdout_values_used: false
+      },
+      ranking_head_selection_qualification: {
+        qualified: false, status: 'UNAVAILABLE',
+        source_partition: 'INNER_SELECTION_ONLY', holdout_values_used: false
       },
       execution_head_context_ablation: {
         status: 'FAIL', passed: false,
+        source_partition: 'INNER_SELECTION_ONLY', holdout_values_used: false,
         contextual: {trade_count: 7, win_rate_pct: 42.857142857, net_pnl_pct: 0.060233, max_drawdown_pct: 0.193713},
         pooled_only: {trade_count: 0, win_rate_pct: null, net_pnl_pct: 0, max_drawdown_pct: 0}
       },
@@ -175,9 +184,34 @@ before(async () => {
         name: '4H_BRIER_SHARED_RANK_W040_LR0015_E16',
         selection_brier: 0.02892058,
         brier_improvement: 0.00116802,
-        pairwise_ranking_improvement: 0.04560154
+        pairwise_ranking_improvement: 0.04560154,
+        execution_risk_policy: {
+          status: 'UNAVAILABLE', passed: false,
+          selection_partition_only: true, holdout_values_used: false
+        },
+        pooled_only_execution_risk_policy: {
+          status: 'UNAVAILABLE', passed: false,
+          selection_partition_only: true, holdout_values_used: false
+        },
+        return_selection_diagnostics: {
+          status: 'UNAVAILABLE', preliminary_return_screen_candidates: 0,
+          selection_partition_only: true, holdout_values_used: false
+        },
+        ranking_execution_selection: {
+          status: 'UNAVAILABLE', passed: false,
+          source_partition: 'INNER_SELECTION_ONLY', holdout_values_used: false
+        },
+        execution_head_context_ablation: {
+          status: 'UNAVAILABLE', passed: false,
+          source_partition: 'INNER_SELECTION_ONLY', holdout_values_used: false
+        }
       }],
-      baseline: {selection_brier: 0.03008860}
+      baseline: {
+        selection_brier: 0.03008860,
+        fit_partition: 'TRAINING_PARTITION_ONLY',
+        scoring_partition: 'PURGED_INNER_SELECTION_ONLY',
+        holdout_values_used: false
+      }
     },
     datasetSha256: 'f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77',
     inputFileSha256: 'f16adcbb88fb64e4d79626c1cf0e4c8d461bd33a3c0f598223ac809c28b0ff3d',
@@ -464,4 +498,115 @@ test('34. verifier rejects scientific qualification status drift from the qualif
   const result = verifyHurdleV2Artifact(resealed);
   assert.equal(result.valid, false);
   assert.equal(result.reason, 'QUALIFICATION_STATUS_INCONSISTENT');
+});
+
+test('35. verifier rejects outer-validation or holdout use in selection scoring after resealing', () => {
+  const tampered = structuredClone(artifact);
+  tampered.inner_qualification.selection_scoring.ranking_uses_inner_selection_partition_only = false;
+  tampered.inner_qualification.selection_scoring.outer_validation_or_holdout_used = true;
+  const resealed = resealArtifact(tampered);
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+});
+test('36. verifier rejects gate evidence sourced outside inner selection after resealing', () => {
+  const tampered = structuredClone(artifact);
+  tampered.inner_qualification.gate_results.source_partition = 'OUTER_VALIDATION';
+  tampered.inner_qualification.context_ablation.holdout_values_used = true;
+  const resealed = resealArtifact(tampered);
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+});
+test('37. verifier rejects ranking-head qualification evidence sourced outside inner selection', () => {
+  const tampered = structuredClone(artifact);
+  tampered.inner_qualification.ranking_head_selection_qualification.source_partition = 'OUTER_VALIDATION';
+  const resealed = resealArtifact(tampered);
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+});
+
+test('38. verifier rejects candidate-level context ablation evidence sourced outside inner selection', () => {
+  const tampered = structuredClone(artifact);
+  tampered.inner_qualification.candidates[0].execution_head_context_ablation.source_partition = 'OUTER_VALIDATION';
+  const resealed = resealArtifact(tampered);
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+});
+
+test('39. verifier rejects candidate contextual and pooled risk policies without inner-only markers', () => {
+  for (const key of ['execution_risk_policy', 'pooled_only_execution_risk_policy']) {
+    const outsidePartition = structuredClone(artifact);
+    outsidePartition.inner_qualification.candidates[0][key].selection_partition_only = false;
+    const outsideResult = verifyHurdleV2Artifact(resealArtifact(outsidePartition));
+    assert.equal(outsideResult.valid, false, key);
+    assert.equal(outsideResult.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID', key);
+
+    const holdoutUsed = structuredClone(artifact);
+    holdoutUsed.inner_qualification.candidates[0][key].holdout_values_used = true;
+    const holdoutResult = verifyHurdleV2Artifact(resealArtifact(holdoutUsed));
+    assert.equal(holdoutResult.valid, false, key);
+    assert.equal(holdoutResult.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID', key);
+  }
+});
+
+test('40. verifier rejects candidate return diagnostics that admit holdout values', () => {
+  const tampered = structuredClone(artifact);
+  tampered.inner_qualification.candidates[0].return_selection_diagnostics.holdout_values_used = true;
+  const resealed = resealArtifact(tampered);
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+});
+
+test('41. verifier rejects candidate ranking execution evidence sourced outside inner selection', () => {
+  const tampered = structuredClone(artifact);
+  tampered.inner_qualification.candidates[0].ranking_execution_selection.source_partition = 'OUTER_VALIDATION';
+  const resealed = resealArtifact(tampered);
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+});
+
+test('42. verifier rejects a Logistic baseline scored outside the frozen inner-selection partition', () => {
+  const tampered = structuredClone(artifact);
+  tampered.inner_qualification.baseline.scoring_partition = 'OUTER_VALIDATION';
+  const resealed = resealArtifact(tampered);
+  const result = verifyHurdleV2Artifact(resealed);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID');
+});
+
+test('43. artifact retains candidate-level and Logistic baseline partition provenance', () => {
+  const candidate = artifact.inner_qualification.candidates[0];
+  assert.equal(candidate.execution_risk_policy.selection_partition_only, true);
+  assert.equal(candidate.execution_risk_policy.holdout_values_used, false);
+  assert.equal(candidate.pooled_only_execution_risk_policy.selection_partition_only, true);
+  assert.equal(candidate.pooled_only_execution_risk_policy.holdout_values_used, false);
+  assert.equal(candidate.return_selection_diagnostics.selection_partition_only, true);
+  assert.equal(candidate.return_selection_diagnostics.holdout_values_used, false);
+  assert.equal(candidate.execution_head_context_ablation.source_partition, 'INNER_SELECTION_ONLY');
+  assert.equal(candidate.execution_head_context_ablation.holdout_values_used, false);
+  assert.equal(candidate.ranking_execution_selection.source_partition, 'INNER_SELECTION_ONLY');
+  assert.equal(candidate.ranking_execution_selection.holdout_values_used, false);
+  assert.equal(artifact.inner_qualification.baseline.scoring_partition, 'PURGED_INNER_SELECTION_ONLY');
+  assert.equal(artifact.inner_qualification.baseline.holdout_values_used, false);
+});
+
+test('44. unavailable candidate diagnostics may omit a source label but may never use holdout values', () => {
+  const tampered = structuredClone(artifact);
+  delete tampered.inner_qualification.candidates[0].execution_head_context_ablation.source_partition;
+  tampered.inner_qualification.candidates[0].execution_head_context_ablation.status = 'UNAVAILABLE';
+  const result = verifyHurdleV2Artifact(resealArtifact(tampered));
+  assert.equal(result.valid, true, result.reason);
+});
+
+test('45. verifier rejects a candidate diagnostic when its inner-selection marker is missing', () => {
+  const tampered = structuredClone(artifact);
+  delete tampered.inner_qualification.candidates[0].return_selection_diagnostics.selection_partition_only;
+  const result = verifyHurdleV2Artifact(resealArtifact(tampered));
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'QUALIFICATION_PARTITION_PROVENANCE_INVALID');
 });
