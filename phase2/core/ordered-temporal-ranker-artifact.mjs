@@ -171,7 +171,7 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       )&&
       tuningFolds.slice(0,-1).every((fold,index)=>
         fold.validation_max_at<tuningFolds[index+1].validation_min_at&&
-        tuningFolds[index+1].tuning_max_at>=fold.validation_min_at);
+        tuningFolds[index+1].tuning_max_at>=fold.validation_max_at);
     const foldTotalsValid=foldContractValid&&
       tuning?.tuning_rows===tuningFolds.reduce((sum,fold)=>sum+fold.tuning_rows,0)&&
       tuning?.validation_rows===tuningFolds.reduce((sum,fold)=>sum+fold.validation_rows,0)&&
