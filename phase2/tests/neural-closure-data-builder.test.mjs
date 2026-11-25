@@ -67,7 +67,7 @@ test('60-day event schedule uses only matured 4h decisions on 15m close boundari
 
 test('prospective cohort schedule starts after the immutable legacy cohort and contains only matured 4h decisions',()=>{
   const legacyLastDecision=Date.parse('2026-11-17T16:14:59.999Z');
-  const prospectiveStart=Date.parse('2026-11-17T20:14:59.999Z');
+  const prospectiveStart=Date.parse('2026-11-18T00:14:59.999Z');
   const serverTime=Date.parse('2026-11-26T06:00:00.000Z');
   const schedule=createNeuralClosureDecisionSchedule({
     serverTime,startAt:prospectiveStart
@@ -90,10 +90,14 @@ test('prospective cohort schedule starts after the immutable legacy cohort and c
 });
 
 test('prospective schedule rejects unaligned or unmatured start boundaries',()=>{
-  const prospectiveStart=Date.parse('2026-11-17T20:14:59.999Z');
+  const prospectiveStart=Date.parse('2026-11-18T00:14:59.999Z');
   assert.throws(()=>createNeuralClosureDecisionSchedule({
     serverTime:Date.parse('2026-11-26T06:00:00Z'),
     startAt:prospectiveStart+1
+  }),/PROSPECTIVE_SCHEDULE_BOUNDARY_INVALID/);
+  assert.throws(()=>createNeuralClosureDecisionSchedule({
+    serverTime:Date.parse('2026-11-26T06:00:00Z'),
+    startAt:'not-a-time'
   }),/PROSPECTIVE_SCHEDULE_BOUNDARY_INVALID/);
   assert.throws(()=>createNeuralClosureDecisionSchedule({
     serverTime:prospectiveStart+60*60_000,
