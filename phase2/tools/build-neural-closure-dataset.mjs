@@ -586,7 +586,7 @@ async function main(){
       label_access:{
         status:'LOCKED',
         outcome_distribution_reported:false,
-        per-row_outcomes_not_summarized:true,
+        per_row_outcomes_not_summarized:true,
         use_requires_separate_predeclared_evaluation_protocol:true
       },
       data_quality:{
