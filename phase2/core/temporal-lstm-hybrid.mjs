@@ -3258,7 +3258,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   roundTripCostBps=30,minimumReturnGapPct=0.50,maxPairsPerTimestamp=16,
   learningRate=0.03,epochs=40,l2=0.001,patience=10,
   l2Grid=[0.001,0.01,0.05,0.10],
-  temporalBlockCounts=[1,2,4,8,24],
+  // Include intermediate temporal resolutions; selection remains inside the purged training partition.
+  temporalBlockCounts=[1,2,3,4,6,8,12,24],
   validationFraction=0.20,purgeHorizonMs=4*60*60*1000
 }={}){
   const validTemporalBlockCounts=[1,2,3,4,6,8,12,24];
