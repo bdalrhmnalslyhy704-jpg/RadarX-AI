@@ -381,10 +381,12 @@ async function main(){
       });
       if(!built.ready){
         const key=built.reason||'UNKNOWN_EVENT_REJECTION';
-        if(key==='HISTORICAL_24H_QUOTE_VOLUME_BELOW_MINIMUM'){
+        if(args.prospectiveOnly&&key==='HISTORICAL_24H_QUOTE_VOLUME_BELOW_MINIMUM'){
           historicallyIneligibleEvents++;
           historicalIneligibilityReasons[key]=(historicalIneligibilityReasons[key]||0)+1;
         }else{
+          // Preserve the legacy collector's original coverage accounting. The
+          // prospective cohort alone separates historical liquidity exclusions.
           symbolRejected++;
           rejectedCounts[key]=(rejectedCounts[key]||0)+1;
           symbolRejectedReasons[key]=(symbolRejectedReasons[key]||0)+1;
@@ -393,9 +395,27 @@ async function main(){
       }
       symbolRows.push(built.row);
     }
+    if(!args.prospectiveOnly&&
+      symbolRows.length<Math.ceil(schedule.decision_count*0.8)){
+      const minimumValidEvents=Math.ceil(schedule.decision_count*0.8);
+      const rejection={
+        symbol,status:'REJECTED_LOW_VALID_EVENT_COVERAGE',
+        collection_time_quote_volume_24h_usdt:asset.quote_volume_24h,
+        valid_events:symbolRows.length,rejected_events:symbolRejected,
+        expected_events:schedule.decision_count,
+        minimum_valid_events:minimumValidEvents,
+        rejection_reasons:symbolRejectedReasons
+      };
+      symbolSummaries.push(rejection);
+      console.log(JSON.stringify({
+        event:'NEURAL_CLOSURE_SYMBOL_PROGRESS',included:false,...rejection
+      }));
+      continue;
+    }
+
     // All decisions are explicitly accounted for. A low historical-liquidity
-    // event is not missing data; it is an expected out-of-universe observation.
-    // Candle completeness is independently enforced by coverage.checks above.
+    // event in the prospective cohort is not missing data; it is an expected
+    // out-of-universe observation. Candle completeness is checked above.
     rows.push(...symbolRows);
     symbolSummaries.push({
       symbol,status:'INCLUDED',

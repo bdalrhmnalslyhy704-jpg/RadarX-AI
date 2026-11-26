@@ -75,6 +75,10 @@ test('legacy fixed-SHA collector retains top-100 while prospective capture selec
   assert.match(universeHelper,/includeAllEligible/);
   assert.match(universeHelper,/ELIGIBLE_UNIVERSE_EXCEEDS_CONFIGURED_MAX_SYMBOLS/);
   assert.match(collector,/includeAllEligible:args\.prospectiveOnly===true/);
+  assert.match(collector,/if\(!args\.prospectiveOnly&&\s*symbolRows\.length<Math\.ceil\(schedule\.decision_count\*0\.8\)\)/,
+    'the legacy collector must retain its original 80% per-symbol event coverage floor');
+  assert.match(collector,/historicallyIneligibleEvents\+\+;/,
+    'the prospective collector must account for historical liquidity exclusions separately');
   const prospectiveWorkflow=await readFile(new URL('../../.github/workflows/neural-closure-prospective-cohort.yml',import.meta.url),'utf8');
   assert.ok(prospectiveWorkflow.includes('default: "500"'));
   assert.match(prospectiveWorkflow,/all_eligible_candidates_included!==true/);
