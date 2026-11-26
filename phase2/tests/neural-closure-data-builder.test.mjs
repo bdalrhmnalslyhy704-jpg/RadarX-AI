@@ -776,6 +776,11 @@ test('prospective cohort workflow is manual, locked, data-only and training-free
   assert.match(workflow,/training_allowed!==false/);
   assert.match(workflow,/model_scoring_allowed!==false/);
   assert.match(workflow,/retention-days: 90/);
+  assert.match(workflow,/RADARX_PROSPECTIVE_COHORT_ENCRYPTION_KEY_HEX/);
+  assert.match(workflow,/secure-prospective-cohort-bundle\.mjs encrypt/);
+  assert.match(workflow,/path: artifacts\/secure\/\*\.enc/);
+  assert.match(workflow,/rm -rf artifacts\/neural-closure-prospective/);
+  assert.doesNotMatch(workflow,/path: artifacts\/neural-closure-prospective\//);
   assert.doesNotMatch(workflow,/phase2\/tools\/train-neural-closure-models\.mjs/);
   assert.doesNotMatch(workflow,/--hurdleInnerOnly/);
   assert.doesNotMatch(workflow,/--openHoldout/);

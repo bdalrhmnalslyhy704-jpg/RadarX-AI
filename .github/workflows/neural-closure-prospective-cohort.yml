@@ -44,11 +44,24 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Verify prospective scheduler and raw collector contracts
+      - name: Verify prospective scheduler, collector and encryption contracts
         run: |
           node --check phase2/core/neural-closure-data-builder.mjs
           node --check phase2/tools/build-neural-closure-dataset.mjs
+          node --check phase2/core/neural-closure-secure-bundle.mjs
+          node --check phase2/tools/secure-prospective-cohort-bundle.mjs
           node --test phase2/tests/neural-closure-data-builder.test.mjs
+          node --test phase2/tests/neural-closure-secure-bundle.test.mjs
+
+      - name: Verify locked cohort encryption key is configured
+        env:
+          RADARX_PROSPECTIVE_COHORT_ENCRYPTION_KEY_HEX: ${{ secrets.RADARX_PROSPECTIVE_COHORT_ENCRYPTION_KEY_HEX }}
+        run: |
+          if [[ ! "${RADARX_PROSPECTIVE_COHORT_ENCRYPTION_KEY_HEX:-}" =~ ^[A-Fa-f0-9]{64}$ ]]; then
+            echo "::error::Set repository secret RADARX_PROSPECTIVE_COHORT_ENCRYPTION_KEY_HEX to a 32-byte random hex key before collection."
+            exit 1
+          fi
+          echo "AES-256-GCM key format verified; secret value was not printed."
 
       - name: Capture real Binance Spot candles after the legacy cohort boundary
         env:
@@ -193,11 +206,30 @@ jobs:
           },null,2));
           NODE
 
-      - name: Upload locked prospective cohort and verified raw candle archives
+      - name: Encrypt the locked cohort and raw candle archives before artifact storage
+        env:
+          RADARX_PROSPECTIVE_COHORT_ENCRYPTION_KEY_HEX: ${{ secrets.RADARX_PROSPECTIVE_COHORT_ENCRYPTION_KEY_HEX }}
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/radarx-build224-prospective-cohort.tar.gz"
+          encrypted="artifacts/secure/radarx-build224-prospective-cohort-${GITHUB_SHA}.enc"
+          mkdir -p artifacts/secure
+          tar -czf "$bundle" -C artifacts neural-closure-prospective
+          node phase2/tools/secure-prospective-cohort-bundle.mjs encrypt "$bundle" "$encrypted"
+          rm -rf artifacts/neural-closure-prospective
+          rm -f "$bundle"
+          test -s "$encrypted"
+          if find artifacts -type f ! -name '*.enc' -print -quit | grep -q .; then
+            echo "::error::Plaintext cohort material remains in the artifact staging directory."
+            exit 1
+          fi
+          echo "Only the authenticated encrypted bundle remains eligible for upload."
+
+      - name: Upload encrypted locked prospective cohort bundle
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: radarx-build224-prospective-locked-cohort-${{ github.sha }}
-          path: artifacts/neural-closure-prospective/
+          name: radarx-build224-prospective-locked-cohort-encrypted-${{ github.sha }}
+          path: artifacts/secure/*.enc
           if-no-files-found: error
           retention-days: 90

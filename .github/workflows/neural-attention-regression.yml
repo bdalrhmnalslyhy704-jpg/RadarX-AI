@@ -28,6 +28,17 @@ on:
       - 'phase2/core/neural-closure-data-builder.mjs'
       - 'phase2/tools/build-neural-closure-dataset.mjs'
       - 'phase2/tests/neural-closure-data-builder.test.mjs'
+      - 'phase2/core/neural-closure-secure-bundle.mjs'
+      - 'phase2/tools/secure-prospective-cohort-bundle.mjs'
+      - 'phase2/tests/neural-closure-secure-bundle.test.mjs'
+      - '.github/workflows/neural-closure-prospective-cohort.yml'
+      - 'phase2/core/neural-closure-secure-bundle.mjs'
+      - 'phase2/tools/secure-prospective-cohort-bundle.mjs'
+      - 'phase2/tests/neural-closure-secure-bundle.test.mjs'
+      - 'phase2/core/neural-closure-data-builder.mjs'
+      - 'phase2/core/neural-closure-universe.mjs'
+      - 'phase2/tools/build-neural-closure-dataset.mjs'
+      - 'phase2/tests/neural-closure-data-builder.test.mjs'
       - '.github/workflows/neural-closure-prospective-cohort.yml'
       - '.github/workflows/neural-attention-regression.yml'
   pull_request:
@@ -83,6 +94,11 @@ jobs:
           node --check phase2/tools/train-neural-closure-models.mjs
       - name: Verify real Binance cohort collection and prospective scheduling
         run: node --test phase2/tests/neural-closure-data-builder.test.mjs
+      - name: Verify prospective cohort encryption boundary
+        run: |
+          node --check phase2/core/neural-closure-secure-bundle.mjs
+          node --check phase2/tools/secure-prospective-cohort-bundle.mjs
+          node --test phase2/tests/neural-closure-secure-bundle.test.mjs
       - name: Verify V8-V11 and TCN-LSTM fixed-SHA wiring
         run: node --test phase2/tests/neural-closure-training-wiring.test.mjs
       - name: Verify recurrent TCN-LSTM gradients, calibration and chronology contracts
