@@ -1656,12 +1656,14 @@ export function realizedExecutionNetReturnPct(row,roundTripCostBps=30) {
 }
 
 export const NEURAL_CLOSURE_PORTFOLIO_POLICY=Object.freeze({
-  method:'EVENT_DRIVEN_FIRST_TOUCH_EXECUTION_MTM_V1',
+  method:'EVENT_DRIVEN_FIRST_TOUCH_EXECUTION_MTM_V2',
   max_concurrent_positions:30,
   position_fraction_of_initial_equity:1/30,
   entry_order:'PROBABILITY_DESCENDING_THEN_SYMBOL_ASCENDING',
   exit_time:'FIRST_TOUCH_AT_OR_HORIZON_CLOSE_AT',
-  mark_to_market:'OBSERVED_MAX_ADVERSE_AND_FAVORABLE_EXCURSIONS',
+  mark_to_market:'OBSERVED_MAX_ADVERSE_AND_FAVORABLE_EXCURSIONS_AFTER_ENTRY_COST',
+  entry_cost_marking:'HALF_ROUND_TRIP_COST_FROM_ENTRY',
+  same_timestamp_excursion_order:'FAVORABLE_THEN_ADVERSE_WORST_CASE_FOR_DRAWDOWN',
   same_timestamp_exit_before_entry:true
 });
 
@@ -1714,20 +1716,22 @@ export function simulateFirstTouchPaperPortfolio(rows,probabilities,{
     const netReturn=realizedExecutionNetReturnPct(row,roundTripCostBps);
     if(!finite(netReturn)||netReturn<=-100)
       throw new Error('NEURAL_CLOSURE_RETURN_AT_OR_BELOW_MINUS_100_PERCENT');
+    const entryCostPct=Number(roundTripCostBps)/200;
     const position={
       id:String(row.id??item.index),
       symbol:String(row.symbol??'').toUpperCase(),
       row,at,exitAt,netReturn,probability:item.probability,
-      capital:slotCapital,markPct:0
+      capital:slotCapital,entryCostPct,markPct:-entryCostPct
     };
-    const adversePriority=row.outcome==='DOWN'?1:0;
-    const favorablePriority=row.outcome==='DOWN'?0:1;
-    if(Number(row.max_adverse_excursion_at)<=exitAt)
-      events.push({at:Number(row.max_adverse_excursion_at),type:'MAE',
-        priority:adversePriority,position,value:Number(row.max_adverse_excursion_pct)});
+    // OHLC cannot order intrabar favourable/adverse extremes that share a
+    // timestamp. Use the conservative peak-then-trough path for every outcome.
+    // This avoids giving winning labels an optimistic drawdown path.
     if(Number(row.max_favorable_excursion_at)<=exitAt)
       events.push({at:Number(row.max_favorable_excursion_at),type:'MFE',
-        priority:favorablePriority,position,value:Number(row.max_favorable_excursion_pct)});
+        priority:0,position,value:Number(row.max_favorable_excursion_pct)});
+    if(Number(row.max_adverse_excursion_at)<=exitAt)
+      events.push({at:Number(row.max_adverse_excursion_at),type:'MAE',
+        priority:1,position,value:Number(row.max_adverse_excursion_pct)});
     events.push({at:exitAt,type:'EXIT',priority:2,position});
     events.push({at,type:'ENTRY',priority:3,position});
   }
@@ -1761,12 +1765,12 @@ export function simulateFirstTouchPaperPortfolio(rows,probabilities,{
     }
     if(!open.has(position.id))continue;
     if(event.type==='MAE'){
-      position.markPct=Math.min(position.markPct,event.value);
+      position.markPct=Math.min(position.markPct,event.value-position.entryCostPct);
       markDrawdown();
       continue;
     }
     if(event.type==='MFE'){
-      position.markPct=Math.max(position.markPct,event.value);
+      position.markPct=Math.max(position.markPct,event.value-position.entryCostPct);
       markDrawdown();
       continue;
     }
