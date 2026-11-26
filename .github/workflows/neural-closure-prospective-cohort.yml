@@ -143,12 +143,31 @@ jobs:
             failures.push('ELIGIBLE_USDT_UNIVERSE_NOT_FULLY_CAPTURED');
           const candidatePrefilter=cohort.universe?.candidate_prefilter;
           if(cohort.universe?.selection!==
-               'ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V3'||
-             candidatePrefilter?.method!=='CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY'||
+               'ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_COMPLETE_15M_PREHISTORY_AND_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V4'||
+             candidatePrefilter?.method!=='CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY_PLUS_EXACT_15M_PREHISTORY_GATE'||
              candidatePrefilter?.current_24h_ticker_used_for_eligibility!==false||
              candidatePrefilter?.current_24h_ticker_used_for_ordering!==false||
              candidatePrefilter?.current_24h_ticker_volume_is_diagnostic_only!==true)
             failures.push('CURRENT_TICKER_UNIVERSE_LOOKAHEAD_NOT_REMOVED');
+          const historyPreflight=cohort.universe?.history_preflight;
+          const historyIncluded=(historyPreflight?.included_symbols??[]).slice().sort();
+          const historyExcluded=(historyPreflight?.excluded_symbols??[]).map(item=>item.symbol).sort();
+          if(historyPreflight?.schema!=='PROSPECTIVE_HISTORY_START_PREFLIGHT_V1'||
+             historyPreflight?.status!=='VERIFIED'||
+             historyPreflight?.expected_start_open_at!==cohort.schedule?.fifteen_minute_start_open_at||
+             historyPreflight?.candidate_count!==
+               historyPreflight?.included_candidate_count+historyPreflight?.excluded_candidate_count||
+             historyPreflight?.included_candidate_count!==cohort.universe?.eligible_candidate_count||
+             historyPreflight?.excluded_candidate_count!==historyExcluded.length||
+             historyPreflight?.every_candidate_accounted!==true||
+             historyPreflight?.current_ticker_liquidity_not_used!==true||
+             historyPreflight?.no_top_n_truncation!==true||
+             JSON.stringify(historyIncluded)!==JSON.stringify((cohort.universe?.symbols??[]).map(item=>item.symbol).sort())||
+             historyExcluded.some(symbol=>historyIncluded.includes(symbol))||
+             new Set(historyExcluded).size!==historyExcluded.length||
+             (historyPreflight?.excluded_symbols??[]).some(item=>
+               item.reason!=='NO_CANDLE_AT_REQUIRED_START'||item.first_open_at!==null))
+            failures.push('PROSPECTIVE_HISTORY_START_PREFLIGHT_INVALID');
           const captureAudit=cohort.universe?.capture_audit;
           const selectedSymbols=(cohort.universe?.symbols??[]).map(item=>item.symbol).sort();
           const includedSymbols=(captureAudit?.included_symbols??[]).slice().sort();
