@@ -112,7 +112,7 @@ test('prospective bundle decryption rejects a tampered authentication tag and pu
       decryptProspectiveBundleFile(tampered,output,key),
       /authenticate|state|tag/i
     );
-    assert.equal((await readdir(directory)).includes('must-not-exist.bin'),false);
+    assert.deepEqual((await readdir(directory)).sort(),['source.bin','source.enc','tampered.enc']);
   }finally{
     await rm(directory,{recursive:true,force:true});
   }
@@ -153,6 +153,24 @@ test('prospective bundle decryption rejects a truncated envelope before creating
       /PROSPECTIVE_BUNDLE_ENVELOPE_TOO_SMALL/
     );
     assert.deepEqual(await readdir(directory),['truncated.enc']);
+  }finally{
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+
+
+test('prospective bundle encryption uses a fresh random nonce for identical plaintext',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'radarx-secure-nonce-'));
+  const source=join(directory,'source.bin');
+  const first=join(directory,'first.enc');
+  const second=join(directory,'second.enc');
+  const key=randomBytes(32);
+  try{
+    await writeFile(source,Buffer.from('same locked prospective cohort bytes'));
+    await encryptProspectiveBundleFile(source,first,key);
+    await encryptProspectiveBundleFile(source,second,key);
+    assert.notDeepEqual(await readFile(first),await readFile(second),
+      'identical plaintext under one key must not reuse a deterministic GCM envelope');
   }finally{
     await rm(directory,{recursive:true,force:true});
   }
