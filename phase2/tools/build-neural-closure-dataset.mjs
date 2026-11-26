@@ -6,7 +6,7 @@ import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-wri
 import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
 import {verifyBinanceRawArchives} from '../core/neural-closure-archive-guardian.mjs';
 import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
-import {selectBinanceSpotUsdtUniverse,verifyProspectiveUniverseCapture} from '../core/neural-closure-universe.mjs';
+import {selectBinanceSpotUsdtUniverse,verifyProspectiveUniverseCapture,auditProspectiveHistoryStart} from '../core/neural-closure-universe.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,NEURAL_CLOSURE_DATASET_INTERVALS,
   NEURAL_CLOSURE_MARKET_DATA_POLICY,createNeuralClosureDecisionSchedule,
@@ -250,14 +250,12 @@ async function main(){
   const exchangeInfo=await getExchangeInfo();
   const {payload:tickers}=await getJson('ticker/24hr',{},REQUEST_WEIGHT.TICKER_24HR_ALL);
   if(!Array.isArray(tickers))throw new Error('BINANCE_24H_TICKERS_INVALID');
-  const universe=selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
+  const candidateUniverse=selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
     minimumQuoteVolume:args.minQuoteVolumeUsdt,
     maxSymbols:args.maxSymbols,
     includeAllEligible:args.prospectiveOnly===true,
     historicalEligibilityOnly:args.prospectiveOnly===true
   });
-  if(universe.selected.length<args.minSymbols)
-    throw new Error('LIQUIDITY_UNIVERSE_BELOW_MIN_SYMBOLS:'+universe.selected.length);
 
   const schedule=createNeuralClosureDecisionSchedule(args.prospectiveOnly
     ?{serverTime:serverTimeAtStart,startAt:args.startAt}
@@ -266,6 +264,69 @@ async function main(){
     (schedule.mode!=='PROSPECTIVE_LOCKED_OUT_OF_TIME'||
       schedule.first_decision_at<=LEGACY_COHORT_LAST_DECISION_AT))
     throw new Error('PROSPECTIVE_SCHEDULE_LEGACY_COHORT_OVERLAP');
+
+  let universe=candidateUniverse;
+  if(args.prospectiveOnly){
+    // A fixed-window cohort needs the full 24h 15m prehistory at its first
+    // decision. New listings or symbols without that exact start candle are
+    // excluded explicitly before large 1m/5m/15m archives are downloaded.
+    // This preflight uses only public historical candle availability, never
+    // current ticker liquidity, volume ranking, or Top-N selection.
+    const expectedStartOpenAt=schedule.fifteen_minute_start_open_at;
+    const historyStartResults=[];
+    for(const asset of candidateUniverse.selected){
+      const {payload}=await getJson('klines',{
+        symbol:asset.symbol,interval:'15m',
+        startTime:expectedStartOpenAt,
+        endTime:expectedStartOpenAt+15*60_000-1,
+        limit:1
+      },REQUEST_WEIGHT.KLINES);
+      if(!Array.isArray(payload)||payload.length>1)
+        throw new Error('PROSPECTIVE_HISTORY_START_RESPONSE_INVALID:'+asset.symbol);
+      if(payload.length===0){
+        historyStartResults.push({
+          symbol:asset.symbol,status:'UNAVAILABLE',first_open_at:null,
+          reason:'NO_CANDLE_AT_REQUIRED_START'
+        });
+      }else{
+        const openAt=num(payload[0]?.[0]);
+        if(openAt!==expectedStartOpenAt)
+          throw new Error('PROSPECTIVE_HISTORY_START_CANDLE_OUTSIDE_WINDOW:'+
+            asset.symbol+':'+String(openAt));
+        historyStartResults.push({
+          symbol:asset.symbol,status:'AVAILABLE',first_open_at:openAt,reason:null
+        });
+      }
+    }
+    const historyPreflight=auditProspectiveHistoryStart({
+      candidates:candidateUniverse.eligible,
+      results:historyStartResults,
+      expectedStartOpenAt
+    });
+    const includedNames=new Set(historyPreflight.included_symbols);
+    const historicallyComplete=candidateUniverse.selected.filter(item=>
+      includedNames.has(item.symbol));
+    universe={
+      ...candidateUniverse,
+      eligible:historicallyComplete,
+      selected:historicallyComplete,
+      historyPreflight
+    };
+    console.log(JSON.stringify({
+      event:'PROSPECTIVE_HISTORY_START_PREFLIGHT',
+      schema:historyPreflight.schema,
+      status:historyPreflight.status,
+      candidate_count:historyPreflight.candidate_count,
+      included_candidate_count:historyPreflight.included_candidate_count,
+      excluded_candidate_count:historyPreflight.excluded_candidate_count,
+      expected_start_open_at:historyPreflight.expected_start_open_at,
+      excluded_symbols:historyPreflight.excluded_symbols.map(item=>item.symbol),
+      current_ticker_liquidity_not_used:true,
+      no_top_n_truncation:true
+    }));
+  }
+  if(universe.selected.length<args.minSymbols)
+    throw new Error('VALIDATED_HISTORY_UNIVERSE_BELOW_MIN_SYMBOLS:'+universe.selected.length);
   const rawArchiveRecords=[];
   const symbolSummaries=[];
   const rows=[];
@@ -569,9 +630,9 @@ async function main(){
         execution_return_contract:validated[0].execution_return_contract
       },
       universe:{
-        selection:'ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V3',
+        selection:'ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_COMPLETE_15M_PREHISTORY_AND_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V4',
         candidate_prefilter:{
-          method:'CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY',
+          method:'CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY_PLUS_EXACT_15M_PREHISTORY_GATE',
           current_24h_ticker_used_for_eligibility:false,
           current_24h_ticker_used_for_ordering:false,
           current_24h_ticker_volume_is_diagnostic_only:true,
@@ -581,7 +642,7 @@ async function main(){
           selected_candidate_count:universe.selected.length,
           all_eligible_candidates_included:universe.selected.length===universe.eligible.length,
           hard_cap_failure_mode:'FAIL_CLOSED_NO_TOP_N_TRUNCATION',
-          scope:'CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_ONLY'
+          scope:'CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_REQUIRED_15M_PREHISTORY'
         },
         historical_eligibility:{
           method:'SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE',
@@ -596,6 +657,7 @@ async function main(){
         eligible_candidate_count:universe.eligible.length,
         selected_candidate_count:universe.selected.length,
         all_eligible_candidates_included:universe.selected.length===universe.eligible.length,
+        history_preflight:universe.historyPreflight??null,
         capture_audit:prospectiveCaptureAudit,
         hard_cap_failure_mode:'FAIL_CLOSED_NO_TOP_N_TRUNCATION',
         survivorship_bias_warning:true,
