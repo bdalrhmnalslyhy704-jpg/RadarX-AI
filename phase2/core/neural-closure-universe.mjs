@@ -154,7 +154,19 @@ export function verifyProspectiveCohortRowCoverage({
     valid_events:Number(item?.valid_events),
     rejected_events:Number(item?.rejected_events),
     expected_events:Number(item?.expected_events),
-    minimum_valid_events:Number(item?.minimum_valid_events)
+    minimum_valid_events:Number(item?.minimum_valid_events),
+    rejection_reasons:item?.rejection_reasons,
+    rejection_reason_entries:item?.rejection_reasons&&
+      typeof item.rejection_reasons==='object'&&!Array.isArray(item.rejection_reasons)
+      ?Object.entries(item.rejection_reasons):null
+  })).map(item=>({
+    ...item,
+    rejection_reasons_valid:Array.isArray(item.rejection_reason_entries)&&
+      item.rejection_reason_entries.every(([reason,count])=>
+        typeof reason==='string'&&reason.trim().length>0&&
+        Number.isSafeInteger(Number(count))&&Number(count)>0),
+    rejection_reason_count:Array.isArray(item.rejection_reason_entries)
+      ?item.rejection_reason_entries.reduce((sum,[,count])=>sum+Number(count),0):NaN
   }));
   const resultNames=results.map(item=>item.symbol).sort();
   const same=(a,b)=>a.length===b.length&&a.every((value,index)=>value===b[index]);
@@ -166,6 +178,8 @@ export function verifyProspectiveCohortRowCoverage({
       !Number.isSafeInteger(item.expected_events)||item.expected_events!==decisionCount||
       !Number.isSafeInteger(item.minimum_valid_events)||
       item.minimum_valid_events!==minimumValidEvents||
+      item.rejection_reasons_valid!==true||
+      item.rejection_reason_count!==item.rejected_events||
       item.valid_events+item.rejected_events!==item.expected_events))
     throw new Error('PROSPECTIVE_COHORT_SYMBOL_EVENT_COVERAGE_INVALID');
   const rowCounts=new Map(selected.map(symbol=>[symbol,0]));
@@ -196,7 +210,7 @@ export function verifyProspectiveCohortRowCoverage({
     Number(counts.requested_symbols)!==selected.length)
     throw new Error('PROSPECTIVE_COHORT_AGGREGATE_COUNTS_MISMATCH');
   return {
-    schema:'PROSPECTIVE_COHORT_ROW_COVERAGE_AUDIT_V2',
+    schema:'PROSPECTIVE_COHORT_ROW_COVERAGE_AUDIT_V3',
     status:'VERIFIED',
     symbols_verified:selected.length,
     rows_verified:rows.length,
@@ -208,6 +222,7 @@ export function verifyProspectiveCohortRowCoverage({
     no_unexpected_symbols:true,
     per_symbol_row_counts_match:true,
     per_symbol_event_accounting_matches_schedule:true,
+    rejection_reason_accounting_matches_schedule:true,
     minimum_event_coverage_met_for_every_symbol:true,
     all_rows_on_declared_decision_grid:true
   };

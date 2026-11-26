@@ -412,6 +412,7 @@ async function main(){
       valid_events:symbolRows.length,rejected_events:symbolRejected,
       expected_events:schedule.decision_count,
       minimum_valid_events:minimumValidEvents,
+      rejection_reasons:symbolRejectedReasons,
       coverage:coverage.checks
     });
     rawArchiveRecords.push(...pendingArchives);
