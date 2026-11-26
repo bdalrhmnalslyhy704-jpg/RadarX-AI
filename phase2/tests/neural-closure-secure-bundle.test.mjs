@@ -58,7 +58,7 @@ test('prospective bundle decryption rejects a wrong key and publishes no plainte
   }
 });
 
-test('prospective bundle decryption rejects tampered ciphertext and tag',async()=>{
+test('prospective bundle decryption rejects tampered ciphertext',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'radarx-secure-tamper-'));
   const source=join(directory,'source.bin');
   const encrypted=join(directory,'source.enc');
@@ -89,6 +89,30 @@ test('prospective bundle encryption rejects non-256-bit keys before creating out
       /32_BYTES/
     );
     assert.deepEqual(await readdir(directory),['source.bin']);
+  }finally{
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+
+
+test('prospective bundle decryption rejects a tampered authentication tag and publishes no plaintext',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'radarx-secure-tag-tamper-'));
+  const source=join(directory,'source.bin');
+  const encrypted=join(directory,'source.enc');
+  const tampered=join(directory,'tampered.enc');
+  const output=join(directory,'must-not-exist.bin');
+  const key=randomBytes(32);
+  try{
+    await writeFile(source,Buffer.from('authenticated prospective cohort payload'));
+    await encryptProspectiveBundleFile(source,encrypted,key);
+    const bytes=await readFile(encrypted);
+    bytes[bytes.length-1]^=0x01;
+    await writeFile(tampered,bytes);
+    await assert.rejects(
+      decryptProspectiveBundleFile(tampered,output,key),
+      /authenticate|state|tag/i
+    );
+    assert.equal((await readdir(directory)).includes('must-not-exist.bin'),false);
   }finally{
     await rm(directory,{recursive:true,force:true});
   }
