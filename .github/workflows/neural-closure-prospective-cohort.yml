@@ -25,6 +25,7 @@ on:
         default: "500"
         type: string
 
+# Recipient RSA private key is kept offline by the owner; only its public key is committed.
 permissions:
   contents: read
 
