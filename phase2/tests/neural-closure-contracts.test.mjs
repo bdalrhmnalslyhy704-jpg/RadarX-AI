@@ -504,8 +504,44 @@ test('event-driven Spot portfolio caps overlapping exposure and marks MAE before
   assertClose(result.net_pnl_pct,-20.3);
   assertClose(result.max_drawdown_pct,20.3);
   assert.equal(result.portfolio_simulation.method,
-    'EVENT_DRIVEN_FIRST_TOUCH_EXECUTION_MTM_V1');
+    'EVENT_DRIVEN_FIRST_TOUCH_EXECUTION_MTM_V2');
   assert.equal(NEURAL_CLOSURE_PORTFOLIO_POLICY.same_timestamp_exit_before_entry,true);
+});
+
+test('drawdown marking applies entry costs and worst-case same-timestamp excursions for every outcome',()=>{
+  const at=BASE;
+  const excursionAt=at+2*60*60_000;
+  const exitAt=at+3*60*60_000;
+  const row={
+    id:'DRAWDOWN-TIE:UP',symbol:'TIEUSDT',at,outcome:'UP',
+    realized_return_pct:3,
+    execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
+    first_touch:{
+      resolution:'TAKE_PROFIT_FIRST',first_touch_at:exitAt,
+      baseline_price:100,take_profit_price:103,stop_loss_price:98,
+      exit_price:103,exit_price_source:'BARRIER',
+      exit_candle:{
+        open_time:exitAt-59_999,close_time:exitAt,
+        open:100,high:103.2,low:98.5,close:102.8,
+        is_closed:true,source:'BINANCE_PUBLIC_REST'
+      }
+    },
+    max_adverse_excursion_pct:-1.5,
+    max_adverse_excursion_at:excursionAt,
+    max_favorable_excursion_pct:3,
+    max_favorable_excursion_at:excursionAt
+  };
+  const result=simulateFirstTouchPaperPortfolio([row],[0.95],{
+    threshold:0.5,roundTripCostBps:30,maxConcurrentPositions:1,initialEquity:100
+  });
+  assert.equal(result.return_data_status,'COMPLETE');
+  assert.equal(result.trade_count,1);
+  assertClose(result.net_pnl_pct,2.7);
+  // Peak = 100 * (1 + (3.00%-0.15% entry fee)); trough =
+  // 100 * (1 + (-1.50%-0.15% entry fee)).
+  assertClose(result.max_drawdown_pct,(4.5/102.85)*100);
+  assert.equal(result.portfolio_simulation.method,
+    'EVENT_DRIVEN_FIRST_TOUCH_EXECUTION_MTM_V2');
 });
 
 test('fixed-SHA evaluator scores the full outer block with identity calibration and a predeclared threshold',()=>{

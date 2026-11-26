@@ -41,6 +41,7 @@ import {
   summarizeTcnLstmPairwiseReturnRanking,
   summarizeTcnLstmPairwiseLogitRanking,
   summarizeTcnLstmRankingExecutionSelection,
+  hasFoldStableOrderedRankerQualification,
   benchmarkTcnLstmHybridChronological,
   evaluateTcnLstmHybridGeneralization,
   benchmarkTcnLstmHybridInference,
@@ -52,6 +53,7 @@ import {
 import { topKRankingSignals,compareTcnLstmRankingExecutionMetrics,
   evaluateExternalExecutionRiskTopK } from '../core/neural-closure-contracts.mjs';
 import { fitHurdleReturnHead,fitHurdlePositiveReturnCalibration,predictHurdleExpectedNetReturn } from '../core/hurdle-return-head.mjs';
+import {createOrderedTemporalRankerArtifact,verifyOrderedTemporalRankerArtifact} from '../core/ordered-temporal-ranker-artifact.mjs';
 
 const DAY=86400000;
 const BASE=1_780_000_000_000;
@@ -1247,6 +1249,69 @@ test('TCN-LSTM shared classifier pairwise ranking loss backpropagates through th
   assert.equal(shared.real_order_execution,false);
 });
 
+test('ordered ranker selection fails closed unless the selected V6 candidate beats Logistic on both metrics in all three folds',()=>{
+  const foldResults=Array.from({length:3},(_,index)=>({
+    fold_index:index+1,
+    best_validation_pairwise_accuracy_pct:66+index,
+    logistic_validation_pairwise_accuracy_pct:64+index,
+    best_validation_pairwise_log_loss:0.60-index*0.005,
+    logistic_validation_pairwise_log_loss:0.62-index*0.005
+  }));
+  const rankHead={
+    schema:'RADARX_TCN_LSTM_INDEPENDENT_ORDERED_696_RETURN_RANKER_V1',
+    representation:'RAW_ORDERED_696_V1',
+    internal_training_validation:{
+      schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6',
+      fold_count:3,
+      selected_candidate_qualified:true,
+      fold_stable_dual_metric_superiority:true,
+      robustness_status:'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY',
+      fold_stable_dual_metric_candidate_count:1,
+      selected_temporal_block_count:2,
+      selected_l2:0.05,
+      selected_epochs:11,
+      selected_parameterization_id:'TEMPORAL_BLOCK_TIED_2X29_V1',
+      selected_parameter_count:58,
+      candidate_grid:[{
+        temporal_block_count:2,l2:0.05,best_epoch:11,
+        parameterization_id:'TEMPORAL_BLOCK_TIED_2X29_V1',
+        parameter_count:58,fold_results:foldResults
+      }]
+    }
+  };
+
+  assert.equal(hasFoldStableOrderedRankerQualification(rankHead,'RAW_ORDERED_696_V1'),true);
+
+  const unqualified=structuredClone(rankHead);
+  unqualified.internal_training_validation.selected_candidate_qualified=false;
+  unqualified.internal_training_validation.fold_stable_dual_metric_superiority=false;
+  unqualified.internal_training_validation.robustness_status='ABSTAIN_NO_FOLD_STABLE_DUAL_SUPERIORITY';
+  unqualified.internal_training_validation.fold_stable_dual_metric_candidate_count=0;
+  assert.equal(hasFoldStableOrderedRankerQualification(unqualified,'RAW_ORDERED_696_V1'),false);
+
+  const accuracyRegression=structuredClone(rankHead);
+  accuracyRegression.internal_training_validation.candidate_grid[0]
+    .fold_results[1].best_validation_pairwise_accuracy_pct=65;
+  assert.equal(hasFoldStableOrderedRankerQualification(accuracyRegression,'RAW_ORDERED_696_V1'),false,
+    'one fold with no strict Logistic accuracy margin must force abstention');
+
+  const lossRegression=structuredClone(rankHead);
+  lossRegression.internal_training_validation.candidate_grid[0]
+    .fold_results[2].best_validation_pairwise_log_loss=0.62;
+  assert.equal(hasFoldStableOrderedRankerQualification(lossRegression,'RAW_ORDERED_696_V1'),false,
+    'one fold with no strict Logistic log-loss margin must force abstention');
+
+  const legacyTwoFold=structuredClone(rankHead);
+  legacyTwoFold.internal_training_validation.schema=
+    'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V5';
+  legacyTwoFold.internal_training_validation.fold_count=2;
+  assert.equal(hasFoldStableOrderedRankerQualification(legacyTwoFold,'RAW_ORDERED_696_V1'),false);
+
+  assert.equal(hasFoldStableOrderedRankerQualification(
+    {representation:'LATENT_MULTI_SCALE_V2'},'LATENT_MULTI_SCALE_V2'
+  ),true,'the V6 ordered-ranker gate must not alter the separate legacy ranker representation');
+});
+
 test('TCN-LSTM inner selector scores pairwise ranking on its own purged selection partition',()=>{
   // The independent ranker fits on the earlier model-training block.
   // Execution-head features must therefore be OOS for that ranker.
@@ -1406,16 +1471,76 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   ),'every execution-head rank feature must be scored by a ranker fit on earlier disjoint training rows');
   assert.ok(result.candidates.every(item=>{
     const internal=item.ranking_head?.internal_training_validation;
-    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_TRAINING_VALIDATION_V1'&&
+    return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6'&&
+      internal?.method==='THREE_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_DUAL_METRIC_VALIDATION_V1'&&
+      internal?.epoch_selection_policy===
+        'NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS'&&
       internal?.chronology_valid===true&&
       internal?.outer_validation_or_holdout_used===false&&
       internal?.model_selection_partition_used===false&&
-      internal?.validation_rows>=20&&internal?.purged_rows>=0&&
+      internal?.fold_count===3&&internal?.folds?.length===3&&
+      internal?.folds.every((fold,index)=>
+        fold.fold_index===index+1&&fold.tuning_rows>=20&&fold.validation_rows>=20&&
+        fold.tuning_pairs>=10&&fold.validation_pairs>=10&&
+        Number.isFinite(fold.logistic_validation_pairwise_accuracy_pct)&&
+        fold.logistic_validation_pairwise_accuracy_pct>=0&&fold.logistic_validation_pairwise_accuracy_pct<=100&&
+        Number.isFinite(fold.logistic_validation_pairwise_log_loss)&&
+        fold.logistic_baseline_training_rows===fold.tuning_rows&&
+        fold.logistic_baseline_validation_labels_read===false&&
+        fold.logistic_baseline_validation_or_holdout_used===false&&
+        fold.epoch_training_rows>=20&&fold.epoch_validation_rows>=20&&
+        fold.epoch_training_pairs>=10&&fold.epoch_validation_pairs>=10&&
+        fold.epoch_training_rows+fold.epoch_validation_rows+
+          fold.epoch_purged_rows+fold.epoch_unused_rows===fold.tuning_rows&&
+        fold.epoch_purge_gap_ms>=4*60*60*1000&&
+        fold.epoch_validation_min_at>fold.epoch_training_max_resolved_at&&
+        fold.epoch_validation_max_at<fold.validation_min_at&&
+        fold.purge_gap_ms>=4*60*60*1000&&
+        fold.validation_min_at>fold.tuning_max_resolved_at)&&
+      internal.folds.slice(0,-1).every((fold,index)=>
+        fold.validation_max_at<internal.folds[index+1].validation_min_at&&
+        internal.folds[index+1].tuning_max_at>=fold.validation_max_at)&&
+      internal?.validation_rows>=40&&internal?.purged_rows>=0&&
       internal?.purge_gap_ms>=4*60*60*1000&&
-      internal?.candidate_grid?.length===4&&
+      internal?.candidate_grid?.length===32&&
+      [1,2,3,4,6,8,12,24].every(blockCount=>
+        internal.candidate_grid.some(candidate=>candidate.temporal_block_count===blockCount))&&
+      internal.candidate_grid.every(candidate=>
+        candidate.parameter_count===candidate.temporal_block_count*29&&
+        candidate.steps_per_block===24/candidate.temporal_block_count&&
+        candidate.fold_count===3&&candidate.fold_results?.length===3&&
+        Number.isFinite(candidate.minimum_fold_pairwise_log_loss_improvement))&&
       Number.isFinite(internal?.selected_validation_pairwise_log_loss)&&
+      Number.isFinite(internal?.selected_validation_pairwise_accuracy_pct)&&
+      Number.isFinite(internal?.selected_minimum_fold_pairwise_accuracy_pct)&&
+      Number.isFinite(internal?.selected_validation_pairwise_accuracy_improvement_pct)&&
+      Number.isFinite(internal?.selected_minimum_fold_pairwise_accuracy_improvement_pct)&&
+      Number.isFinite(internal?.selected_minimum_fold_pairwise_log_loss_improvement)&&
+      Number.isFinite(internal?.selected_validation_pairwise_log_loss_improvement)&&
+      internal?.selected_candidate_qualified===(internal?.fold_stable_dual_metric_candidate_count>0)&&
+      internal?.fold_stable_dual_metric_superiority===internal?.selected_candidate_qualified&&
+      internal?.robustness_status===(internal?.selected_candidate_qualified
+        ?'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY':'ABSTAIN_NO_FOLD_STABLE_DUAL_SUPERIORITY')&&
+      internal?.candidate_grid?.every(candidate=>Number.isFinite(candidate.best_validation_pairwise_accuracy_pct)&&
+        Number.isFinite(candidate.minimum_fold_pairwise_accuracy_pct)&&
+        Number.isFinite(candidate.best_validation_pairwise_accuracy_improvement_pct)&&
+        Number.isFinite(candidate.minimum_fold_pairwise_accuracy_improvement_pct)&&
+        Number.isFinite(candidate.minimum_fold_pairwise_log_loss_improvement)&&
+        Number.isFinite(candidate.best_validation_pairwise_log_loss_improvement)&&
+        candidate.fold_results.every(fold=>
+          Number.isFinite(fold.best_validation_pairwise_accuracy_pct)&&
+          Number.isFinite(fold.logistic_validation_pairwise_accuracy_pct)&&
+          Number.isFinite(fold.logistic_validation_pairwise_log_loss)&&
+          Number.isFinite(fold.epoch_selection_pairwise_accuracy_pct)&&
+          Number.isFinite(fold.epoch_selection_pairwise_log_loss)&&
+          fold.epoch_training_rows>=20&&fold.epoch_validation_rows>=20&&
+          fold.epoch_purge_gap_ms>=4*60*60*1000&&
+          Number.isFinite(fold.training_pairwise_accuracy_pct)))&&
       internal?.final_refit_rows===result.model_training_rows&&
-      internal?.final_refit_pairs===item.ranking_head.training_pairs;
+      internal?.final_refit_pairs===item.ranking_head.training_pairs&&
+      internal?.final_refit_epoch_selection_mode===
+        'FIXED_EPOCHS_FROM_NESTED_PURGED_FOLD_EARLY_STOPPING'&&
+      item.ranking_head.epoch_selection_mode==='FIXED_EPOCHS';
   }),'the final ranker must be refit on all pre-execution training rows after purged training-only tuning');
   assert.ok(result.candidates.every(item=>
     item.ranking_score_method==='RAW_ORDERED_696_INDEPENDENT_PAIRWISE_RANK_SCORE_V1'&&
@@ -2181,11 +2306,100 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
   assert.equal(ranker.training_pairs,ranker.pair_support.comparison_pairs);
   assert.ok(ranker.training_pairs>=10);
   assert.equal(ranker.source_partition,'PRE_EXECUTION_MODEL_TRAINING_PARTITION');
+  const chosenBlocks=ranker.training.temporal_block_count;
+  const chosenStepsPerBlock=24/chosenBlocks;
+  assert.equal(ranker.training.parameter_count,chosenBlocks*29);
+  assert.equal(ranker.training.steps_per_block,chosenStepsPerBlock);
+  assert.equal(ranker.training.parameterization_id,
+    'TEMPORAL_BLOCK_TIED_'+chosenBlocks+'X29_V1');
+  assert.equal(ranker.training.internal_training_validation.selected_temporal_block_count,
+    chosenBlocks);
+  assert.ok(ranker.training.internal_training_validation.candidate_grid.length>=8);
+  for(let step=0;step<24;step++){
+    const firstStep=Math.floor(step/chosenStepsPerBlock)*chosenStepsPerBlock;
+    for(let channel=0;channel<29;channel++){
+      const current=step*29+channel,first=firstStep*29+channel;
+      assert.equal(ranker.model_state.orderedRankingHeadWeights[current],
+        ranker.model_state.orderedRankingHeadWeights[first]);
+      assert.equal(ranker.model_state.orderedRankingFeatureMean[current],
+        ranker.model_state.orderedRankingFeatureMean[first]);
+      assert.equal(ranker.model_state.orderedRankingFeatureStd[current],
+        ranker.model_state.orderedRankingFeatureStd[first]);
+    }
+  }
   assert.equal(ranker.training.validation_or_holdout_used,false);
   assert.equal(ranker.training.classifier_parameters_updated,false);
   const rankerMaxResolvedAt=Math.max(...completePartition.map(row=>row.resolved_at));
   const executionFeatureMinAt=Math.min(...executionFeatureRows.map(row=>row.at));
   assert.ok(rankerMaxResolvedAt<executionFeatureMinAt);
+
+  // Exercise the V6 three-fold provenance validator with an actual fitted ranker.
+  const artifactProfile={
+    model:{
+      rankingRepresentation:ranker.model_state.rankingRepresentation,
+      orderedRankingHeadWeights:[...ranker.model_state.orderedRankingHeadWeights],
+      orderedRankingFeatureMean:[...ranker.model_state.orderedRankingFeatureMean],
+      orderedRankingFeatureStd:[...ranker.model_state.orderedRankingFeatureStd]
+    },
+    training:{
+      return_ranking:{
+        representation:'RAW_ORDERED_696_V1',
+        pair_strategy:'PROFITABILITY_BOUNDARY_V1',
+        round_trip_cost_bps:30,
+        minimum_return_gap_pct:0.50,
+        maximum_pairs_per_timestamp:16,
+        ranking_head:{
+          ...ranker.training,
+          downstream_feature_contract:{
+            schema:'RADARX_TCN_LSTM_EXECUTION_RANK_FEATURE_OUT_OF_SAMPLE_CONTRACT_V1',
+            fit_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION',
+            feature_scoring_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+            ranker_training_rows:ranker.training_rows,
+            ranker_training_pairs:ranker.training_pairs,
+            ranker_standardizer_fit_rows:ranker.training.standardization.fit_rows,
+            ranker_standardizer_fit_partition:'TRAINING_PARTITION_ONLY',
+            model_training_max_resolved_at:rankerMaxResolvedAt,
+            execution_feature_min_at:executionFeatureMinAt,
+            purge_gap_ms:executionFeatureMinAt-rankerMaxResolvedAt,
+            training_and_execution_feature_identities_disjoint:true,
+            chronology_valid:true,
+            classifier_parameters_updated_by_ranker:false,
+            validation_or_holdout_used:false,
+            out_of_sample_for_execution_head_features:true
+          }
+        }
+      }
+    }
+  };
+  const artifactProvenance={
+    sourceCommitSha:'1'.repeat(40),
+    datasetSha256:'2'.repeat(64),
+    inputFileSha256:'3'.repeat(64),
+    datasetSourceCommitSha:'4'.repeat(40),
+    datasetRowCount:32300,
+    targetDefinition:'FIRST_TOUCH_PLUS_3_PCT_BEFORE_MINUS_2_PCT_WITHIN_4H_1M_V1',
+    targetSemantics:'UP_IF_PLUS_3_PCT_FIRST_BEFORE_MINUS_2_PCT_ELSE_NON_SUCCESS_WITHIN_4H_1M_V1',
+    featureNames:Array.from({length:696},(_,index)=>'STEP_FEATURE_'+String(index).padStart(3,'0')),
+    roundTripCostBps:30,
+    splitDefinition:{
+      schema:'RADARX_NEURAL_CLOSURE_PURGED_60_20_20_UTC_DAY_SPLIT_V1',
+      purge_ms:86400000,
+      counts:{train:19269,validation:6282,holdout:6389}
+    }
+  };
+  const v6Artifact=createOrderedTemporalRankerArtifact({
+    profile:artifactProfile,provenance:artifactProvenance
+  });
+  const v6Verification=verifyOrderedTemporalRankerArtifact(v6Artifact);
+  assert.equal(v6Verification.valid,true,v6Verification.reason);
+  const v6Tuning=v6Artifact.training_provenance.internal_training_validation;
+  assert.equal(v6Tuning.fold_count,3);
+  assert.equal(v6Tuning.schema,
+    'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6');
+  assert.equal(v6Tuning.selected_candidate_qualified,
+    v6Tuning.fold_stable_dual_metric_candidate_count>0);
+  assert.equal(v6Tuning.robustness_status,v6Tuning.selected_candidate_qualified
+    ?'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY':'ABSTAIN_NO_FOLD_STABLE_DUAL_SUPERIORITY');
 
   // Simulate Logistic OOF coverage filtering out early rows from the classifier
   // residual fit. The independent ranker remains fitted on the full earlier block.

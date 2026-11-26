@@ -58,7 +58,7 @@ test('trainer emits a reproducible manifest and scores only outer validation whi
   assert.match(contracts,/baseline_logistic_raw_brier:baselineValidationBrier/);
 });
 
-test('fixed-SHA collector and trainer accept expanded current top-100 candidate prefilters without relaxing historical gates',async()=>{
+test('legacy fixed-SHA collector retains top-100 while prospective capture selects all eligible pairs',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   const collector=await readFile(new URL('../tools/build-neural-closure-dataset.mjs',import.meta.url),'utf8');
   const policy=await readFile(new URL('../core/neural-closure-data-builder.mjs',import.meta.url),'utf8');
@@ -71,6 +71,17 @@ test('fixed-SHA collector and trainer accept expanded current top-100 candidate 
   assert.match(collector,/rejection_reasons:symbolRejectedReasons/);
   assert.match(collector,/CURRENT_TOP_100_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1/);
   assert.match(policy,/CURRENT_BINANCE_SPOT_24H_TICKER_TOP_100_AT_COLLECTION_TIME/);
+  const universeHelper=await readFile(new URL('../core/neural-closure-universe.mjs',import.meta.url),'utf8');
+  assert.match(universeHelper,/includeAllEligible/);
+  assert.match(universeHelper,/ELIGIBLE_UNIVERSE_EXCEEDS_CONFIGURED_MAX_SYMBOLS/);
+  assert.match(collector,/includeAllEligible:args\.prospectiveOnly===true/);
+  assert.match(collector,/if\(!args\.prospectiveOnly&&\s*symbolRows\.length<Math\.ceil\(schedule\.decision_count\*0\.8\)\)/,
+    'the legacy collector must retain its original 80% per-symbol event coverage floor');
+  assert.match(collector,/historicallyIneligibleEvents\+\+;/,
+    'the prospective collector must account for historical liquidity exclusions separately');
+  const prospectiveWorkflow=await readFile(new URL('../../.github/workflows/neural-closure-prospective-cohort.yml',import.meta.url),'utf8');
+  assert.ok(prospectiveWorkflow.includes('default: "500"'));
+  assert.match(prospectiveWorkflow,/all_eligible_candidates_included!==true/);
   assert.match(trainer,/expectedUniverseSelection/);
   assert.match(trainer,/maximumCandidateSymbols>=10&&maximumCandidateSymbols<=100/);
   assert.match(trainer,/candidate_prefilter\?\.maximum_symbols\)===maximumCandidateSymbols/);
@@ -697,4 +708,24 @@ test('neural candidates cannot open outer validation before passing their purged
   assert.doesNotMatch(trainer,/predictionsByModel\.DENSE_MLP\s*=/);
   assert.match(trainer,/qualificationByModel\.HYBRID_TCN_ATTENTION=\{\s*passed:false/);
   assert.match(trainer,/qualificationByModel\.DENSE_MLP=\{\s*passed:false/);
+});
+
+
+test('pre-fitted tied ordered ranker preserves effective parameter count separately from its 696 inference features',async()=>{
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
+  const newline=String.fromCharCode(10);
+  const mappingAnchor='  Object.assign(model, cloneTree(bestModel));'+newline+'  let rankingHeadFit;';
+  const mappingStart=recurrent.indexOf(mappingAnchor);
+  assert.ok(mappingStart>=0,'pre-fitted ranker mapping must remain explicit and testable');
+  const branchStart=recurrent.indexOf('    rankingHeadFit={',mappingStart);
+  const branchEnd=recurrent.indexOf(newline+'  }else{',branchStart);
+  assert.ok(branchStart>=0&&branchEnd>branchStart,
+    'the pre-fitted ranker mapping branch must be present');
+  const branch=recurrent.slice(branchStart,branchEnd);
+  assert.match(branch,/\.\.\.cloneTree\(preFittedIndependentRankingHead\.training\)/,
+    'the effective free-parameter count must be retained from the fitted ranker metadata');
+  assert.match(branch,/feature_count:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT/,
+    'the expanded inference feature count must stay 696');
+  assert.doesNotMatch(branch,/parameter_count\s*:/,
+    'do not overwrite tied free parameters with the expanded 696-feature inference width');
 });

@@ -55,6 +55,10 @@ function resealArtifact(source, changes = {}) {
     dataset_source_commit_sha: copy.dataset_source_commit_sha,
     split_definition: copy.split_definition,
     purge_definition: copy.purge_definition,
+    evaluation_status: copy.evaluation_status,
+    scientific_qualification_status: copy.scientific_qualification_status,
+    execution_qualification_status: copy.execution_qualification_status,
+    promotion_status: copy.promotion_status,
     artifact_content_hash: copy.artifact_content_hash
   };
   copy.artifact_manifest_hash = sha256(copy.artifact_manifest);
@@ -140,6 +144,10 @@ before(async () => {
     selected_return_estimator: 'HURDLE_EXPECTED_VALUE',
     selected_abstention_percentile: 0.2,
     selection_partition_only: true,
+    threshold_selected_on_inner_selection: true,
+    threshold_frozen_before_outer_validation: true,
+    round_trip_cost_bps: 30,
+    top_k_per_timestamp: 1,
     holdout_values_used: false
   };
   fixture = {
@@ -152,9 +160,19 @@ before(async () => {
         execution_regression_heads: {
           training_rows: 1800,
           model_training_rows: 6500,
+          model_training_max_resolved_at: 14401000,
+          execution_head_min_at: 15301000,
+          purge_gap_ms: 900000,
+          execution_head_split_status: 'READY',
+          execution_head_split_method: 'LATEST_COMPLETE_15M_GROUPS_WITH_FORWARD_LABEL_PURGE',
+          purged_rows: 12,
+          chronology_valid: true,
           source_partition: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+          execution_head_split_source_partition: 'INNER_TRAINING_PARTITION_ONLY',
           representation_out_of_sample: true,
-          training_and_execution_head_identities_disjoint: true
+          training_and_execution_head_identities_disjoint: true,
+          validation_or_holdout_used: false,
+          hurdle_return_head: {validation_or_holdout_used:false}
         }
       }
     },
@@ -171,6 +189,7 @@ before(async () => {
         contextual: {trade_count: 7, win_rate_pct: 42.857142857, net_pnl_pct: 0.060233, max_drawdown_pct: 0.193713},
         pooled_only: {trade_count: 0, win_rate_pct: null, net_pnl_pct: 0, max_drawdown_pct: 0}
       },
+      validation_or_holdout_used_for_fit_or_selection: false,
       candidates: [{
         name: '4H_BRIER_SHARED_RANK_W040_LR0015_E16',
         selection_brier: 0.02892058,
@@ -241,6 +260,50 @@ test('03. artifact contains both independently serialized heads', () => {
   assert.equal(artifact.upstream_ordered_ranker_dependency.feature_count,696);
   assert.equal(artifact.upstream_ordered_ranker_dependency.representation,'RAW_ORDERED_696_V1');
 });
+test('03f. Hurdle rejects overlapping execution-head chronology or a missing purge audit',()=>{
+  const overlap=structuredClone(fixture);
+  overlap.fit.training.execution_regression_heads.execution_head_min_at=
+    overlap.fit.training.execution_regression_heads.model_training_max_resolved_at;
+  assert.throws(()=>createHurdleV2Artifact(overlap),
+    /HURDLE_V2_ARTIFACT_VERIFY_FAILED:EXECUTION_HEAD_CHRONOLOGY_OR_PURGE_INVALID/);
+
+  const missingSplit=structuredClone(fixture);
+  missingSplit.fit.training.execution_regression_heads.execution_head_split_status='UNAVAILABLE';
+  assert.throws(()=>createHurdleV2Artifact(missingSplit),
+    /HURDLE_V2_ARTIFACT_VERIFY_FAILED:EXECUTION_HEAD_CHRONOLOGY_OR_PURGE_INVALID/);
+
+  const wrongSource=structuredClone(fixture);
+  wrongSource.fit.training.execution_regression_heads.execution_head_split_source_partition='OUTER_VALIDATION';
+  assert.throws(()=>createHurdleV2Artifact(wrongSource),
+    /HURDLE_V2_ARTIFACT_VERIFY_FAILED:EXECUTION_HEAD_CHRONOLOGY_OR_PURGE_INVALID/);
+});
+
+test('03e. Hurdle refuses holdout-tainted execution-head training provenance',()=>{
+  const invalid=structuredClone(fixture);
+  invalid.fit.training.execution_regression_heads.validation_or_holdout_used=true;
+  assert.throws(()=>createHurdleV2Artifact(invalid),
+    /HURDLE_V2_ARTIFACT_VERIFY_FAILED:TRAINING_PROVENANCE_HOLDOUT_FLAG_INVALID/);
+});
+
+test('03d. Hurdle uses the selection result holdout flag instead of manufacturing a false value',()=>{
+  const invalid=structuredClone(fixture);
+  invalid.selection.validation_or_holdout_used_for_fit_or_selection=true;
+  assert.throws(()=>createHurdleV2Artifact(invalid),
+    /HURDLE_V2_ARTIFACT_VERIFY_FAILED:HOLDOUT_LOCK_CONTRACT_INVALID/);
+});
+
+test('03c. Hurdle preserves and rejects non-inner or holdout-tainted inference-policy provenance',()=>{
+  const invalid=structuredClone(fixture);
+  invalid.fit.execution_risk_policy={
+    ...invalid.fit.execution_risk_policy,
+    selection_partition_only:false,
+    source_partition:'OUTER_VALIDATION',
+    holdout_values_used:true
+  };
+  assert.throws(()=>createHurdleV2Artifact(invalid),
+    /HURDLE_V2_ARTIFACT_VERIFY_FAILED:ABSTENTION_POLICY_PROVENANCE_INVALID/);
+});
+
 test('03b. Hurdle rejects an upstream ordered-ranker dependency with mismatched provenance',()=>{
   const invalid=structuredClone(fixture);
   invalid.orderedRankingDependency.dataset_sha256='9'.repeat(64);
@@ -481,6 +544,237 @@ test('33. verifier rejects a forged inner-qualified status when all recorded gat
   assert.equal(result.valid, false);
   assert.equal(result.reason, 'QUALIFICATION_GATE_EVIDENCE_INCOMPLETE');
 });
+
+test('33b. Hurdle refuses inner qualification when the upstream ranker has no V6 fold-stability proof',()=>{
+  const invalid=structuredClone(fixture);
+  invalid.innerQualified=true;
+  assert.throws(()=>createHurdleV2Artifact(invalid),
+    /HURDLE_V2_RANKER_FOLD_STABILITY_EVIDENCE_REQUIRED/);
+});
+
+test('33c. verifier requires strict pairwise accuracy and log-loss superiority over Logistic in all three ranker folds',()=>{
+  const qualified=structuredClone(artifact);
+  const qualification=qualified.inner_qualification;
+  const selectedName='SYNTHETIC_FOLD_STABLE_CANDIDATE';
+  qualification.passed=true;
+  qualification.status='INNER_QUALIFIED_FOR_OUTER_REPLAY';
+  qualification.selection_status='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY';
+  qualification.selected_configuration=selectedName;
+  qualification.diagnostic_configuration=null;
+  const makeExecutionEvidence=(status,anchorGate)=>({
+    schema:'RADARX_TCN_LSTM_SELECTIVE_EXECUTION_POLICY_V2',
+    status,passed:true,selection_partition_only:true,
+    source_partition:'INNER_SELECTION_ONLY',
+    threshold_selected_on_inner_selection:true,
+    threshold_frozen_before_outer_validation:true,
+    holdout_values_used:false,round_trip_cost_bps:30,
+    minimum_trades:20,minimum_win_rate_pct:55,maximum_drawdown_pct:8,
+    top_k_per_timestamp:1,
+    selected_trial:{
+      top_k_per_timestamp:1,
+      passed:true,
+      gates:{
+        return_data_complete:true,minimum_trades:true,minimum_win_rate:true,
+        positive_net_pnl:true,maximum_drawdown:true,genuine_abstention:true,
+        matched_logistic_signal_count:true,matched_logistic_executed_trade_count:true,
+        [anchorGate]:true
+      },
+      model_metrics:{return_data_status:'COMPLETE',signal_count:24,trade_count:24,
+        win_rate_pct:62.5,net_pnl_pct:2.1,max_drawdown_pct:4},
+      logistic_anchor_metrics:{return_data_status:'COMPLETE',signal_count:24,trade_count:24,
+        net_pnl_pct:1.2,max_drawdown_pct:4.5},
+      logistic_anchor_signal_counts_matched:true,
+      logistic_anchor_trade_counts_matched:true
+    }
+  });
+  const contextAblation={
+    schema:'RADARX_TCN_LSTM_EXECUTION_HEAD_CONTEXT_ABLATION_V1',
+    status:'EVALUATED',source_partition:'INNER_SELECTION_ONLY',
+    baseline_variant:'POOLED_ONLY',candidate_variant:'LOGIT_CONTEXT_AUGMENTED',
+    pooled_only_no_exposure:true,context_policy_passed:true,
+    both_policies_frozen_on_selection:true,
+    baseline_and_candidate_use_matched_logistic_trade_counts:true,
+    pooled_only_metrics:{signal_count:0,trade_count:0,win_rate_pct:null,
+      net_pnl_pct:0,max_drawdown_pct:0},
+    context_metrics:{signal_count:24,trade_count:24,win_rate_pct:62.5,
+      net_pnl_pct:2.1,max_drawdown_pct:4},
+    gates:{context_policy_absolute_gates:true,net_pnl_strictly_improved:true,
+      win_rate_not_worse:true,drawdown_not_worse:true},
+    passed:true,holdout_values_used:false
+  };
+  qualification.baseline={selection_brier:0.03};
+  qualification.required_inner_improvement=0.00025;
+  qualification.gate_results={qualified:true,result:contextAblation,
+    source_partition:'INNER_SELECTION_ONLY',holdout_values_used:false};
+  qualification.context_ablation=contextAblation;
+  qualification.ranking_head_selection_qualification={qualified:true,status:'EVALUATED',
+    source_partition:'INNER_SELECTION_ONLY',holdout_values_used:false};
+  qualification.candidates=[{
+    name:selectedName,
+    passed_inner_margin:true,
+    passed_inner_brier_margin:true,
+    passed_inner_pairwise_ranking_gate:true,
+    selection_brier:0.028,
+    logistic_selection_brier:0.03,
+    brier_improvement:0.002,
+    independent_ranking_signal_passed:true,
+    ranking_head_selection_qualified:true,
+    execution_head_context_ablation_passed:true,
+    execution_risk_policy:makeExecutionEvidence(
+      'SELECTIVE_EXECUTION_POLICY_PASSED_INNER_SELECTION',
+      'beats_matched_logistic_anchor'
+    ),
+    ranking_execution_selection:makeExecutionEvidence(
+      'EVALUATED','beats_logistic_anchor'
+    ),
+    return_selection_diagnostics:{status:'AVAILABLE',preliminary_return_screen_candidates:1}
+  }];
+  qualified.evaluation_status='INNER_QUALIFIED_FOR_OUTER_REPLAY';
+  qualified.scientific_qualification_status='INNER_QUALIFIED_FOR_OUTER_REPLAY';
+  qualified.execution_qualification_status='INNER_QUALIFIED_FOR_OUTER_REPLAY';
+
+  const withoutProof=resealArtifact(qualified);
+  assert.equal(verifyHurdleV2Artifact(withoutProof).reason,
+    'RANKER_FOLD_STABILITY_EVIDENCE_MISSING_OR_INVALID');
+
+  const supported=structuredClone(qualified);
+  supported.upstream_ordered_ranker_dependency.ranker_qualification={
+    schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6',
+    fold_count:3,
+    selected_candidate_qualified:true,
+    fold_stable_dual_metric_superiority:true,
+    fold_stable_dual_metric_candidate_count:1,
+    robustness_status:'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY',
+    selection_rule:'REQUIRE_STRICT_POSITIVE_LOGISTIC_MARGINS_FOR_PAIRWISE_ACCURACY_AND_LOG_LOSS_IN_EVERY_PURGED_TRAINING_FOLD',
+    validation_or_holdout_used:false,
+    selected_candidate:{
+      temporal_block_count:4,
+      l2:0.05,
+      best_epoch:8,
+      parameterization_id:'TEMPORAL_BLOCK_TIED_4X29_V1',
+      parameter_count:116,
+      minimum_fold_pairwise_accuracy_improvement_pct:0.5,
+      minimum_fold_pairwise_log_loss_improvement:0.01,
+      fold_results:[
+        {fold_index:1,candidate_pairwise_accuracy_pct:62,logistic_pairwise_accuracy_pct:60,
+          accuracy_improvement_pct:2,candidate_pairwise_log_loss:0.60,
+          logistic_pairwise_log_loss:0.62,log_loss_improvement:0.02},
+        {fold_index:2,candidate_pairwise_accuracy_pct:62.5,logistic_pairwise_accuracy_pct:62,
+          accuracy_improvement_pct:0.5,candidate_pairwise_log_loss:0.61,
+          logistic_pairwise_log_loss:0.62,log_loss_improvement:0.01},
+        {fold_index:3,candidate_pairwise_accuracy_pct:64,logistic_pairwise_accuracy_pct:63,
+          accuracy_improvement_pct:1,candidate_pairwise_log_loss:0.58,
+          logistic_pairwise_log_loss:0.60,log_loss_improvement:0.02}
+      ]
+    }
+  };
+  const sealed=resealArtifact(supported);
+  const result=verifyHurdleV2Artifact(sealed);
+  assert.equal(result.valid,true,result.reason);
+  assert.equal(sealed.holdout_status,'LOCKED');
+  assert.equal(sealed.promotion_status,'NOT_APPROVED');
+  assert.equal(sealed.real_order_execution,false);
+
+  const accuracyRegression=structuredClone(supported);
+  const badAccuracyFold=accuracyRegression.upstream_ordered_ranker_dependency
+    .ranker_qualification.selected_candidate.fold_results[1];
+  badAccuracyFold.candidate_pairwise_accuracy_pct=badAccuracyFold.logistic_pairwise_accuracy_pct;
+  badAccuracyFold.accuracy_improvement_pct=0;
+  const accuracyResealed=resealArtifact(accuracyRegression);
+  assert.equal(verifyHurdleV2Artifact(accuracyResealed).reason,
+    'RANKER_FOLD_STABILITY_EVIDENCE_MISSING_OR_INVALID',
+    'one fold with no accuracy improvement must fail closed');
+
+  const lossRegression=structuredClone(supported);
+  const badLossFold=lossRegression.upstream_ordered_ranker_dependency
+    .ranker_qualification.selected_candidate.fold_results[2];
+  badLossFold.candidate_pairwise_log_loss=badLossFold.logistic_pairwise_log_loss+0.001;
+  badLossFold.log_loss_improvement=-0.001;
+  const lossResealed=resealArtifact(lossRegression);
+  assert.equal(verifyHurdleV2Artifact(lossResealed).reason,
+    'RANKER_FOLD_STABILITY_EVIDENCE_MISSING_OR_INVALID',
+    'one fold with worse pairwise log loss must fail closed');
+
+  const forgedBrier=structuredClone(supported);
+  forgedBrier.inner_qualification.candidates[0].brier_improvement=0.0001;
+  const brierResealed=resealArtifact(forgedBrier);
+  assert.equal(verifyHurdleV2Artifact(brierResealed).reason,
+    'CLASSIFIER_BRIER_MARGIN_EVIDENCE_INVALID',
+    'a recorded Brier margin below the frozen inner threshold must fail closed');
+
+  const inconsistentBrier=structuredClone(supported);
+  inconsistentBrier.inner_qualification.candidates[0].selection_brier=0.029;
+  const inconsistentBrierResealed=resealArtifact(inconsistentBrier);
+  assert.equal(verifyHurdleV2Artifact(inconsistentBrierResealed).reason,
+    'CLASSIFIER_BRIER_MARGIN_EVIDENCE_INVALID',
+    'recorded Brier improvement must recompute from the saved Logistic and model Brier values');
+
+  const mismatchedLogisticBrier=structuredClone(supported);
+  mismatchedLogisticBrier.inner_qualification.candidates[0].logistic_selection_brier=0.031;
+  const mismatchedLogisticBrierResealed=resealArtifact(mismatchedLogisticBrier);
+  assert.equal(verifyHurdleV2Artifact(mismatchedLogisticBrierResealed).reason,
+    'CLASSIFIER_BRIER_MARGIN_EVIDENCE_INVALID',
+    'candidate Logistic Brier must match the immutable selected Logistic baseline');
+
+  const belowWinGate=structuredClone(supported);
+  const winTrial=belowWinGate.inner_qualification.candidates[0].execution_risk_policy.selected_trial;
+  winTrial.model_metrics.win_rate_pct=54.9;
+  const winResealed=resealArtifact(belowWinGate);
+  assert.equal(verifyHurdleV2Artifact(winResealed).reason,
+    'PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID',
+    'a candidate below the predeclared 55% win-rate gate must fail closed');
+
+  const negativePnl=structuredClone(supported);
+  negativePnl.inner_qualification.candidates[0].ranking_execution_selection
+    .selected_trial.model_metrics.net_pnl_pct=0;
+  const pnlResealed=resealArtifact(negativePnl);
+  assert.equal(verifyHurdleV2Artifact(pnlResealed).reason,
+    'PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID',
+    'a candidate without positive net PnL must fail closed');
+
+  const excessiveDrawdown=structuredClone(supported);
+  excessiveDrawdown.inner_qualification.candidates[0].execution_risk_policy
+    .selected_trial.model_metrics.max_drawdown_pct=8.01;
+  const drawdownResealed=resealArtifact(excessiveDrawdown);
+  assert.equal(verifyHurdleV2Artifact(drawdownResealed).reason,
+    'PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID',
+    'a candidate above the 8% maximum drawdown must fail closed');
+
+  const mismatchedSignals=structuredClone(supported);
+  mismatchedSignals.inner_qualification.candidates[0].execution_risk_policy
+    .selected_trial.logistic_anchor_metrics.signal_count=23;
+  const signalsResealed=resealArtifact(mismatchedSignals);
+  assert.equal(verifyHurdleV2Artifact(signalsResealed).reason,
+    'PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID',
+    'the actual model and Logistic signal counts must match, not only the recorded flag');
+
+  const fractionalTrades=structuredClone(supported);
+  const fractionalTrial=fractionalTrades.inner_qualification.candidates[0]
+    .execution_risk_policy.selected_trial;
+  fractionalTrial.model_metrics.trade_count=24.5;
+  fractionalTrial.logistic_anchor_metrics.trade_count=24.5;
+  const fractionalResealed=resealArtifact(fractionalTrades);
+  assert.equal(verifyHurdleV2Artifact(fractionalResealed).reason,
+    'PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID',
+    'executed trade counts must be integers');
+
+  const impossibleWinRate=structuredClone(supported);
+  impossibleWinRate.inner_qualification.candidates[0].ranking_execution_selection
+    .selected_trial.model_metrics.win_rate_pct=100.1;
+  const impossibleWinResealed=resealArtifact(impossibleWinRate);
+  assert.equal(verifyHurdleV2Artifact(impossibleWinResealed).reason,
+    'PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID',
+    'win rate must remain within the mathematical 0–100% interval');
+
+  const wrongTopK=structuredClone(supported);
+  wrongTopK.inner_qualification.candidates[0].ranking_execution_selection
+    .selected_trial.top_k_per_timestamp=2;
+  const wrongTopKResealed=resealArtifact(wrongTopK);
+  assert.equal(verifyHurdleV2Artifact(wrongTopKResealed).reason,
+    'PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID',
+    'profitability evidence must preserve the frozen top-1 execution rule');
+});
+
 test('34. verifier rejects scientific qualification status drift from the qualification record', () => {
   const resealed = resealArtifact(artifact, {
     scientific_qualification_status: 'INNER_QUALIFIED_FOR_OUTER_REPLAY'
