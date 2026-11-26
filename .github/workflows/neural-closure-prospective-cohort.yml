@@ -1,6 +1,17 @@
 name: Build 224 — Capture Locked Out-of-Time Backfill Cohort
 
 on:
+  push:
+    branches:
+      - ops/build224-capture-locked-cohort-20261126
+    paths:
+      - '.github/workflows/neural-closure-prospective-cohort.yml'
+      - 'phase2/core/neural-closure-data-builder.mjs'
+      - 'phase2/core/neural-closure-universe.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/core/neural-closure-secure-bundle.mjs'
+      - 'phase2/tools/build-neural-closure-dataset.mjs'
+      - 'phase2/tools/secure-prospective-cohort-bundle.mjs'
   workflow_dispatch:
     inputs:
       max_symbols:
@@ -19,6 +30,7 @@ concurrency:
 jobs:
   capture:
     name: Capture a retrospective out-of-time, locked, unscored cohort
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[CAPTURE-LOCKED-COHORT]')
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -66,7 +78,7 @@ jobs:
 
       - name: Capture real Binance Spot candles after the legacy cohort boundary
         env:
-          MAX_SYMBOLS: ${{ inputs.max_symbols }}
+          MAX_SYMBOLS: ${{ inputs.max_symbols || '500' }}
         run: |
           set -euo pipefail
           test "$(date -u -d "$PROSPECTIVE_START_AT" +%s)" -gt "$(date -u -d "$LEGACY_LAST_LABEL_RESOLVED_AT" +%s)"
