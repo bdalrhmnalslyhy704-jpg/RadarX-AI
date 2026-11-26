@@ -257,7 +257,8 @@ test('prospective builder separates historical liquidity ineligibility from data
   assert.match(source,/historical_ineligibility_reasons:historicalIneligibilityReasons/);
   assert.match(source,/rejected_events:symbolRejected/);
   assert.match(source,/coverage:coverage\.checks/);
-  assert.doesNotMatch(source,/REJECTED_LOW_VALID_EVENT_COVERAGE/);
+  assert.match(source,/if\(!args\.prospectiveOnly&&\s*symbolRows\.length<Math\.ceil\(schedule\.decision_count\*0\.8\)\)/,
+    'the 80% row threshold is legacy-only; prospective exclusions must be accounted separately');
 });
 
 test('prospective cohort row coverage requires rejection reason counts to equal rejected events',()=>{
