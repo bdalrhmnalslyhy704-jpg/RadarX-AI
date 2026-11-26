@@ -117,3 +117,43 @@ test('prospective bundle decryption rejects a tampered authentication tag and pu
     await rm(directory,{recursive:true,force:true});
   }
 });
+
+
+test('prospective bundle decryption rejects an invalid envelope header without publishing plaintext',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'radarx-secure-header-tamper-'));
+  const source=join(directory,'source.bin');
+  const encrypted=join(directory,'source.enc');
+  const tampered=join(directory,'tampered.enc');
+  const output=join(directory,'must-not-exist.bin');
+  const key=randomBytes(32);
+  try{
+    await writeFile(source,Buffer.from('prospective cohort header integrity'));
+    await encryptProspectiveBundleFile(source,encrypted,key);
+    const bytes=await readFile(encrypted);
+    bytes[0]^=0x01;
+    await writeFile(tampered,bytes);
+    await assert.rejects(
+      decryptProspectiveBundleFile(tampered,output,key),
+      /PROSPECTIVE_BUNDLE_MAGIC_INVALID/
+    );
+    assert.equal((await readdir(directory)).includes('must-not-exist.bin'),false);
+  }finally{
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+
+test('prospective bundle decryption rejects a truncated envelope before creating output',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'radarx-secure-truncated-'));
+  const truncated=join(directory,'truncated.enc');
+  const output=join(directory,'must-not-exist.bin');
+  try{
+    await writeFile(truncated,Buffer.from('RADARX'));
+    await assert.rejects(
+      decryptProspectiveBundleFile(truncated,output,randomBytes(32)),
+      /PROSPECTIVE_BUNDLE_ENVELOPE_TOO_SMALL/
+    );
+    assert.deepEqual(await readdir(directory),['truncated.enc']);
+  }finally{
+    await rm(directory,{recursive:true,force:true});
+  }
+});
