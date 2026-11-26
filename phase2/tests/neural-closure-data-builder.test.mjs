@@ -229,18 +229,24 @@ test('prospective cohort row coverage rejects an invalid decision schedule',()=>
 });
 
 test('prospective cohort row coverage verifies exact per-symbol row counts and totals',()=>{
+  const first=Date.UTC(2026,10,18,0,15,0)-1;
+  const interval=4*60*60*1000;
+  const schedule={
+    first_decision_at:first,last_decision_at:first+2*interval,
+    decision_interval_ms:interval
+  };
   const selectedSymbols=['BTCUSDT','ETHUSDT'];
   const symbolResults=[
     {symbol:'BTCUSDT',status:'INCLUDED',valid_events:2},
     {symbol:'ETHUSDT',status:'INCLUDED',valid_events:1}
   ];
   const rows=[
-    {symbol:'BTCUSDT',at:1},
-    {symbol:'BTCUSDT',at:2},
-    {symbol:'ETHUSDT',at:1}
+    {symbol:'BTCUSDT',at:first,resolved_at:first+interval},
+    {symbol:'BTCUSDT',at:first+interval,resolved_at:first+2*interval},
+    {symbol:'ETHUSDT',at:first,resolved_at:first+interval}
   ];
   const audit=verifyProspectiveCohortRowCoverage({
-    selectedSymbols,symbolResults,rows,
+    selectedSymbols,symbolResults,rows,schedule,
     counts:{rows:3,included_symbols:2,requested_symbols:2}
   });
   assert.equal(audit.status,'VERIFIED');
@@ -251,6 +257,7 @@ test('prospective cohort row coverage verifies exact per-symbol row counts and t
 });
 
 test('prospective cohort row coverage rejects a symbol whose stored valid-event count lies',()=>{
+  const first=Date.UTC(2026,10,18,0,15,0)-1,interval=4*60*60*1000;
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
     selectedSymbols:['BTCUSDT','ETHUSDT'],
     symbolResults:[
@@ -258,39 +265,50 @@ test('prospective cohort row coverage rejects a symbol whose stored valid-event 
       {symbol:'ETHUSDT',status:'INCLUDED',valid_events:2}
     ],
     rows:[
-      {symbol:'BTCUSDT',at:1},{symbol:'BTCUSDT',at:2},
-      {symbol:'ETHUSDT',at:1}
+      {symbol:'BTCUSDT',at:first,resolved_at:first+interval},
+      {symbol:'BTCUSDT',at:first+interval,resolved_at:first+2*interval},
+      {symbol:'ETHUSDT',at:first,resolved_at:first+interval}
     ],
+    schedule:{first_decision_at:first,last_decision_at:first+2*interval,decision_interval_ms:interval},
     counts:{rows:3,included_symbols:2,requested_symbols:2}
   }),/PROSPECTIVE_COHORT_SYMBOL_ROW_COUNT_MISMATCH/);
 });
 
 test('prospective cohort row coverage rejects foreign or missing symbol rows',()=>{
+  const first=Date.UTC(2026,10,18,0,15,0)-1,interval=4*60*60*1000;
   const common={
     selectedSymbols:['BTCUSDT','ETHUSDT'],
     symbolResults:[
       {symbol:'BTCUSDT',status:'INCLUDED',valid_events:1},
       {symbol:'ETHUSDT',status:'INCLUDED',valid_events:1}
     ],
-    counts:{rows:2,included_symbols:2,requested_symbols:2}
+    counts:{rows:2,included_symbols:2,requested_symbols:2},
+    schedule:{first_decision_at:first,last_decision_at:first+interval,decision_interval_ms:interval}
   };
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
-    ...common,rows:[{symbol:'BTCUSDT'},{symbol:'FAKEUSDT'}]
+    ...common,rows:[
+      {symbol:'BTCUSDT',at:first,resolved_at:first+interval},
+      {symbol:'FAKEUSDT',at:first,resolved_at:first+interval}
+    ]
   }),/PROSPECTIVE_COHORT_ROW_SYMBOL_UNEXPECTED/);
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
-    ...common,rows:[{symbol:'BTCUSDT'}]
+    ...common,rows:[{symbol:'BTCUSDT',at:first,resolved_at:first+interval}]
   }),/PROSPECTIVE_COHORT_SYMBOL_ROW_COUNT_MISMATCH/);
 });
 
 test('prospective cohort row coverage rejects mismatched aggregate counts and duplicate symbols',()=>{
+  const first=Date.UTC(2026,10,18,0,15,0)-1,interval=4*60*60*1000;
+  const schedule={first_decision_at:first,last_decision_at:first+interval,decision_interval_ms:interval};
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
     selectedSymbols:['BTCUSDT','ETHUSDT','ETHUSDT'],
-    symbolResults:[],rows:[],counts:{rows:0,included_symbols:3,requested_symbols:3}
+    symbolResults:[],rows:[],schedule,
+    counts:{rows:0,included_symbols:3,requested_symbols:3}
   }),/PROSPECTIVE_COHORT_SELECTED_SYMBOLS_INVALID/);
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
     selectedSymbols:['BTCUSDT'],
     symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:1}],
-    rows:[{symbol:'BTCUSDT'}],
+    rows:[{symbol:'BTCUSDT',at:first,resolved_at:first+interval}],
+    schedule,
     counts:{rows:2,included_symbols:1,requested_symbols:1}
   }),/PROSPECTIVE_COHORT_AGGREGATE_COUNTS_MISMATCH/);
 });
