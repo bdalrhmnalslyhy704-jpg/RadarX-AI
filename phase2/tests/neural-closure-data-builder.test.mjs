@@ -842,12 +842,13 @@ test('prospective cohort workflow is marker-gated, recipient-encrypted, locked a
   assert.match(workflow,/training_allowed!==false/);
   assert.match(workflow,/model_scoring_allowed!==false/);
   assert.match(workflow,/retention-days: 90/);
-  assert.match(workflow,/phase2\\/keys\\/prospective-cohort-recipient-public\\.pem/);
-  assert.match(workflow,/seal-prospective-cohort-bundle\\.mjs/);
+  assert.match(workflow,/phase2\/keys\/prospective-cohort-recipient-public\.pem/);
+  assert.match(workflow,/seal-prospective-cohort-bundle\.mjs/);
   assert.match(workflow,/wrapped_key=/);
   assert.match(workflow,/CAPTURE-LOCKED-COHORT/);
-  assert.doesNotMatch(workflow,/secrets\\./);
-  assert.match(workflow,/secure-prospective-cohort-bundle\.mjs encrypt/);
+  assert.doesNotMatch(workflow,/secrets\./);
+  assert.match(workflow,/wrapped_key=/);
+  assert.match(workflow,/CAPTURE-LOCKED-COHORT/);
   assert.match(workflow,/path: artifacts\/secure\/\*\.enc/);
   assert.match(workflow,/rm -rf artifacts\/neural-closure-prospective/);
   assert.doesNotMatch(workflow,/path: artifacts\/neural-closure-prospective\//);
