@@ -31,6 +31,7 @@ permissions:
 
 # Push-based capture is enabled only on this isolated ops branch and only for an explicit marker commit.
 # Re-run after updating the collection-workflow contract tests and public-key envelope guard.
+# Prospective capture hard cap is 1000; the collector still fails closed above this value.
 concurrency:
   group: build224-prospective-neural-cohort
   cancel-in-progress: false
