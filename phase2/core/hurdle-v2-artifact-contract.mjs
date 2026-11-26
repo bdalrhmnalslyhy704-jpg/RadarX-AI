@@ -703,7 +703,7 @@ export function createHurdleV2Artifact({
       model_and_execution_head_identities_disjoint:
         trainingSummary.training_and_execution_head_identities_disjoint === true,
       representation_out_of_sample: trainingSummary.representation_out_of_sample === true,
-      validation_or_holdout_used: false
+      validation_or_holdout_used: trainingSummary.validation_or_holdout_used
     },
     training_provenance: {
       fit_boundary: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
@@ -713,6 +713,7 @@ export function createHurdleV2Artifact({
       representation_out_of_sample: trainingSummary.representation_out_of_sample === true,
       training_and_execution_head_identities_disjoint:
         trainingSummary.training_and_execution_head_identities_disjoint === true,
+      validation_or_holdout_used: trainingSummary.validation_or_holdout_used,
       round_trip_cost_bps: roundTripCostBps,
       hurdle_return_head: {
         schema: 'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V2',
@@ -738,7 +739,8 @@ export function createHurdleV2Artifact({
             purged_rows:contextual.probability_calibration.purged_rows,
             horizon_ms:contextual.probability_calibration.horizon_ms,
             resolved_label_gap_ms:contextual.probability_calibration.resolved_label_gap_ms,
-            chronology_valid:contextual.probability_calibration.chronology_valid
+            chronology_valid:contextual.probability_calibration.chronology_valid,
+            validation_or_holdout_used:contextual.probability_calibration.validation_or_holdout_used
           },
           pooled:{
             schema:pooled.probability_calibration.schema,
@@ -748,12 +750,13 @@ export function createHurdleV2Artifact({
             purged_rows:pooled.probability_calibration.purged_rows,
             horizon_ms:pooled.probability_calibration.horizon_ms,
             resolved_label_gap_ms:pooled.probability_calibration.resolved_label_gap_ms,
-            chronology_valid:pooled.probability_calibration.chronology_valid
+            chronology_valid:pooled.probability_calibration.chronology_valid,
+            validation_or_holdout_used:pooled.probability_calibration.validation_or_holdout_used
           }
         },
-        validation_or_holdout_used: false
+        validation_or_holdout_used: trainingSummary.hurdle_return_head?.validation_or_holdout_used
       },
-      validation_or_holdout_used: false
+      validation_or_holdout_used: trainingSummary.validation_or_holdout_used
     },
     inner_qualification: qualification,
     training_status: 'TRAINED',
@@ -943,6 +946,12 @@ export function verifyHurdleV2Artifact(artifact) {
       if (!finite(value)||value<0||value>1)
         return fail('POSITIVE_RETURN_PROBABILITY_THRESHOLD_INVALID:'+name);
     }
+    if (artifact.purge_definition?.validation_or_holdout_used !== false ||
+        artifact.training_provenance?.validation_or_holdout_used !== false ||
+        artifact.training_provenance?.hurdle_return_head?.validation_or_holdout_used !== false ||
+        artifact.training_provenance?.hurdle_return_head?.probability_calibration?.contextual?.validation_or_holdout_used !== false ||
+        artifact.training_provenance?.hurdle_return_head?.probability_calibration?.pooled?.validation_or_holdout_used !== false)
+      return fail('TRAINING_PROVENANCE_HOLDOUT_FLAG_INVALID');
     if (artifact.holdout_status !== 'LOCKED' || artifact.split_definition?.holdout_scored_rows !== 0 ||
         artifact.inner_qualification?.validation_or_holdout_used !== false)
       return fail('HOLDOUT_LOCK_CONTRACT_INVALID');

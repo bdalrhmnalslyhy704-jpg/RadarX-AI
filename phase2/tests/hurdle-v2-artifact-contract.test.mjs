@@ -162,7 +162,9 @@ before(async () => {
           model_training_rows: 6500,
           source_partition: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
           representation_out_of_sample: true,
-          training_and_execution_head_identities_disjoint: true
+          training_and_execution_head_identities_disjoint: true,
+          validation_or_holdout_used: false,
+          hurdle_return_head: {validation_or_holdout_used:false}
         }
       }
     },
@@ -250,6 +252,13 @@ test('03. artifact contains both independently serialized heads', () => {
   assert.equal(artifact.upstream_ordered_ranker_dependency.feature_count,696);
   assert.equal(artifact.upstream_ordered_ranker_dependency.representation,'RAW_ORDERED_696_V1');
 });
+test('03e. Hurdle refuses holdout-tainted execution-head training provenance',()=>{
+  const invalid=structuredClone(fixture);
+  invalid.fit.training.execution_regression_heads.validation_or_holdout_used=true;
+  assert.throws(()=>createHurdleV2Artifact(invalid),
+    /HURDLE_V2_ARTIFACT_VERIFY_FAILED:TRAINING_PROVENANCE_HOLDOUT_FLAG_INVALID/);
+});
+
 test('03d. Hurdle uses the selection result holdout flag instead of manufacturing a false value',()=>{
   const invalid=structuredClone(fixture);
   invalid.selection.validation_or_holdout_used_for_fit_or_selection=true;
