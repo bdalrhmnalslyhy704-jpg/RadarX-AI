@@ -7,7 +7,7 @@ import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
 import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
 import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
-import {selectBinanceSpotUsdtUniverse,verifyProspectiveUniverseCapture,verifyProspectiveCohortRowCoverage} from '../core/neural-closure-universe.mjs';
+import {selectBinanceSpotUsdtUniverse,verifyProspectiveUniverseCapture,verifyProspectiveCohortRowCoverage,auditProspectiveHistoryStart} from '../core/neural-closure-universe.mjs';
 import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,parseBinanceSpotKline,
@@ -856,4 +856,43 @@ test('prospective cohort workflow is marker-gated, recipient-encrypted, locked a
   assert.doesNotMatch(workflow,/--hurdleInnerOnly/);
   assert.doesNotMatch(workflow,/--openHoldout/);
   assert.doesNotMatch(workflow,/real_order_execution:\s*true/);
+});
+
+
+test('prospective history-start audit explicitly excludes candidates without the required 24h prehistory and preserves full accounting',()=>{
+  const expectedStartOpenAt=Date.parse('2026-11-17T00:15:00.000Z');
+  const candidates=['BTCUSDT','ETHUSDT','NEW1USDT','NEW2USDT'];
+  const results=[
+    {symbol:'BTCUSDT',status:'AVAILABLE',first_open_at:expectedStartOpenAt,reason:null},
+    {symbol:'ETHUSDT',status:'AVAILABLE',first_open_at:expectedStartOpenAt,reason:null},
+    {symbol:'NEW1USDT',status:'UNAVAILABLE',first_open_at:null,reason:'NO_CANDLE_AT_REQUIRED_START'},
+    {symbol:'NEW2USDT',status:'UNAVAILABLE',first_open_at:null,reason:'NO_CANDLE_AT_REQUIRED_START'}
+  ];
+  const audit=auditProspectiveHistoryStart({candidates,results,expectedStartOpenAt});
+  assert.equal(audit.schema,'PROSPECTIVE_HISTORY_START_PREFLIGHT_V1');
+  assert.equal(audit.status,'VERIFIED');
+  assert.equal(audit.candidate_count,4);
+  assert.equal(audit.included_candidate_count,2);
+  assert.equal(audit.excluded_candidate_count,2);
+  assert.deepEqual(audit.included_symbols,['BTCUSDT','ETHUSDT']);
+  assert.deepEqual(audit.excluded_symbols.map(item=>item.symbol),['NEW1USDT','NEW2USDT']);
+  assert.equal(audit.every_candidate_accounted,true);
+  assert.equal(audit.current_ticker_liquidity_not_used,true);
+  assert.equal(audit.no_top_n_truncation,true);
+  assert.throws(()=>auditProspectiveHistoryStart({
+    candidates,results:results.slice(0,3),expectedStartOpenAt
+  }),/PROSPECTIVE_HISTORY_START_RESULT_SET_MISMATCH/);
+  const wrongStart=structuredClone(results);
+  wrongStart[1].first_open_at=expectedStartOpenAt+15*60_000;
+  assert.throws(()=>auditProspectiveHistoryStart({
+    candidates,results:wrongStart,expectedStartOpenAt
+  }),/PROSPECTIVE_HISTORY_START_AVAILABLE_EVIDENCE_INVALID/);
+  const noBtc=structuredClone(results).map(item=>
+    item.symbol==='BTCUSDT'
+      ?{symbol:'BTCUSDT',status:'UNAVAILABLE',first_open_at:null,reason:'NO_CANDLE_AT_REQUIRED_START'}
+      :item
+  );
+  assert.throws(()=>auditProspectiveHistoryStart({
+    candidates,results:noBtc,expectedStartOpenAt
+  }),/BTCUSDT_REQUIRED_PREHISTORY_UNAVAILABLE/);
 });
