@@ -248,3 +248,70 @@ export function verifyProspectiveCohortRowCoverage({
     all_rows_on_declared_decision_grid:true
   };
 }
+
+
+/**
+ * Audit whether each currently-trading candidate has the exact 15m candle
+ * needed to begin the cohort's 24h historical-liquidity lookback. Candidates
+ * without this prehistory are explicitly excluded before collection; gaps
+ * after the start boundary remain hard failures in the full archive audit.
+ */
+export function auditProspectiveHistoryStart({
+  candidates,results,expectedStartOpenAt
+}={}){
+  if(!Array.isArray(candidates)||!Array.isArray(results)||
+    !Number.isSafeInteger(expectedStartOpenAt)||expectedStartOpenAt<=0)
+    throw new TypeError('PROSPECTIVE_HISTORY_START_AUDIT_ARGUMENTS_INVALID');
+  const names=items=>items.map(item=>String(
+    typeof item==='string'?item:item?.symbol??''
+  ).trim().toUpperCase());
+  const candidateNames=names(candidates).sort();
+  const resultNames=names(results).sort();
+  if(candidateNames.some(name=>!name)||new Set(candidateNames).size!==candidateNames.length)
+    throw new Error('PROSPECTIVE_HISTORY_START_CANDIDATES_INVALID');
+  if(resultNames.some(name=>!name)||new Set(resultNames).size!==resultNames.length)
+    throw new Error('PROSPECTIVE_HISTORY_START_DUPLICATE_OR_INVALID_RESULT');
+  const same=(left,right)=>left.length===right.length&&
+    left.every((value,index)=>value===right[index]);
+  if(!same(candidateNames,resultNames))
+    throw new Error('PROSPECTIVE_HISTORY_START_RESULT_SET_MISMATCH');
+  for(const item of results){
+    if(item?.status==='AVAILABLE'){
+      if(Number(item.first_open_at)!==expectedStartOpenAt||
+        item.reason!==null&&item.reason!==undefined)
+        throw new Error('PROSPECTIVE_HISTORY_START_AVAILABLE_EVIDENCE_INVALID:'+
+          String(item?.symbol??''));
+    }else if(item?.status==='UNAVAILABLE'){
+      if(item.first_open_at!==null||
+        item.reason!=='NO_CANDLE_AT_REQUIRED_START')
+        throw new Error('PROSPECTIVE_HISTORY_START_EXCLUSION_EVIDENCE_INVALID:'+
+          String(item?.symbol??''));
+    }else{
+      throw new Error('PROSPECTIVE_HISTORY_START_STATUS_INVALID:'+
+        String(item?.symbol??''));
+    }
+  }
+  const included=results.filter(item=>item.status==='AVAILABLE')
+    .map(item=>String(item.symbol).trim().toUpperCase()).sort();
+  const excluded=results.filter(item=>item.status==='UNAVAILABLE')
+    .map(item=>({
+      symbol:String(item.symbol).trim().toUpperCase(),
+      reason:item.reason,
+      first_open_at:null
+    })).sort((a,b)=>a.symbol.localeCompare(b.symbol));
+  if(!included.includes('BTCUSDT'))
+    throw new Error('BTCUSDT_REQUIRED_PREHISTORY_UNAVAILABLE');
+  return {
+    schema:'PROSPECTIVE_HISTORY_START_PREFLIGHT_V1',
+    status:'VERIFIED',
+    expected_start_open_at:expectedStartOpenAt,
+    candidate_count:candidateNames.length,
+    included_candidate_count:included.length,
+    excluded_candidate_count:excluded.length,
+    included_symbols:included,
+    excluded_symbols:excluded,
+    every_candidate_accounted:true,
+    current_ticker_liquidity_not_used:true,
+    no_top_n_truncation:true
+  };
+}
