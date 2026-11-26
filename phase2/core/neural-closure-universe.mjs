@@ -17,7 +17,7 @@ export function selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
 }={}){
   if(!Array.isArray(exchangeInfo?.symbols)||!Array.isArray(tickers)||
     !finite(minimumQuoteVolume)||Number(minimumQuoteVolume)<750_000||
-    !Number.isInteger(maxSymbols)||maxSymbols<10||maxSymbols>500||
+    !Number.isInteger(maxSymbols)||maxSymbols<10||maxSymbols>1000||
     typeof includeAllEligible!=='boolean'||
     typeof historicalEligibilityOnly!=='boolean')
     throw new TypeError('BINANCE_SPOT_USDT_UNIVERSE_ARGUMENTS_INVALID');
