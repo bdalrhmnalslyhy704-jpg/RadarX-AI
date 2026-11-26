@@ -172,6 +172,57 @@ function validateHead(head, names, name) {
   }
   return head;
 }
+
+function hasFoldStableDualMetricRankerEvidence(dependency){
+  const evidence=dependency?.ranker_qualification;
+  const selected=evidence?.selected_candidate;
+  const folds=selected?.fold_results;
+  if(evidence?.schema!==
+      'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6'||
+    evidence?.fold_count!==3||
+    evidence?.selected_candidate_qualified!==true||
+    evidence?.fold_stable_dual_metric_superiority!==true||
+    !Number.isInteger(evidence?.fold_stable_dual_metric_candidate_count)||
+    evidence.fold_stable_dual_metric_candidate_count<1||
+    evidence?.robustness_status!=='FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY'||
+    evidence?.selection_rule!==
+      'REQUIRE_STRICT_POSITIVE_LOGISTIC_MARGINS_FOR_PAIRWISE_ACCURACY_AND_LOG_LOSS_IN_EVERY_PURGED_TRAINING_FOLD'||
+    evidence?.validation_or_holdout_used!==false||
+    !selected||![1,2,3,4,6,8,12,24].includes(selected.temporal_block_count)||
+    !finite(selected.l2)||selected.l2<0||selected.l2>1||
+    !Number.isInteger(selected.best_epoch)||selected.best_epoch<1||
+    selected.parameter_count!==selected.temporal_block_count*29||
+    selected.parameterization_id!==
+      'TEMPORAL_BLOCK_TIED_'+selected.temporal_block_count+'X29_V1'||
+    !Array.isArray(folds)||folds.length!==3)return false;
+  const accuracyMargins=[];
+  const logLossMargins=[];
+  for(let index=0;index<folds.length;index++){
+    const fold=folds[index];
+    if(fold?.fold_index!==index+1||
+      !finite(fold?.candidate_pairwise_accuracy_pct)||
+      !finite(fold?.logistic_pairwise_accuracy_pct)||
+      !finite(fold?.candidate_pairwise_log_loss)||
+      !finite(fold?.logistic_pairwise_log_loss)||
+      !finite(fold?.accuracy_improvement_pct)||
+      !finite(fold?.log_loss_improvement))return false;
+    const accuracyMargin=fold.candidate_pairwise_accuracy_pct-
+      fold.logistic_pairwise_accuracy_pct;
+    const logLossMargin=fold.logistic_pairwise_log_loss-
+      fold.candidate_pairwise_log_loss;
+    if(!(accuracyMargin>0&&logLossMargin>0)||
+      Math.abs(fold.accuracy_improvement_pct-Number(accuracyMargin.toFixed(4)))>1e-9||
+      Math.abs(fold.log_loss_improvement-Number(logLossMargin.toFixed(8)))>1e-9)return false;
+    accuracyMargins.push(accuracyMargin);
+    logLossMargins.push(logLossMargin);
+  }
+  const minimumAccuracy=Number(Math.min(...accuracyMargins).toFixed(4));
+  const minimumLogLoss=Number(Math.min(...logLossMargins).toFixed(8));
+  return minimumAccuracy>0&&minimumLogLoss>0&&
+    selected.minimum_fold_pairwise_accuracy_improvement_pct===minimumAccuracy&&
+    selected.minimum_fold_pairwise_log_loss_improvement===minimumLogLoss;
+}
+
 function policySnapshot(policy, name) {
   if (!policy || typeof policy !== 'object') {
     return {
@@ -270,6 +321,8 @@ export function createHurdleV2Artifact({
     throw new TypeError('HURDLE_V2_PROVENANCE_INVALID');
   }
   const fixedSplitCounts = validateFixedSplit(splitDefinition, datasetRowCount);
+  if(innerQualified===true&&!hasFoldStableDualMetricRankerEvidence(orderedRankingDependency))
+    throw new TypeError('HURDLE_V2_RANKER_FOLD_STABILITY_EVIDENCE_REQUIRED');
   if(orderedRankingDependency!==null&&(
     orderedRankingDependency?.artifact_schema!==
       'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V1'||
@@ -696,6 +749,8 @@ export function verifyHurdleV2Artifact(artifact) {
           selected?.return_selection_diagnostics?.status !== 'AVAILABLE' ||
           !(Number(selected?.return_selection_diagnostics?.preliminary_return_screen_candidates) > 0))
         return fail('QUALIFICATION_GATE_EVIDENCE_INCOMPLETE');
+      if(!hasFoldStableDualMetricRankerEvidence(rankerDependency))
+        return fail('RANKER_FOLD_STABILITY_EVIDENCE_MISSING_OR_INVALID');
     }
     if (artifact.target_definition !== 'FIRST_TOUCH_PLUS_3_PCT_BEFORE_MINUS_2_PCT_WITHIN_4H_1M_V1' ||
         artifact.target_semantics !== 'UP_IF_PLUS_3_PCT_FIRST_BEFORE_MINUS_2_PCT_ELSE_NON_SUCCESS_WITHIN_4H_1M_V1')

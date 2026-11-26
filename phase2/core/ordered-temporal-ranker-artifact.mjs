@@ -551,6 +551,57 @@ export function predictOrderedTemporalRankerArtifact(sequence,artifact){
   return Math.max(-30,Math.min(30,score));
 }
 
+
+function rankerQualificationSnapshot(artifact){
+  const tuning=artifact.training_provenance?.internal_training_validation??{};
+  const selected=Array.isArray(tuning.candidate_grid)
+    ?tuning.candidate_grid.find(item=>
+      item?.l2===tuning.selected_l2&&
+      item?.best_epoch===tuning.selected_epochs&&
+      item?.temporal_block_count===tuning.selected_temporal_block_count&&
+      item?.parameter_count===tuning.selected_parameter_count&&
+      item?.parameterization_id===tuning.selected_parameterization_id)
+    :null;
+  return {
+    schema:tuning.schema??null,
+    fold_count:tuning.fold_count??null,
+    selected_candidate_qualified:tuning.selected_candidate_qualified===true,
+    fold_stable_dual_metric_superiority:tuning.fold_stable_dual_metric_superiority===true,
+    fold_stable_dual_metric_candidate_count:
+      Number.isInteger(tuning.fold_stable_dual_metric_candidate_count)
+        ?tuning.fold_stable_dual_metric_candidate_count:null,
+    robustness_status:tuning.robustness_status??null,
+    selection_rule:tuning.selection_rule??null,
+    validation_or_holdout_used:tuning.outer_validation_or_holdout_used??null,
+    selected_candidate:selected?{
+      temporal_block_count:selected.temporal_block_count,
+      l2:selected.l2,
+      best_epoch:selected.best_epoch,
+      parameterization_id:selected.parameterization_id,
+      parameter_count:selected.parameter_count,
+      minimum_fold_pairwise_accuracy_improvement_pct:
+        selected.minimum_fold_pairwise_accuracy_improvement_pct,
+      minimum_fold_pairwise_log_loss_improvement:
+        selected.minimum_fold_pairwise_log_loss_improvement??null,
+      fold_results:(selected.fold_results??[]).map(result=>({
+        fold_index:result.fold_index,
+        candidate_pairwise_accuracy_pct:result.best_validation_pairwise_accuracy_pct,
+        logistic_pairwise_accuracy_pct:result.logistic_validation_pairwise_accuracy_pct,
+        accuracy_improvement_pct:Number((
+          result.best_validation_pairwise_accuracy_pct-
+          result.logistic_validation_pairwise_accuracy_pct
+        ).toFixed(4)),
+        candidate_pairwise_log_loss:result.best_validation_pairwise_log_loss,
+        logistic_pairwise_log_loss:result.logistic_validation_pairwise_log_loss,
+        log_loss_improvement:Number((
+          result.logistic_validation_pairwise_log_loss-
+          result.best_validation_pairwise_log_loss
+        ).toFixed(8))
+      }))
+    }:null
+  };
+}
+
 async function atomicJson(path,value){
   await mkdir(dirname(path),{recursive:true});
   const temporary=path+'.tmp-'+process.pid+'-'+Math.random().toString(16).slice(2);
@@ -593,7 +644,8 @@ export async function writeOrderedTemporalRankerArtifactAtomic(directory,artifac
       feature_schema_id:artifact.feature_schema_id,
       feature_count:artifact.feature_count,
       validation_or_holdout_used:false,
-      holdout_status:'LOCKED'
+      holdout_status:'LOCKED',
+      ranker_qualification:rankerQualificationSnapshot(artifact)
     }
   };
 }

@@ -481,6 +481,84 @@ test('33. verifier rejects a forged inner-qualified status when all recorded gat
   assert.equal(result.valid, false);
   assert.equal(result.reason, 'QUALIFICATION_GATE_EVIDENCE_INCOMPLETE');
 });
+
+test('33b. Hurdle refuses inner qualification when the upstream ranker has no V6 fold-stability proof',()=>{
+  const invalid=structuredClone(fixture);
+  invalid.innerQualified=true;
+  assert.throws(()=>createHurdleV2Artifact(invalid),
+    /HURDLE_V2_RANKER_FOLD_STABILITY_EVIDENCE_REQUIRED/);
+});
+
+test('33c. verifier requires strict pairwise accuracy and log-loss superiority over Logistic in all three ranker folds',()=>{
+  const qualified=structuredClone(artifact);
+  const qualification=qualified.inner_qualification;
+  const selectedName='SYNTHETIC_FOLD_STABLE_CANDIDATE';
+  qualification.passed=true;
+  qualification.status='INNER_QUALIFIED_FOR_OUTER_REPLAY';
+  qualification.selection_status='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY';
+  qualification.selected_configuration=selectedName;
+  qualification.diagnostic_configuration=null;
+  qualification.gate_results={qualified:true};
+  qualification.context_ablation={passed:true};
+  qualification.ranking_head_selection_qualification={qualified:true};
+  qualification.candidates=[{
+    name:selectedName,
+    passed_inner_margin:true,
+    passed_inner_brier_margin:true,
+    passed_inner_pairwise_ranking_gate:true,
+    independent_ranking_signal_passed:true,
+    ranking_head_selection_qualified:true,
+    execution_head_context_ablation_passed:true,
+    execution_risk_policy:{status:'EVALUATED',passed:true},
+    return_selection_diagnostics:{status:'AVAILABLE',preliminary_return_screen_candidates:1}
+  }];
+  qualified.evaluation_status='INNER_QUALIFIED_FOR_OUTER_REPLAY';
+  qualified.scientific_qualification_status='INNER_QUALIFIED_FOR_OUTER_REPLAY';
+  qualified.execution_qualification_status='INNER_QUALIFIED_FOR_OUTER_REPLAY';
+
+  const withoutProof=resealArtifact(qualified);
+  assert.equal(verifyHurdleV2Artifact(withoutProof).reason,
+    'RANKER_FOLD_STABILITY_EVIDENCE_MISSING_OR_INVALID');
+
+  const supported=structuredClone(qualified);
+  supported.upstream_ordered_ranker_dependency.ranker_qualification={
+    schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6',
+    fold_count:3,
+    selected_candidate_qualified:true,
+    fold_stable_dual_metric_superiority:true,
+    fold_stable_dual_metric_candidate_count:1,
+    robustness_status:'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY',
+    selection_rule:'REQUIRE_STRICT_POSITIVE_LOGISTIC_MARGINS_FOR_PAIRWISE_ACCURACY_AND_LOG_LOSS_IN_EVERY_PURGED_TRAINING_FOLD',
+    validation_or_holdout_used:false,
+    selected_candidate:{
+      temporal_block_count:4,
+      l2:0.05,
+      best_epoch:8,
+      parameterization_id:'TEMPORAL_BLOCK_TIED_4X29_V1',
+      parameter_count:116,
+      minimum_fold_pairwise_accuracy_improvement_pct:0.5,
+      minimum_fold_pairwise_log_loss_improvement:0.01,
+      fold_results:[
+        {fold_index:1,candidate_pairwise_accuracy_pct:62,logistic_pairwise_accuracy_pct:60,
+          accuracy_improvement_pct:2,candidate_pairwise_log_loss:0.60,
+          logistic_pairwise_log_loss:0.62,log_loss_improvement:0.02},
+        {fold_index:2,candidate_pairwise_accuracy_pct:62.5,logistic_pairwise_accuracy_pct:62,
+          accuracy_improvement_pct:0.5,candidate_pairwise_log_loss:0.61,
+          logistic_pairwise_log_loss:0.62,log_loss_improvement:0.01},
+        {fold_index:3,candidate_pairwise_accuracy_pct:64,logistic_pairwise_accuracy_pct:63,
+          accuracy_improvement_pct:1,candidate_pairwise_log_loss:0.58,
+          logistic_pairwise_log_loss:0.60,log_loss_improvement:0.02}
+      ]
+    }
+  };
+  const sealed=resealArtifact(supported);
+  const result=verifyHurdleV2Artifact(sealed);
+  assert.equal(result.valid,true,result.reason);
+  assert.equal(sealed.holdout_status,'LOCKED');
+  assert.equal(sealed.promotion_status,'NOT_APPROVED');
+  assert.equal(sealed.real_order_execution,false);
+});
+
 test('34. verifier rejects scientific qualification status drift from the qualification record', () => {
   const resealed = resealArtifact(artifact, {
     scientific_qualification_status: 'INNER_QUALIFIED_FOR_OUTER_REPLAY'

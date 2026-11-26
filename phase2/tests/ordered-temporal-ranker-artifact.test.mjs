@@ -370,6 +370,11 @@ test('atomic sidecar export reloads and verifies both artifact and manifest',asy
     assert.equal(verifyOrderedTemporalRankerArtifact(restored).valid,true);
     assert.deepEqual(manifest,artifact.artifact_manifest);
     assert.equal(result.artifact_content_hash,artifact.artifact_content_hash);
+    assert.equal(result.dependency.ranker_qualification.schema,
+      'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V5');
+    assert.equal(result.dependency.ranker_qualification.fold_count,2);
+    assert.equal(result.dependency.ranker_qualification.selected_candidate_qualified,false);
+    assert.equal(result.dependency.ranker_qualification.selected_candidate.fold_results.length,2);
   }finally{
     await rm(directory,{recursive:true,force:true});
   }
