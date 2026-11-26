@@ -118,6 +118,14 @@ jobs:
              cohort.universe?.symbols?.length!==cohort.universe?.eligible_candidate_count||
              cohort.universe?.hard_cap_failure_mode!=='FAIL_CLOSED_NO_TOP_N_TRUNCATION')
             failures.push('ELIGIBLE_USDT_UNIVERSE_NOT_FULLY_CAPTURED');
+          const candidatePrefilter=cohort.universe?.candidate_prefilter;
+          if(cohort.universe?.selection!==
+               'ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V3'||
+             candidatePrefilter?.method!=='CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY'||
+             candidatePrefilter?.current_24h_ticker_used_for_eligibility!==false||
+             candidatePrefilter?.current_24h_ticker_used_for_ordering!==false||
+             candidatePrefilter?.current_24h_ticker_volume_is_diagnostic_only!==true)
+            failures.push('CURRENT_TICKER_UNIVERSE_LOOKAHEAD_NOT_REMOVED');
           const captureAudit=cohort.universe?.capture_audit;
           const selectedSymbols=(cohort.universe?.symbols??[]).map(item=>item.symbol).sort();
           const includedSymbols=(captureAudit?.included_symbols??[]).slice().sort();

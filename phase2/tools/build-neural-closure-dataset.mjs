@@ -253,7 +253,8 @@ async function main(){
   const universe=selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
     minimumQuoteVolume:args.minQuoteVolumeUsdt,
     maxSymbols:args.maxSymbols,
-    includeAllEligible:args.prospectiveOnly===true
+    includeAllEligible:args.prospectiveOnly===true,
+    historicalEligibilityOnly:args.prospectiveOnly===true
   });
   if(universe.selected.length<args.minSymbols)
     throw new Error('LIQUIDITY_UNIVERSE_BELOW_MIN_SYMBOLS:'+universe.selected.length);
@@ -547,9 +548,12 @@ async function main(){
         execution_return_contract:validated[0].execution_return_contract
       },
       universe:{
-        selection:'ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_ABOVE_CURRENT_24H_VOLUME_FLOOR_WITH_POINT_IN_TIME_EVENT_GATE_V2',
+        selection:'ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V3',
         candidate_prefilter:{
-          method:'CURRENT_BINANCE_SPOT_24H_TICKER_AT_COLLECTION_TIME',
+          method:'CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY',
+          current_24h_ticker_used_for_eligibility:false,
+          current_24h_ticker_used_for_ordering:false,
+          current_24h_ticker_volume_is_diagnostic_only:true,
           minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
           maximum_symbols:args.maxSymbols,
           eligible_candidate_count:universe.eligible.length,

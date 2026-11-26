@@ -12,12 +12,14 @@ const num=value=>finite(value)?Number(value):null;
  * includeAllEligible and fail closed if the resource cap would truncate them.
  */
 export function selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
-  minimumQuoteVolume=750_000,maxSymbols=100,includeAllEligible=false
+  minimumQuoteVolume=750_000,maxSymbols=100,includeAllEligible=false,
+  historicalEligibilityOnly=false
 }={}){
   if(!Array.isArray(exchangeInfo?.symbols)||!Array.isArray(tickers)||
     !finite(minimumQuoteVolume)||Number(minimumQuoteVolume)<750_000||
     !Number.isInteger(maxSymbols)||maxSymbols<10||maxSymbols>500||
-    typeof includeAllEligible!=='boolean')
+    typeof includeAllEligible!=='boolean'||
+    typeof historicalEligibilityOnly!=='boolean')
     throw new TypeError('BINANCE_SPOT_USDT_UNIVERSE_ARGUMENTS_INVALID');
   const tickerMap=new Map(tickers.map(item=>[String(item?.symbol??''),item]));
   const allowed=exchangeInfo.symbols.filter(item=>
@@ -28,15 +30,20 @@ export function selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
   const eligible=allowed.map(symbol=>{
     const ticker=tickerMap.get(String(symbol.symbol));
     const quoteVolume=num(ticker?.quoteVolume);
-    return quoteVolume!==null&&quoteVolume>=Number(minimumQuoteVolume)?{
+    if(!historicalEligibilityOnly&&
+      (quoteVolume===null||quoteVolume<Number(minimumQuoteVolume)))return null;
+    return {
       symbol:symbol.symbol,base_asset:symbol.baseAsset,
       quote_asset:symbol.quoteAsset,quote_volume_24h:quoteVolume,
       last_price:num(ticker?.lastPrice),price_change_pct:num(ticker?.priceChangePercent)
-    }:null;
-  }).filter(Boolean).sort((a,b)=>
-    b.quote_volume_24h-a.quote_volume_24h||a.symbol.localeCompare(b.symbol));
+    };
+  }).filter(Boolean).sort((a,b)=>historicalEligibilityOnly
+    ?a.symbol.localeCompare(b.symbol)
+    :b.quote_volume_24h-a.quote_volume_24h||a.symbol.localeCompare(b.symbol));
   if(!eligible.some(item=>item.symbol==='BTCUSDT'))
-    throw new Error('BTCUSDT_NOT_IN_750K_USDT_SPOT_UNIVERSE');
+    throw new Error(historicalEligibilityOnly
+      ?'BTCUSDT_NOT_IN_CURRENT_SPOT_USDT_UNIVERSE'
+      :'BTCUSDT_NOT_IN_750K_USDT_SPOT_UNIVERSE');
   if(includeAllEligible&&eligible.length>maxSymbols)
     throw new Error('ELIGIBLE_UNIVERSE_EXCEEDS_CONFIGURED_MAX_SYMBOLS:'+
       eligible.length+':'+maxSymbols);
@@ -44,8 +51,9 @@ export function selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
   if(!selected.some(item=>item.symbol==='BTCUSDT')){
     selected=selected.slice(0,Math.max(0,maxSymbols-1));
     selected.push(eligible.find(item=>item.symbol==='BTCUSDT'));
-    selected.sort((a,b)=>
-      b.quote_volume_24h-a.quote_volume_24h||a.symbol.localeCompare(b.symbol));
+    selected.sort((a,b)=>historicalEligibilityOnly
+      ?a.symbol.localeCompare(b.symbol)
+      :b.quote_volume_24h-a.quote_volume_24h||a.symbol.localeCompare(b.symbol));
   }
   return {eligible,selected};
 }

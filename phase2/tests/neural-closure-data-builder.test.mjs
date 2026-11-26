@@ -79,6 +79,39 @@ test('candidate prefilter includes every currently eligible Spot USDT pair above
   assert.equal(legacy.selected.some(item=>item.symbol==='BTCUSDT'),true);
 });
 
+test('prospective candidate set ignores current ticker liquidity and ordering; eligibility is deferred to point-in-time history',()=>{
+  const exchangeInfo={symbols:[
+    {symbol:'BTCUSDT',baseAsset:'BTC',quoteAsset:'USDT',status:'TRADING',isSpotTradingAllowed:true},
+    {symbol:'ETHUSDT',baseAsset:'ETH',quoteAsset:'USDT',status:'TRADING',isSpotTradingAllowed:true},
+    {symbol:'LOWUSDT',baseAsset:'LOW',quoteAsset:'USDT',status:'TRADING',isSpotTradingAllowed:true},
+    {symbol:'MISSINGUSDT',baseAsset:'MISSING',quoteAsset:'USDT',status:'TRADING',isSpotTradingAllowed:true},
+    {symbol:'USDCUSDT',baseAsset:'USDC',quoteAsset:'USDT',status:'TRADING',isSpotTradingAllowed:true}
+  ]};
+  const tickers=[
+    {symbol:'BTCUSDT',quoteVolume:'1000000000',lastPrice:'90000'},
+    {symbol:'ETHUSDT',quoteVolume:'9000000',lastPrice:'3000'},
+    {symbol:'LOWUSDT',quoteVolume:'1',lastPrice:'1'}
+  ];
+  const result=selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
+    minimumQuoteVolume:750_000,maxSymbols:10,includeAllEligible:true,
+    historicalEligibilityOnly:true
+  });
+  assert.deepEqual(result.selected.map(item=>item.symbol),
+    ['BTCUSDT','ETHUSDT','LOWUSDT','MISSINGUSDT']);
+  assert.equal(result.selected.find(item=>item.symbol==='LOWUSDT').quote_volume_24h,1,
+    'current quote volume is recorded only as a diagnostic and cannot exclude an historically liquid event');
+  assert.equal(result.selected.find(item=>item.symbol==='MISSINGUSDT').quote_volume_24h,null,
+    'a missing current ticker must not remove a pair from historical event eligibility');
+  const changedTickers=tickers.map(item=>({...item,quoteVolume:String(Number(item.quoteVolume)*100)}));
+  const changed=selectBinanceSpotUsdtUniverse(exchangeInfo,changedTickers,{
+    minimumQuoteVolume:750_000,maxSymbols:10,includeAllEligible:true,
+    historicalEligibilityOnly:true
+  });
+  assert.deepEqual(changed.selected.map(item=>item.symbol),
+    result.selected.map(item=>item.symbol),
+    'changing collection-time ticker volumes cannot change the candidate cohort or its order');
+});
+
 test('prospective universe includes exactly 500 eligible pairs and rejects 501 without truncation',()=>{
   const makeUniverse=count=>{
     const symbols=[];
