@@ -110,3 +110,54 @@ export function verifyProspectiveUniverseCapture({eligible,selected,symbolResult
     included_symbols:includedSymbols
   };
 }
+
+
+/**
+ * Independently cross-check the persisted per-symbol row counts against the
+ * actual prospective cohort rows before a cohort can be marked complete.
+ */
+export function verifyProspectiveCohortRowCoverage({
+  selectedSymbols,symbolResults,rows,counts
+}={}){
+  if(!Array.isArray(selectedSymbols)||!Array.isArray(symbolResults)||
+    !Array.isArray(rows)||!counts||typeof counts!=='object')
+    throw new TypeError('PROSPECTIVE_COHORT_ROW_COVERAGE_ARGUMENTS_INVALID');
+  const selected=selectedSymbols.map(value=>String(value??'').trim().toUpperCase()).sort();
+  if(selected.some(value=>!value)||new Set(selected).size!==selected.length)
+    throw new Error('PROSPECTIVE_COHORT_SELECTED_SYMBOLS_INVALID');
+  const results=symbolResults.map(item=>({
+    symbol:String(item?.symbol??'').trim().toUpperCase(),
+    status:item?.status,
+    valid_events:Number(item?.valid_events)
+  }));
+  const resultNames=results.map(item=>item.symbol).sort();
+  const same=(a,b)=>a.length===b.length&&a.every((value,index)=>value===b[index]);
+  if(results.some(item=>!item.symbol)||new Set(resultNames).size!==resultNames.length||
+    !same(selected,resultNames)||results.some(item=>item.status!=='INCLUDED'||
+      !Number.isInteger(item.valid_events)||item.valid_events<1))
+    throw new Error('PROSPECTIVE_COHORT_SYMBOL_RESULT_SET_MISMATCH');
+  const rowCounts=new Map(selected.map(symbol=>[symbol,0]));
+  for(const row of rows){
+    const symbol=String(row?.symbol??'').trim().toUpperCase();
+    if(!rowCounts.has(symbol))
+      throw new Error('PROSPECTIVE_COHORT_ROW_SYMBOL_UNEXPECTED:'+symbol);
+    rowCounts.set(symbol,rowCounts.get(symbol)+1);
+  }
+  for(const result of results){
+    if(rowCounts.get(result.symbol)!==result.valid_events)
+      throw new Error('PROSPECTIVE_COHORT_SYMBOL_ROW_COUNT_MISMATCH:'+
+        result.symbol+':'+result.valid_events+':'+rowCounts.get(result.symbol));
+  }
+  if(Number(counts.rows)!==rows.length||
+    Number(counts.included_symbols)!==selected.length||
+    Number(counts.requested_symbols)!==selected.length)
+    throw new Error('PROSPECTIVE_COHORT_AGGREGATE_COUNTS_MISMATCH');
+  return {
+    schema:'PROSPECTIVE_COHORT_ROW_COVERAGE_AUDIT_V1',
+    status:'VERIFIED',
+    symbols_verified:selected.length,
+    rows_verified:rows.length,
+    no_unexpected_symbols:true,
+    per_symbol_row_counts_match:true
+  };
+}

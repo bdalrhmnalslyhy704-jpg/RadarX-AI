@@ -73,6 +73,7 @@ jobs:
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import {sha256CanonicalArrayMapped} from './phase2/core/neural-closure-contracts.mjs';
+          import {verifyProspectiveCohortRowCoverage} from './phase2/core/neural-closure-universe.mjs';
 
           const path='artifacts/neural-closure-prospective/cohort.json';
           const cohort=JSON.parse(fs.readFileSync(path,'utf8'));
@@ -119,6 +120,17 @@ jobs:
              symbolResults.length!==cohort.universe?.eligible_candidate_count||
              symbolResults.some(item=>item.status!=='INCLUDED'))
             failures.push('PROSPECTIVE_CANDIDATE_CAPTURE_INCOMPLETE');
+          try{
+            const rowCoverageAudit=verifyProspectiveCohortRowCoverage({
+              selectedSymbols,symbolResults,rows,counts:cohort.counts
+            });
+            if(rowCoverageAudit.status!=='VERIFIED'||
+               rowCoverageAudit.symbols_verified!==cohort.universe?.eligible_candidate_count||
+               rowCoverageAudit.rows_verified!==rows.length)
+              failures.push('PROSPECTIVE_ROW_COVERAGE_AUDIT_INVALID');
+          }catch(error){
+            failures.push('PROSPECTIVE_ROW_COVERAGE_AUDIT_FAILED:'+String(error?.message||error));
+          }
           if(cohort.cohort_contract?.requested_start_at!==expectedStart||
              cohort.schedule?.first_decision_at!==expectedStart||
              !(expectedStart>legacyLastLabelResolved)||

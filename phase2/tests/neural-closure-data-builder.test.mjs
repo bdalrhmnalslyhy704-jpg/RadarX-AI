@@ -7,7 +7,7 @@ import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
 import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
 import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
-import {selectBinanceSpotUsdtUniverse,verifyProspectiveUniverseCapture} from '../core/neural-closure-universe.mjs';
+import {selectBinanceSpotUsdtUniverse,verifyProspectiveUniverseCapture,verifyProspectiveCohortRowCoverage} from '../core/neural-closure-universe.mjs';
 import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,parseBinanceSpotKline,
@@ -175,6 +175,73 @@ test('prospective capture audit rejects duplicate or unexpected symbol results',
       {symbol:'FAKEUSDT',status:'INCLUDED'}
     ]
   }),/PROSPECTIVE_UNIVERSE_COVERAGE_INCOMPLETE/);
+});
+
+test('prospective cohort row coverage verifies exact per-symbol row counts and totals',()=>{
+  const selectedSymbols=['BTCUSDT','ETHUSDT'];
+  const symbolResults=[
+    {symbol:'BTCUSDT',status:'INCLUDED',valid_events:2},
+    {symbol:'ETHUSDT',status:'INCLUDED',valid_events:1}
+  ];
+  const rows=[
+    {symbol:'BTCUSDT',at:1},
+    {symbol:'BTCUSDT',at:2},
+    {symbol:'ETHUSDT',at:1}
+  ];
+  const audit=verifyProspectiveCohortRowCoverage({
+    selectedSymbols,symbolResults,rows,
+    counts:{rows:3,included_symbols:2,requested_symbols:2}
+  });
+  assert.equal(audit.status,'VERIFIED');
+  assert.equal(audit.symbols_verified,2);
+  assert.equal(audit.rows_verified,3);
+  assert.equal(audit.no_unexpected_symbols,true);
+  assert.equal(audit.per_symbol_row_counts_match,true);
+});
+
+test('prospective cohort row coverage rejects a symbol whose stored valid-event count lies',()=>{
+  assert.throws(()=>verifyProspectiveCohortRowCoverage({
+    selectedSymbols:['BTCUSDT','ETHUSDT'],
+    symbolResults:[
+      {symbol:'BTCUSDT',status:'INCLUDED',valid_events:2},
+      {symbol:'ETHUSDT',status:'INCLUDED',valid_events:2}
+    ],
+    rows:[
+      {symbol:'BTCUSDT',at:1},{symbol:'BTCUSDT',at:2},
+      {symbol:'ETHUSDT',at:1}
+    ],
+    counts:{rows:3,included_symbols:2,requested_symbols:2}
+  }),/PROSPECTIVE_COHORT_SYMBOL_ROW_COUNT_MISMATCH/);
+});
+
+test('prospective cohort row coverage rejects foreign or missing symbol rows',()=>{
+  const common={
+    selectedSymbols:['BTCUSDT','ETHUSDT'],
+    symbolResults:[
+      {symbol:'BTCUSDT',status:'INCLUDED',valid_events:1},
+      {symbol:'ETHUSDT',status:'INCLUDED',valid_events:1}
+    ],
+    counts:{rows:2,included_symbols:2,requested_symbols:2}
+  };
+  assert.throws(()=>verifyProspectiveCohortRowCoverage({
+    ...common,rows:[{symbol:'BTCUSDT'},{symbol:'FAKEUSDT'}]
+  }),/PROSPECTIVE_COHORT_ROW_SYMBOL_UNEXPECTED/);
+  assert.throws(()=>verifyProspectiveCohortRowCoverage({
+    ...common,rows:[{symbol:'BTCUSDT'}]
+  }),/PROSPECTIVE_COHORT_SYMBOL_ROW_COUNT_MISMATCH/);
+});
+
+test('prospective cohort row coverage rejects mismatched aggregate counts and duplicate symbols',()=>{
+  assert.throws(()=>verifyProspectiveCohortRowCoverage({
+    selectedSymbols:['BTCUSDT','ETHUSDT','ETHUSDT'],
+    symbolResults:[],rows:[],counts:{rows:0,included_symbols:3,requested_symbols:3}
+  }),/PROSPECTIVE_COHORT_SELECTED_SYMBOLS_INVALID/);
+  assert.throws(()=>verifyProspectiveCohortRowCoverage({
+    selectedSymbols:['BTCUSDT'],
+    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:1}],
+    rows:[{symbol:'BTCUSDT'}],
+    counts:{rows:2,included_symbols:1,requested_symbols:1}
+  }),/PROSPECTIVE_COHORT_AGGREGATE_COUNTS_MISMATCH/);
 });
 
 test('Binance Spot kline parser preserves closed-candle OHLCV and rejects bad ranges',()=>{
