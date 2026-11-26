@@ -531,8 +531,8 @@ test('prospective cohort workflow is manual, locked, data-only and training-free
   assert.match(workflow,/--prospectiveOnly true/);
   assert.match(workflow,/PROSPECTIVE_CANDIDATE_CAPTURE_INCOMPLETE/);
   assert.match(workflow,/all_eligible_symbols_have_rows/);
-  assert.match(workflow,/if: success\\(\\)/);
-  assert.doesNotMatch(workflow,/if: always\\(\\)/);
+  assert.ok(workflow.includes('if: success()'));
+  assert.ok(!workflow.includes('if: always()'));
   assert.match(workflow,/--startAt "\$PROSPECTIVE_START_AT"/);
   assert.match(workflow,/PROSPECTIVE_COHORT_CAPTURED_LOCKED/);
   assert.match(workflow,/LOCKED_UNSCORED/);
