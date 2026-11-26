@@ -4180,14 +4180,16 @@ export function trainTcnLstmHybrid(trainingRows, {
       model_training_max_resolved_at:Math.max(...rows.map(row=>Number(row.resolved_at))),
       execution_head_min_at:Math.min(...executionRows.map(row=>Number(row.at))),
       source_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
-      execution_head_split_source_partition:executionHeadSplit.diagnostics.source_partition,
-      execution_head_split_status:executionHeadSplit.status,
-      execution_head_split_method:executionHeadSplit.diagnostics.split_method,
-      purged_rows:executionHeadSplit.purged_rows.length,
-      purge_gap_ms:executionHeadSplit.diagnostics.purge_gap_ms,
-      chronology_valid:executionHeadSplit.diagnostics.chronology_valid===true,
-      representation_out_of_sample:executionHeadSplit.diagnostics.representation_out_of_sample===true,
-      training_and_execution_head_identities_disjoint:executionHeadSplit.diagnostics.disjoint_sample_identities===true
+      execution_head_split_source_partition:null,
+      execution_head_split_status:'UNVERIFIED_DIRECT_ROWS',
+      execution_head_split_method:null,
+      purged_rows:null,
+      purge_gap_ms:Math.min(...executionRows.map(row=>Number(row.at)))-
+        Math.max(...rows.map(row=>Number(row.resolved_at))),
+      chronology_valid:Math.max(...rows.map(row=>Number(row.resolved_at)))<
+        Math.min(...executionRows.map(row=>Number(row.at))),
+      representation_out_of_sample:true,
+      training_and_execution_head_identities_disjoint:true
     }
     :{schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V5',
       fitted:false,reason:'PURGED_EXECUTION_HEAD_TRAINING_BLOCK_NOT_AVAILABLE',
@@ -5323,8 +5325,14 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         model_training_max_resolved_at:Math.max(...modelTrainingRows.map(row=>Number(row.resolved_at))),
         execution_head_min_at:Math.min(...executionHeadRowsWithLogisticContext.map(row=>Number(row.at))),
         source_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
-        representation_out_of_sample:true,
-        training_and_execution_head_identities_disjoint:true
+        execution_head_split_source_partition:executionHeadSplit.diagnostics.source_partition,
+        execution_head_split_status:executionHeadSplit.status,
+        execution_head_split_method:executionHeadSplit.diagnostics.split_method,
+        purged_rows:executionHeadSplit.purged_rows.length,
+        purge_gap_ms:executionHeadSplit.diagnostics.purge_gap_ms,
+        chronology_valid:executionHeadSplit.diagnostics.chronology_valid===true,
+        representation_out_of_sample:executionHeadSplit.diagnostics.representation_out_of_sample===true,
+        training_and_execution_head_identities_disjoint:executionHeadSplit.diagnostics.disjoint_sample_identities===true
       };
       if(executionHeadFit.representation_out_of_sample!==true||
         executionHeadFit.training_and_execution_head_identities_disjoint!==true||
