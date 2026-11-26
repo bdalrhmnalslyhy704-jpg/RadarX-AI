@@ -23,6 +23,7 @@ on:
 permissions:
   contents: read
 
+# Push-based capture is enabled only on this isolated ops branch and only for an explicit marker commit.
 concurrency:
   group: build224-prospective-neural-cohort
   cancel-in-progress: false
