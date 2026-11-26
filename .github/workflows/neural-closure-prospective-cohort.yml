@@ -227,8 +227,8 @@ jobs:
           set -euo pipefail
           bundle="$RUNNER_TEMP/radarx-build224-prospective-cohort.tar.gz"
           encrypted="artifacts/secure/radarx-build224-prospective-cohort-${GITHUB_SHA}.enc"
-          mkdir -p artifacts/secure
           umask 077
+          mkdir -p artifacts/secure
           tar -czf "$bundle" -C artifacts neural-closure-prospective
           source_sha=$(sha256sum "$bundle" | awk '{print $1}')
           node phase2/tools/secure-prospective-cohort-bundle.mjs encrypt "$bundle" "$encrypted"
