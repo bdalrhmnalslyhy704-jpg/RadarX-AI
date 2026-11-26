@@ -55,6 +55,10 @@ function resealArtifact(source, changes = {}) {
     dataset_source_commit_sha: copy.dataset_source_commit_sha,
     split_definition: copy.split_definition,
     purge_definition: copy.purge_definition,
+    evaluation_status: copy.evaluation_status,
+    scientific_qualification_status: copy.scientific_qualification_status,
+    execution_qualification_status: copy.execution_qualification_status,
+    promotion_status: copy.promotion_status,
     artifact_content_hash: copy.artifact_content_hash
   };
   copy.artifact_manifest_hash = sha256(copy.artifact_manifest);
