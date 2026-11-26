@@ -223,6 +223,94 @@ function hasFoldStableDualMetricRankerEvidence(dependency){
     selected.minimum_fold_pairwise_log_loss_improvement===minimumLogLoss;
 }
 
+
+function hasStrictExecutionPolicyProfitabilityEvidence(policy,anchorGateName){
+  const trial=policy?.selected_trial;
+  const model=trial?.model_metrics;
+  const anchor=trial?.logistic_anchor_metrics;
+  const gates=trial?.gates;
+  const minimumTrades=policy?.minimum_trades;
+  const minimumWinRate=policy?.minimum_win_rate_pct;
+  const maximumDrawdown=policy?.maximum_drawdown_pct;
+  if(policy?.passed!==true||
+    !['SELECTIVE_EXECUTION_POLICY_PASSED_INNER_SELECTION','EVALUATED'].includes(policy?.status)||
+    (policy?.selection_partition_only!==true&&policy?.source_partition!=='INNER_SELECTION_ONLY')||
+    policy?.threshold_selected_on_inner_selection!==true||
+    policy?.threshold_frozen_before_outer_validation!==true||
+    policy?.holdout_values_used!==false||
+    policy?.round_trip_cost_bps!==30||
+    !Number.isInteger(minimumTrades)||minimumTrades<20||
+    !finite(minimumWinRate)||minimumWinRate<55||minimumWinRate>100||
+    !finite(maximumDrawdown)||maximumDrawdown<=0||maximumDrawdown>8||
+    policy?.top_k_per_timestamp!==1||
+    trial?.passed!==true||
+    !gates||gates.return_data_complete!==true||
+    gates.minimum_trades!==true||
+    gates.minimum_win_rate!==true||
+    gates.positive_net_pnl!==true||
+    gates.maximum_drawdown!==true||
+    gates.genuine_abstention!==true||
+    gates.matched_logistic_signal_count!==true||
+    gates.matched_logistic_executed_trade_count!==true||
+    gates[anchorGateName]!==true||
+    trial?.logistic_anchor_signal_counts_matched!==true||
+    trial?.logistic_anchor_trade_counts_matched!==true||
+    !model||model?.return_data_status!=='COMPLETE'||
+    !finite(model?.trade_count)||model.trade_count<minimumTrades||
+    !finite(model?.win_rate_pct)||model.win_rate_pct<minimumWinRate||
+    !finite(model?.net_pnl_pct)||model.net_pnl_pct<=0||
+    !finite(model?.max_drawdown_pct)||model.max_drawdown_pct<0||
+    model.max_drawdown_pct>maximumDrawdown||
+    !anchor||anchor?.return_data_status!=='COMPLETE'||
+    !finite(anchor?.trade_count)||anchor.trade_count!==model.trade_count||
+    !finite(anchor?.net_pnl_pct)||
+    !finite(anchor?.max_drawdown_pct)||
+    model.net_pnl_pct<=anchor.net_pnl_pct||
+    model.max_drawdown_pct>anchor.max_drawdown_pct)return false;
+  return true;
+}
+
+function hasContextAblationProfitabilityEvidence(ablation,executionRiskPolicy){
+  const metrics=ablation?.context_metrics;
+  const pooled=ablation?.pooled_only_metrics;
+  const selected=executionRiskPolicy?.selected_trial?.model_metrics;
+  const gates=ablation?.gates;
+  const noExposure=ablation?.pooled_only_no_exposure===true;
+  if(ablation?.schema!=='RADARX_TCN_LSTM_EXECUTION_HEAD_CONTEXT_ABLATION_V1'||
+    ablation?.status!=='EVALUATED'||
+    ablation?.source_partition!=='INNER_SELECTION_ONLY'||
+    ablation?.holdout_values_used!==false||
+    ablation?.candidate_variant!=='LOGIT_CONTEXT_AUGMENTED'||
+    ablation?.baseline_variant!=='POOLED_ONLY'||
+    ablation?.context_policy_passed!==true||
+    ablation?.both_policies_frozen_on_selection!==true||
+    ablation?.baseline_and_candidate_use_matched_logistic_trade_counts!==true||
+    !metrics||!selected||
+    metrics.trade_count!==selected.trade_count||
+    metrics.win_rate_pct!==selected.win_rate_pct||
+    metrics.net_pnl_pct!==selected.net_pnl_pct||
+    metrics.max_drawdown_pct!==selected.max_drawdown_pct||
+    !pooled||!gates||
+    gates.context_policy_absolute_gates!==true||
+    gates.net_pnl_strictly_improved!==true||
+    gates.win_rate_not_worse!==true||
+    gates.drawdown_not_worse!==true||
+    !finite(pooled.net_pnl_pct)||
+    !finite(pooled.max_drawdown_pct)||
+    metrics.net_pnl_pct<=pooled.net_pnl_pct)return false;
+  if(noExposure){
+    if(pooled.signal_count!==0||pooled.trade_count!==0||
+      pooled.net_pnl_pct!==0||pooled.max_drawdown_pct!==0||
+      metrics.win_rate_pct<55||metrics.max_drawdown_pct>8)return false;
+  }else{
+    if(!finite(pooled.trade_count)||pooled.trade_count<1||
+      !finite(pooled.win_rate_pct)||
+      metrics.win_rate_pct<pooled.win_rate_pct||
+      metrics.max_drawdown_pct>pooled.max_drawdown_pct)return false;
+  }
+  return true;
+}
+
 function policySnapshot(policy, name) {
   if (!policy || typeof policy !== 'object') {
     return {
@@ -394,8 +482,39 @@ export function createHurdleV2Artifact({
       execution_head_context_ablation_passed:
         candidate.execution_head_context_ablation_passed === true,
       execution_risk_policy: candidate.execution_risk_policy ? {
+        schema:candidate.execution_risk_policy.schema??null,
         status: candidate.execution_risk_policy.status ?? null,
-        passed: candidate.execution_risk_policy.passed === true
+        passed: candidate.execution_risk_policy.passed === true,
+        selection_partition_only:candidate.execution_risk_policy.selection_partition_only===true,
+        source_partition:candidate.execution_risk_policy.source_partition??null,
+        threshold_selected_on_inner_selection:
+          candidate.execution_risk_policy.threshold_selected_on_inner_selection===true,
+        threshold_frozen_before_outer_validation:
+          candidate.execution_risk_policy.threshold_frozen_before_outer_validation===true,
+        holdout_values_used:candidate.execution_risk_policy.holdout_values_used,
+        round_trip_cost_bps:candidate.execution_risk_policy.round_trip_cost_bps??null,
+        minimum_trades:candidate.execution_risk_policy.minimum_trades??null,
+        minimum_win_rate_pct:candidate.execution_risk_policy.minimum_win_rate_pct??null,
+        maximum_drawdown_pct:candidate.execution_risk_policy.maximum_drawdown_pct??null,
+        top_k_per_timestamp:candidate.execution_risk_policy.top_k_per_timestamp??null,
+        selected_trial:candidate.execution_risk_policy.selected_trial??null
+      } : null,
+      ranking_execution_selection: candidate.ranking_execution_selection ? {
+        schema:candidate.ranking_execution_selection.schema??null,
+        status:candidate.ranking_execution_selection.status??null,
+        passed:candidate.ranking_execution_selection.passed===true,
+        source_partition:candidate.ranking_execution_selection.source_partition??null,
+        threshold_selected_on_inner_selection:
+          candidate.ranking_execution_selection.threshold_selected_on_inner_selection===true,
+        threshold_frozen_before_outer_validation:
+          candidate.ranking_execution_selection.threshold_frozen_before_outer_validation===true,
+        holdout_values_used:candidate.ranking_execution_selection.holdout_values_used,
+        round_trip_cost_bps:candidate.ranking_execution_selection.round_trip_cost_bps??null,
+        minimum_trades:candidate.ranking_execution_selection.minimum_trades??null,
+        minimum_win_rate_pct:candidate.ranking_execution_selection.minimum_win_rate_pct??null,
+        maximum_drawdown_pct:candidate.ranking_execution_selection.maximum_drawdown_pct??null,
+        top_k_per_timestamp:candidate.ranking_execution_selection.top_k_per_timestamp??null,
+        selected_trial:candidate.ranking_execution_selection.selected_trial??null
       } : null,
       return_selection_diagnostics: candidate.return_selection_diagnostics ? {
         status: candidate.return_selection_diagnostics.status ?? null,
@@ -751,6 +870,13 @@ export function verifyHurdleV2Artifact(artifact) {
         return fail('QUALIFICATION_GATE_EVIDENCE_INCOMPLETE');
       if(!hasFoldStableDualMetricRankerEvidence(rankerDependency))
         return fail('RANKER_FOLD_STABILITY_EVIDENCE_MISSING_OR_INVALID');
+      if(!hasStrictExecutionPolicyProfitabilityEvidence(
+          selected.execution_risk_policy,'beats_matched_logistic_anchor')||
+        !hasStrictExecutionPolicyProfitabilityEvidence(
+          selected.ranking_execution_selection,'beats_logistic_anchor')||
+        !hasContextAblationProfitabilityEvidence(
+          qualification.context_ablation,selected.execution_risk_policy))
+        return fail('PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID');
     }
     if (artifact.target_definition !== 'FIRST_TOUCH_PLUS_3_PCT_BEFORE_MINUS_2_PCT_WITHIN_4H_1M_V1' ||
         artifact.target_semantics !== 'UP_IF_PLUS_3_PCT_FIRST_BEFORE_MINUS_2_PCT_ELSE_NON_SUCCESS_WITHIN_4H_1M_V1')
