@@ -79,6 +79,40 @@ test('candidate prefilter includes every currently eligible Spot USDT pair above
   assert.equal(legacy.selected.some(item=>item.symbol==='BTCUSDT'),true);
 });
 
+test('prospective universe includes exactly 500 eligible pairs and rejects 501 without truncation',()=>{
+  const makeUniverse=count=>{
+    const symbols=[];
+    const tickers=[];
+    for(let index=0;index<count-1;index++){
+      const base='BOUND'+String(index).padStart(3,'0');
+      symbols.push({symbol:base+'USDT',baseAsset:base,quoteAsset:'USDT',
+        status:'TRADING',isSpotTradingAllowed:true});
+      tickers.push({symbol:base+'USDT',quoteVolume:'900000',
+        lastPrice:'1',priceChangePercent:'0'});
+    }
+    symbols.push({symbol:'BTCUSDT',baseAsset:'BTC',quoteAsset:'USDT',
+      status:'TRADING',isSpotTradingAllowed:true});
+    tickers.push({symbol:'BTCUSDT',quoteVolume:'1000000000',
+      lastPrice:'90000',priceChangePercent:'0'});
+    return {exchangeInfo:{symbols},tickers};
+  };
+
+  const atCap=makeUniverse(500);
+  const complete=selectBinanceSpotUsdtUniverse(atCap.exchangeInfo,atCap.tickers,{
+    minimumQuoteVolume:750_000,maxSymbols:500,includeAllEligible:true
+  });
+  assert.equal(complete.eligible.length,500);
+  assert.equal(complete.selected.length,500);
+  assert.equal(complete.selected.length,complete.eligible.length);
+
+  const overCap=makeUniverse(501);
+  assert.throws(()=>selectBinanceSpotUsdtUniverse(
+    overCap.exchangeInfo,overCap.tickers,{
+      minimumQuoteVolume:750_000,maxSymbols:500,includeAllEligible:true
+    }
+  ),/ELIGIBLE_UNIVERSE_EXCEEDS_CONFIGURED_MAX_SYMBOLS:501:500/);
+});
+
 test('candidate prefilter fails closed when BTC or the exchange universe evidence is missing',()=>{
   assert.throws(()=>selectBinanceSpotUsdtUniverse({symbols:[]},[],{
     minimumQuoteVolume:750_000,maxSymbols:500,includeAllEligible:true
