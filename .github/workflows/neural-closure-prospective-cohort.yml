@@ -122,7 +122,8 @@ jobs:
             failures.push('PROSPECTIVE_CANDIDATE_CAPTURE_INCOMPLETE');
           try{
             const rowCoverageAudit=verifyProspectiveCohortRowCoverage({
-              selectedSymbols,symbolResults,rows,counts:cohort.counts
+              selectedSymbols,symbolResults,rows,counts:cohort.counts,
+              schedule:cohort.schedule
             });
             if(rowCoverageAudit.status!=='VERIFIED'||
                rowCoverageAudit.symbols_verified!==cohort.universe?.eligible_candidate_count||

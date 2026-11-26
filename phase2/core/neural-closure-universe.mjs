@@ -117,11 +117,23 @@ export function verifyProspectiveUniverseCapture({eligible,selected,symbolResult
  * actual prospective cohort rows before a cohort can be marked complete.
  */
 export function verifyProspectiveCohortRowCoverage({
-  selectedSymbols,symbolResults,rows,counts
+  selectedSymbols,symbolResults,rows,counts,schedule
 }={}){
   if(!Array.isArray(selectedSymbols)||!Array.isArray(symbolResults)||
-    !Array.isArray(rows)||!counts||typeof counts!=='object')
+    !Array.isArray(rows)||!counts||typeof counts!=='object'||
+    !schedule||typeof schedule!=='object')
     throw new TypeError('PROSPECTIVE_COHORT_ROW_COVERAGE_ARGUMENTS_INVALID');
+  const firstDecisionAt=Number(schedule.first_decision_at);
+  const lastDecisionAt=Number(schedule.last_decision_at);
+  const decisionIntervalMs=Number(schedule.decision_interval_ms);
+  const validSchedule=Number.isSafeInteger(firstDecisionAt)&&
+    Number.isSafeInteger(lastDecisionAt)&&
+    Number.isSafeInteger(decisionIntervalMs)&&
+    decisionIntervalMs===4*60*60*1000&&
+    lastDecisionAt>=firstDecisionAt&&
+    (lastDecisionAt-firstDecisionAt)%decisionIntervalMs===0;
+  if(!validSchedule)
+    throw new Error('PROSPECTIVE_COHORT_DECISION_SCHEDULE_INVALID');
   const selected=selectedSymbols.map(value=>String(value??'').trim().toUpperCase()).sort();
   if(selected.some(value=>!value)||new Set(selected).size!==selected.length)
     throw new Error('PROSPECTIVE_COHORT_SELECTED_SYMBOLS_INVALID');
@@ -137,10 +149,21 @@ export function verifyProspectiveCohortRowCoverage({
       !Number.isInteger(item.valid_events)||item.valid_events<1))
     throw new Error('PROSPECTIVE_COHORT_SYMBOL_RESULT_SET_MISMATCH');
   const rowCounts=new Map(selected.map(symbol=>[symbol,0]));
+  const rowIdentities=new Set();
   for(const row of rows){
     const symbol=String(row?.symbol??'').trim().toUpperCase();
     if(!rowCounts.has(symbol))
       throw new Error('PROSPECTIVE_COHORT_ROW_SYMBOL_UNEXPECTED:'+symbol);
+    const at=Number(row?.at);
+    const resolvedAt=Number(row?.resolved_at);
+    if(!Number.isSafeInteger(at)||at<firstDecisionAt||at>lastDecisionAt||
+      (at-firstDecisionAt)%decisionIntervalMs!==0||
+      !Number.isSafeInteger(resolvedAt)||resolvedAt!==at+decisionIntervalMs)
+      throw new Error('PROSPECTIVE_COHORT_ROW_OFF_SCHEDULE:'+symbol+':'+String(row?.at));
+    const identity=symbol+':'+at;
+    if(rowIdentities.has(identity))
+      throw new Error('PROSPECTIVE_COHORT_DUPLICATE_SYMBOL_DECISION:'+identity);
+    rowIdentities.add(identity);
     rowCounts.set(symbol,rowCounts.get(symbol)+1);
   }
   for(const result of results){
@@ -157,7 +180,11 @@ export function verifyProspectiveCohortRowCoverage({
     status:'VERIFIED',
     symbols_verified:selected.length,
     rows_verified:rows.length,
+    first_decision_at:firstDecisionAt,
+    last_decision_at:lastDecisionAt,
+    decision_interval_ms:decisionIntervalMs,
     no_unexpected_symbols:true,
-    per_symbol_row_counts_match:true
+    per_symbol_row_counts_match:true,
+    all_rows_on_declared_decision_grid:true
   };
 }

@@ -177,6 +177,57 @@ test('prospective capture audit rejects duplicate or unexpected symbol results',
   }),/PROSPECTIVE_UNIVERSE_COVERAGE_INCOMPLETE/);
 });
 
+test('prospective cohort row coverage requires every row to match the declared 4h decision grid',()=>{
+  const first=Date.UTC(2026,10,18,0,15,0)-1;
+  const interval=4*60*60*1000;
+  const schedule={
+    first_decision_at:first,
+    last_decision_at:first+2*interval,
+    decision_interval_ms:interval
+  };
+  const common={
+    selectedSymbols:['BTCUSDT'],
+    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:2}],
+    counts:{rows:2,included_symbols:1,requested_symbols:1},
+    schedule
+  };
+  const valid=verifyProspectiveCohortRowCoverage({
+    ...common,rows:[
+      {symbol:'BTCUSDT',at:first,resolved_at:first+interval},
+      {symbol:'BTCUSDT',at:first+2*interval,resolved_at:first+3*interval}
+    ]
+  });
+  assert.equal(valid.all_rows_on_declared_decision_grid,true);
+  assert.throws(()=>verifyProspectiveCohortRowCoverage({
+    ...common,rows:[
+      {symbol:'BTCUSDT',at:first+1,resolved_at:first+1+interval},
+      {symbol:'BTCUSDT',at:first+2*interval,resolved_at:first+3*interval}
+    ]
+  }),/PROSPECTIVE_COHORT_ROW_OFF_SCHEDULE/);
+  assert.throws(()=>verifyProspectiveCohortRowCoverage({
+    ...common,rows:[
+      {symbol:'BTCUSDT',at:first-interval,resolved_at:first},
+      {symbol:'BTCUSDT',at:first+2*interval,resolved_at:first+3*interval}
+    ]
+  }),/PROSPECTIVE_COHORT_ROW_OFF_SCHEDULE/);
+  assert.throws(()=>verifyProspectiveCohortRowCoverage({
+    ...common,rows:[
+      {symbol:'BTCUSDT',at:first,resolved_at:first+interval},
+      {symbol:'BTCUSDT',at:first+2*interval+1,resolved_at:first+3*interval+1}
+    ]
+  }),/PROSPECTIVE_COHORT_ROW_OFF_SCHEDULE/);
+});
+
+test('prospective cohort row coverage rejects an invalid decision schedule',()=>{
+  assert.throws(()=>verifyProspectiveCohortRowCoverage({
+    selectedSymbols:['BTCUSDT'],
+    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:1}],
+    rows:[{symbol:'BTCUSDT',at:1,resolved_at:14400001}],
+    counts:{rows:1,included_symbols:1,requested_symbols:1},
+    schedule:{first_decision_at:1,last_decision_at:20000000,decision_interval_ms:1000}
+  }),/PROSPECTIVE_COHORT_DECISION_SCHEDULE_INVALID/);
+});
+
 test('prospective cohort row coverage verifies exact per-symbol row counts and totals',()=>{
   const selectedSymbols=['BTCUSDT','ETHUSDT'];
   const symbolResults=[
