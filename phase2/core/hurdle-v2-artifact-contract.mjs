@@ -541,7 +541,8 @@ export function createHurdleV2Artifact({
     baseline: selection.baseline ?? null,
     required_inner_improvement:finite(selection.required_inner_improvement)
       ?Number(selection.required_inner_improvement):null,
-    validation_or_holdout_used: false
+    validation_or_holdout_used:
+      selection.validation_or_holdout_used_for_fit_or_selection
   };
   const core = {
     artifact_schema: HURDLE_V2_ARTIFACT_SCHEMA,

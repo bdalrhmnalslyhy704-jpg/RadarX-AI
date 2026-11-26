@@ -179,6 +179,7 @@ before(async () => {
         contextual: {trade_count: 7, win_rate_pct: 42.857142857, net_pnl_pct: 0.060233, max_drawdown_pct: 0.193713},
         pooled_only: {trade_count: 0, win_rate_pct: null, net_pnl_pct: 0, max_drawdown_pct: 0}
       },
+      validation_or_holdout_used_for_fit_or_selection: false,
       candidates: [{
         name: '4H_BRIER_SHARED_RANK_W040_LR0015_E16',
         selection_brier: 0.02892058,
@@ -249,6 +250,13 @@ test('03. artifact contains both independently serialized heads', () => {
   assert.equal(artifact.upstream_ordered_ranker_dependency.feature_count,696);
   assert.equal(artifact.upstream_ordered_ranker_dependency.representation,'RAW_ORDERED_696_V1');
 });
+test('03d. Hurdle uses the selection result holdout flag instead of manufacturing a false value',()=>{
+  const invalid=structuredClone(fixture);
+  invalid.selection.validation_or_holdout_used_for_fit_or_selection=true;
+  assert.throws(()=>createHurdleV2Artifact(invalid),
+    /HURDLE_V2_ARTIFACT_VERIFY_FAILED:HOLDOUT_LOCK_CONTRACT_INVALID/);
+});
+
 test('03c. Hurdle preserves and rejects non-inner or holdout-tainted inference-policy provenance',()=>{
   const invalid=structuredClone(fixture);
   invalid.fit.execution_risk_policy={
