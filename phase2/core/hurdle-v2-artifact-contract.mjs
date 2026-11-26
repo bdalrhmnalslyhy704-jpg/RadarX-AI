@@ -698,8 +698,16 @@ export function createHurdleV2Artifact({
     purge_definition: {
       outer_purge_ms: splitDefinition.purge_ms,
       execution_head_fit_partition: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
+      source_partition: trainingSummary.source_partition,
+      execution_head_split_status: trainingSummary.execution_head_split_status,
+      execution_head_split_method: trainingSummary.execution_head_split_method,
       execution_head_training_rows: trainingSummary.training_rows ?? trainingSummary.trainingRows ?? null,
       model_training_rows: trainingSummary.model_training_rows ?? null,
+      purged_rows: trainingSummary.purged_rows,
+      model_training_max_resolved_at: trainingSummary.model_training_max_resolved_at,
+      execution_head_min_at: trainingSummary.execution_head_min_at,
+      purge_gap_ms: trainingSummary.purge_gap_ms,
+      chronology_valid: trainingSummary.chronology_valid,
       model_and_execution_head_identities_disjoint:
         trainingSummary.training_and_execution_head_identities_disjoint === true,
       representation_out_of_sample: trainingSummary.representation_out_of_sample === true,
@@ -707,7 +715,7 @@ export function createHurdleV2Artifact({
     },
     training_provenance: {
       fit_boundary: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
-      source_partition: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+      source_partition: trainingSummary.source_partition,
       training_rows: trainingSummary.training_rows ?? null,
       model_training_rows: trainingSummary.model_training_rows ?? null,
       representation_out_of_sample: trainingSummary.representation_out_of_sample === true,
@@ -946,6 +954,28 @@ export function verifyHurdleV2Artifact(artifact) {
       if (!finite(value)||value<0||value>1)
         return fail('POSITIVE_RETURN_PROBABILITY_THRESHOLD_INVALID:'+name);
     }
+    const purge=artifact.purge_definition;
+    const training=artifact.training_provenance;
+    const modelTrainingMaxResolvedAt=purge?.model_training_max_resolved_at;
+    const executionHeadMinAt=purge?.execution_head_min_at;
+    if(purge?.execution_head_fit_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY'||
+      purge?.source_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'||
+      purge?.execution_head_split_status!=='READY'||
+      purge?.execution_head_split_method!=='LATEST_COMPLETE_15M_GROUPS_WITH_FORWARD_LABEL_PURGE'||
+      !Number.isInteger(purge?.execution_head_training_rows)||purge.execution_head_training_rows<20||
+      !Number.isInteger(purge?.model_training_rows)||purge.model_training_rows<20||
+      !Number.isInteger(purge?.purged_rows)||purge.purged_rows<0||
+      !finite(modelTrainingMaxResolvedAt)||!finite(executionHeadMinAt)||
+      !(modelTrainingMaxResolvedAt<executionHeadMinAt)||
+      !finite(purge?.purge_gap_ms)||
+      Math.abs(purge.purge_gap_ms-(executionHeadMinAt-modelTrainingMaxResolvedAt))>1e-6||
+      purge.purge_gap_ms<=0||purge?.chronology_valid!==true||
+      purge?.representation_out_of_sample!==true||
+      purge?.model_and_execution_head_identities_disjoint!==true||
+      training?.source_partition!==purge.source_partition||
+      training?.training_rows!==purge.execution_head_training_rows||
+      training?.model_training_rows!==purge.model_training_rows)
+      return fail('EXECUTION_HEAD_CHRONOLOGY_OR_PURGE_INVALID');
     if (artifact.purge_definition?.validation_or_holdout_used !== false ||
         artifact.training_provenance?.validation_or_holdout_used !== false ||
         artifact.training_provenance?.hurdle_return_head?.validation_or_holdout_used !== false ||

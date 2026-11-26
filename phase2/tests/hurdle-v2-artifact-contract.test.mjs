@@ -160,6 +160,13 @@ before(async () => {
         execution_regression_heads: {
           training_rows: 1800,
           model_training_rows: 6500,
+          model_training_max_resolved_at: 14401000,
+          execution_head_min_at: 15301000,
+          purge_gap_ms: 900000,
+          execution_head_split_status: 'READY',
+          execution_head_split_method: 'LATEST_COMPLETE_15M_GROUPS_WITH_FORWARD_LABEL_PURGE',
+          purged_rows: 12,
+          chronology_valid: true,
           source_partition: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
           representation_out_of_sample: true,
           training_and_execution_head_identities_disjoint: true,
@@ -252,6 +259,19 @@ test('03. artifact contains both independently serialized heads', () => {
   assert.equal(artifact.upstream_ordered_ranker_dependency.feature_count,696);
   assert.equal(artifact.upstream_ordered_ranker_dependency.representation,'RAW_ORDERED_696_V1');
 });
+test('03f. Hurdle rejects overlapping execution-head chronology or a missing purge audit',()=>{
+  const overlap=structuredClone(fixture);
+  overlap.fit.training.execution_regression_heads.execution_head_min_at=
+    overlap.fit.training.execution_regression_heads.model_training_max_resolved_at;
+  assert.throws(()=>createHurdleV2Artifact(overlap),
+    /HURDLE_V2_ARTIFACT_VERIFY_FAILED:EXECUTION_HEAD_CHRONOLOGY_OR_PURGE_INVALID/);
+
+  const missingSplit=structuredClone(fixture);
+  missingSplit.fit.training.execution_regression_heads.execution_head_split_status='UNAVAILABLE';
+  assert.throws(()=>createHurdleV2Artifact(missingSplit),
+    /HURDLE_V2_ARTIFACT_VERIFY_FAILED:EXECUTION_HEAD_CHRONOLOGY_OR_PURGE_INVALID/);
+});
+
 test('03e. Hurdle refuses holdout-tainted execution-head training provenance',()=>{
   const invalid=structuredClone(fixture);
   invalid.fit.training.execution_regression_heads.validation_or_holdout_used=true;

@@ -4179,9 +4179,14 @@ export function trainTcnLstmHybrid(trainingRows, {
       model_training_rows:rows.length,
       model_training_max_resolved_at:Math.max(...rows.map(row=>Number(row.resolved_at))),
       execution_head_min_at:Math.min(...executionRows.map(row=>Number(row.at))),
-      source_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
-      representation_out_of_sample:true,
-      training_and_execution_head_identities_disjoint:true
+      source_partition:executionHeadSplit.diagnostics.source_partition,
+      execution_head_split_status:executionHeadSplit.status,
+      execution_head_split_method:executionHeadSplit.diagnostics.split_method,
+      purged_rows:executionHeadSplit.purged_rows.length,
+      purge_gap_ms:executionHeadSplit.diagnostics.purge_gap_ms,
+      chronology_valid:executionHeadSplit.diagnostics.chronology_valid===true,
+      representation_out_of_sample:executionHeadSplit.diagnostics.representation_out_of_sample===true,
+      training_and_execution_head_identities_disjoint:executionHeadSplit.diagnostics.disjoint_sample_identities===true
     }
     :{schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V5',
       fitted:false,reason:'PURGED_EXECUTION_HEAD_TRAINING_BLOCK_NOT_AVAILABLE',
