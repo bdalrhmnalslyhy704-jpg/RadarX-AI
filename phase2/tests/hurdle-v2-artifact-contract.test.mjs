@@ -512,6 +512,7 @@ test('33c. verifier requires strict pairwise accuracy and log-loss superiority o
     minimum_trades:20,minimum_win_rate_pct:55,maximum_drawdown_pct:8,
     top_k_per_timestamp:1,
     selected_trial:{
+      top_k_per_timestamp:1,
       passed:true,
       gates:{
         return_data_complete:true,minimum_trades:true,minimum_win_rate:true,
@@ -679,6 +680,40 @@ test('33c. verifier requires strict pairwise accuracy and log-loss superiority o
   assert.equal(verifyHurdleV2Artifact(drawdownResealed).reason,
     'PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID',
     'a candidate above the 8% maximum drawdown must fail closed');
+
+  const mismatchedSignals=structuredClone(supported);
+  mismatchedSignals.inner_qualification.candidates[0].execution_risk_policy
+    .selected_trial.logistic_anchor_metrics.signal_count=23;
+  const signalsResealed=resealArtifact(mismatchedSignals);
+  assert.equal(verifyHurdleV2Artifact(signalsResealed).reason,
+    'PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID',
+    'the actual model and Logistic signal counts must match, not only the recorded flag');
+
+  const fractionalTrades=structuredClone(supported);
+  const fractionalTrial=fractionalTrades.inner_qualification.candidates[0]
+    .execution_risk_policy.selected_trial;
+  fractionalTrial.model_metrics.trade_count=24.5;
+  fractionalTrial.logistic_anchor_metrics.trade_count=24.5;
+  const fractionalResealed=resealArtifact(fractionalTrades);
+  assert.equal(verifyHurdleV2Artifact(fractionalResealed).reason,
+    'PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID',
+    'executed trade counts must be integers');
+
+  const impossibleWinRate=structuredClone(supported);
+  impossibleWinRate.inner_qualification.candidates[0].ranking_execution_selection
+    .selected_trial.model_metrics.win_rate_pct=100.1;
+  const impossibleWinResealed=resealArtifact(impossibleWinRate);
+  assert.equal(verifyHurdleV2Artifact(impossibleWinResealed).reason,
+    'PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID',
+    'win rate must remain within the mathematical 0–100% interval');
+
+  const wrongTopK=structuredClone(supported);
+  wrongTopK.inner_qualification.candidates[0].ranking_execution_selection
+    .selected_trial.top_k_per_timestamp=2;
+  const wrongTopKResealed=resealArtifact(wrongTopK);
+  assert.equal(verifyHurdleV2Artifact(wrongTopKResealed).reason,
+    'PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID',
+    'profitability evidence must preserve the frozen top-1 execution rule');
 });
 
 test('34. verifier rejects scientific qualification status drift from the qualification record', () => {

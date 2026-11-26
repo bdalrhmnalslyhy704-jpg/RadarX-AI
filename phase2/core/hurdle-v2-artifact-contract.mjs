@@ -244,29 +244,32 @@ function hasStrictExecutionPolicyProfitabilityEvidence(policy,anchorGateName){
     !finite(maximumDrawdown)||maximumDrawdown<=0||maximumDrawdown>8||
     policy?.top_k_per_timestamp!==1||
     trial?.passed!==true||
-    !gates||gates.return_data_complete!==true||
-    gates.minimum_trades!==true||
-    gates.minimum_win_rate!==true||
-    gates.positive_net_pnl!==true||
-    gates.maximum_drawdown!==true||
-    gates.genuine_abstention!==true||
-    gates.matched_logistic_signal_count!==true||
-    gates.matched_logistic_executed_trade_count!==true||
-    gates[anchorGateName]!==true||
-    trial?.logistic_anchor_signal_counts_matched!==true||
-    trial?.logistic_anchor_trade_counts_matched!==true||
-    !model||model?.return_data_status!=='COMPLETE'||
-    !finite(model?.trade_count)||model.trade_count<minimumTrades||
-    !finite(model?.win_rate_pct)||model.win_rate_pct<minimumWinRate||
-    !finite(model?.net_pnl_pct)||model.net_pnl_pct<=0||
-    !finite(model?.max_drawdown_pct)||model.max_drawdown_pct<0||
-    model.max_drawdown_pct>maximumDrawdown||
-    !anchor||anchor?.return_data_status!=='COMPLETE'||
-    !finite(anchor?.trade_count)||anchor.trade_count!==model.trade_count||
-    !finite(anchor?.net_pnl_pct)||
-    !finite(anchor?.max_drawdown_pct)||
-    model.net_pnl_pct<=anchor.net_pnl_pct||
-    model.max_drawdown_pct>anchor.max_drawdown_pct)return false;
+     trial?.top_k_per_timestamp!==1||
+     !gates||gates.return_data_complete!==true||
+     gates.minimum_trades!==true||
+     gates.minimum_win_rate!==true||
+     gates.positive_net_pnl!==true||
+     gates.maximum_drawdown!==true||
+     gates.genuine_abstention!==true||
+     gates.matched_logistic_signal_count!==true||
+     gates.matched_logistic_executed_trade_count!==true||
+     gates[anchorGateName]!==true||
+     trial?.logistic_anchor_signal_counts_matched!==true||
+     trial?.logistic_anchor_trade_counts_matched!==true||
+     !model||model?.return_data_status!=='COMPLETE'||
+     !Number.isInteger(model?.trade_count)||model.trade_count<minimumTrades||
+     !Number.isInteger(model?.signal_count)||model.signal_count<model.trade_count||
+     !finite(model?.win_rate_pct)||model.win_rate_pct<minimumWinRate||model.win_rate_pct>100||
+     !finite(model?.net_pnl_pct)||model.net_pnl_pct<=0||
+     !finite(model?.max_drawdown_pct)||model.max_drawdown_pct<0||
+     model.max_drawdown_pct>maximumDrawdown||
+     !anchor||anchor?.return_data_status!=='COMPLETE'||
+     !Number.isInteger(anchor?.trade_count)||anchor.trade_count!==model.trade_count||
+     !Number.isInteger(anchor?.signal_count)||anchor.signal_count!==model.signal_count||
+     !finite(anchor?.net_pnl_pct)||
+     !finite(anchor?.max_drawdown_pct)||
+     model.net_pnl_pct<=anchor.net_pnl_pct||
+     model.max_drawdown_pct>anchor.max_drawdown_pct)return false;
   return true;
 }
 
