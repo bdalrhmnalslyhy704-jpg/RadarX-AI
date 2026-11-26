@@ -542,6 +542,8 @@ test('33c. verifier requires strict pairwise accuracy and log-loss superiority o
       win_rate_not_worse:true,drawdown_not_worse:true},
     passed:true,holdout_values_used:false
   };
+  qualification.baseline={selection_brier:0.03};
+  qualification.required_inner_improvement=0.00025;
   qualification.gate_results={qualified:true,result:contextAblation,
     source_partition:'INNER_SELECTION_ONLY',holdout_values_used:false};
   qualification.context_ablation=contextAblation;
@@ -552,6 +554,8 @@ test('33c. verifier requires strict pairwise accuracy and log-loss superiority o
     passed_inner_margin:true,
     passed_inner_brier_margin:true,
     passed_inner_pairwise_ranking_gate:true,
+    selection_brier:0.028,
+    brier_improvement:0.002,
     independent_ranking_signal_passed:true,
     ranking_head_selection_qualified:true,
     execution_head_context_ablation_passed:true,
@@ -629,6 +633,20 @@ test('33c. verifier requires strict pairwise accuracy and log-loss superiority o
   assert.equal(verifyHurdleV2Artifact(lossResealed).reason,
     'RANKER_FOLD_STABILITY_EVIDENCE_MISSING_OR_INVALID',
     'one fold with worse pairwise log loss must fail closed');
+
+  const forgedBrier=structuredClone(supported);
+  forgedBrier.inner_qualification.candidates[0].brier_improvement=0.0001;
+  const brierResealed=resealArtifact(forgedBrier);
+  assert.equal(verifyHurdleV2Artifact(brierResealed).reason,
+    'CLASSIFIER_BRIER_MARGIN_EVIDENCE_INVALID',
+    'a recorded Brier margin below the frozen inner threshold must fail closed');
+
+  const inconsistentBrier=structuredClone(supported);
+  inconsistentBrier.inner_qualification.candidates[0].selection_brier=0.029;
+  const inconsistentBrierResealed=resealArtifact(inconsistentBrier);
+  assert.equal(verifyHurdleV2Artifact(inconsistentBrierResealed).reason,
+    'CLASSIFIER_BRIER_MARGIN_EVIDENCE_INVALID',
+    'recorded Brier improvement must recompute from the saved Logistic and model Brier values');
 
   const belowWinGate=structuredClone(supported);
   const winTrial=belowWinGate.inner_qualification.candidates[0].execution_risk_policy.selected_trial;

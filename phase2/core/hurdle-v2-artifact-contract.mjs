@@ -524,6 +524,8 @@ export function createHurdleV2Artifact({
       execution_head_context_ablation: candidate.execution_head_context_ablation ?? null
     })),
     baseline: selection.baseline ?? null,
+    required_inner_improvement:finite(selection.required_inner_improvement)
+      ?Number(selection.required_inner_improvement):null,
     validation_or_holdout_used: false
   };
   const core = {
@@ -868,6 +870,17 @@ export function verifyHurdleV2Artifact(artifact) {
           selected?.return_selection_diagnostics?.status !== 'AVAILABLE' ||
           !(Number(selected?.return_selection_diagnostics?.preliminary_return_screen_candidates) > 0))
         return fail('QUALIFICATION_GATE_EVIDENCE_INCOMPLETE');
+      const baselineBrier=qualification.baseline?.selection_brier;
+      const candidateBrier=selected?.selection_brier;
+      const recordedBrierImprovement=selected?.brier_improvement;
+      const requiredBrierImprovement=qualification.required_inner_improvement;
+      const recomputedBrierImprovement=Number(baselineBrier)-Number(candidateBrier);
+      if(!finite(baselineBrier)||!finite(candidateBrier)||
+        !finite(recordedBrierImprovement)||!finite(requiredBrierImprovement)||
+        requiredBrierImprovement<=0||
+        !(recordedBrierImprovement>requiredBrierImprovement)||
+        Math.abs(recordedBrierImprovement-recomputedBrierImprovement)>1e-8)
+        return fail('CLASSIFIER_BRIER_MARGIN_EVIDENCE_INVALID');
       if(!hasFoldStableDualMetricRankerEvidence(rankerDependency))
         return fail('RANKER_FOLD_STABILITY_EVIDENCE_MISSING_OR_INVALID');
       if(!hasStrictExecutionPolicyProfitabilityEvidence(
