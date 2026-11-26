@@ -228,10 +228,36 @@ jobs:
           bundle="$RUNNER_TEMP/radarx-build224-prospective-cohort.tar.gz"
           encrypted="artifacts/secure/radarx-build224-prospective-cohort-${GITHUB_SHA}.enc"
           mkdir -p artifacts/secure
+          umask 077
           tar -czf "$bundle" -C artifacts neural-closure-prospective
+          source_sha=$(sha256sum "$bundle" | awk '{print $1}')
           node phase2/tools/secure-prospective-cohort-bundle.mjs encrypt "$bundle" "$encrypted"
+
+          # Authenticate the actual produced envelope, then compare restored
+          # bytes with the pre-encryption tarball before deleting plaintext.
+          restored="$RUNNER_TEMP/radarx-build224-prospective-cohort-verified.tar.gz"
+          node phase2/tools/secure-prospective-cohort-bundle.mjs decrypt "$encrypted" "$restored"
+          restored_sha=$(sha256sum "$restored" | awk '{print $1}')
+          test "$source_sha" = "$restored_sha"
+          cmp -s "$bundle" "$restored"
+          tar -tzf "$restored" >/dev/null
+          encrypted_sha=$(sha256sum "$encrypted" | awk '{print $1}')
+          encrypted_bytes=$(stat -c '%s' "$encrypted")
+          test "$encrypted_bytes" -gt 0
+
+          {
+            echo "## Locked cohort encryption verification"
+            echo "- Encryption: AES-256-GCM (authenticated)"
+            echo "- Plaintext SHA-256: $source_sha"
+            echo "- Decrypted SHA-256: $restored_sha"
+            echo "- Encrypted artifact SHA-256: $encrypted_sha"
+            echo "- Encrypted artifact bytes: $encrypted_bytes"
+            echo "- Round-trip byte comparison: PASS"
+            echo "- Decrypted tar integrity: PASS"
+          } >> "$GITHUB_STEP_SUMMARY"
+
           rm -rf artifacts/neural-closure-prospective
-          rm -f "$bundle"
+          rm -f "$bundle" "$restored"
           test -s "$encrypted"
           if find artifacts -type f ! -name '*.enc' -print -quit | grep -q .; then
             echo "::error::Plaintext cohort material remains in the artifact staging directory."
