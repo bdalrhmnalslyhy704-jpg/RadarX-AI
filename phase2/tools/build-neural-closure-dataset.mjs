@@ -31,7 +31,7 @@ const LEGACY_COHORT_LAST_DECISION_AT=Date.parse('2026-11-17T16:14:59.999Z');
 const LEGACY_COHORT_LAST_LABEL_RESOLVED_AT=
   LEGACY_COHORT_LAST_DECISION_AT+4*60*60_000;
 function parseArgs(argv){
-  const result={days:180,maxSymbols:500,minSymbols:40,
+  const result={days:180,maxSymbols:100,minSymbols:40,
     minQuoteVolumeUsdt:750_000,prospectiveOnly:false,startAt:null,
     output:'artifacts/neural-closure/dataset.json',
     archiveDir:'artifacts/neural-closure/raw'};
@@ -58,8 +58,12 @@ function parseArgs(argv){
   }
   if(!Number.isInteger(result.days)||result.days<60||result.days>180)
     throw new Error('DAYS_MUST_BE_AN_INTEGER_FROM_60_TO_180');
-  if(!Number.isInteger(result.maxSymbols)||result.maxSymbols<10||result.maxSymbols>500)
-    throw new Error('MAX_SYMBOLS_MUST_BE_FROM_10_TO_500');
+  if(!Number.isInteger(result.maxSymbols)||result.maxSymbols<10)
+    throw new Error('MAX_SYMBOLS_MUST_BE_AN_INTEGER_AT_LEAST_10');
+  if(!result.prospectiveOnly&&result.maxSymbols>100)
+    throw new Error('LEGACY_MAX_SYMBOLS_MUST_NOT_EXCEED_100');
+  if(result.prospectiveOnly&&result.maxSymbols>500)
+    throw new Error('PROSPECTIVE_MAX_SYMBOLS_MUST_NOT_EXCEED_500');
   if(!Number.isInteger(result.minSymbols)||result.minSymbols<10||
     result.minSymbols>result.maxSymbols)
     throw new Error('MIN_SYMBOLS_MUST_BE_AT_LEAST_10_AND_NOT_EXCEED_MAX_SYMBOLS');
@@ -247,7 +251,9 @@ async function main(){
   const {payload:tickers}=await getJson('ticker/24hr',{},REQUEST_WEIGHT.TICKER_24HR_ALL);
   if(!Array.isArray(tickers))throw new Error('BINANCE_24H_TICKERS_INVALID');
   const universe=selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
-    minimumQuoteVolume:args.minQuoteVolumeUsdt,maxSymbols:args.maxSymbols
+    minimumQuoteVolume:args.minQuoteVolumeUsdt,
+    maxSymbols:args.maxSymbols,
+    includeAllEligible:args.prospectiveOnly===true
   });
   if(universe.selected.length<args.minSymbols)
     throw new Error('LIQUIDITY_UNIVERSE_BELOW_MIN_SYMBOLS:'+universe.selected.length);

@@ -59,7 +59,7 @@ test('candidate prefilter includes every currently eligible Spot USDT pair above
   tickers.push({symbol:'OFFUSDT',quoteVolume:'9000000',lastPrice:'1',
     priceChangePercent:'0'});
   const result=selectBinanceSpotUsdtUniverse({symbols},tickers,{
-    minimumQuoteVolume:750_000,maxSymbols:200
+    minimumQuoteVolume:750_000,maxSymbols:200,includeAllEligible:true
   });
   assert.equal(result.eligible.length,126);
   assert.equal(result.selected.length,126);
@@ -69,13 +69,19 @@ test('candidate prefilter includes every currently eligible Spot USDT pair above
   assert.equal(result.selected.some(item=>item.symbol==='USDCUSDT'),false);
   assert.equal(result.selected.some(item=>item.symbol==='OFFUSDT'),false);
   assert.throws(()=>selectBinanceSpotUsdtUniverse({symbols},tickers,{
-    minimumQuoteVolume:750_000,maxSymbols:100
+    minimumQuoteVolume:750_000,maxSymbols:100,includeAllEligible:true
   }),/ELIGIBLE_UNIVERSE_EXCEEDS_CONFIGURED_MAX_SYMBOLS:126:100/);
+  const legacy=selectBinanceSpotUsdtUniverse({symbols},tickers,{
+    minimumQuoteVolume:750_000,maxSymbols:100,includeAllEligible:false
+  });
+  assert.equal(legacy.selected.length,100,
+    'the legacy historical collector retains its top-N selection contract');
+  assert.equal(legacy.selected.some(item=>item.symbol==='BTCUSDT'),true);
 });
 
 test('candidate prefilter fails closed when BTC or the exchange universe evidence is missing',()=>{
   assert.throws(()=>selectBinanceSpotUsdtUniverse({symbols:[]},[],{
-    minimumQuoteVolume:750_000,maxSymbols:500
+    minimumQuoteVolume:750_000,maxSymbols:500,includeAllEligible:true
   }),/BTCUSDT_NOT_IN_750K_USDT_SPOT_UNIVERSE/);
   assert.throws(()=>selectBinanceSpotUsdtUniverse(null,[],{}),
     /BINANCE_SPOT_USDT_UNIVERSE_ARGUMENTS_INVALID/);
