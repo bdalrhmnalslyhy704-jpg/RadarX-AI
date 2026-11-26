@@ -34,7 +34,7 @@ permissions:
 # Prospective capture hard cap is 1000; the collector still fails closed above this value.
 concurrency:
   group: build224-prospective-neural-cohort
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   capture:
