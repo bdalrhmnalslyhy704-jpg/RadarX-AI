@@ -314,6 +314,19 @@ function hasContextAblationProfitabilityEvidence(ablation,executionRiskPolicy){
   return true;
 }
 
+function hasInnerSelectionPolicyProvenance(policy){
+  if(!policy||typeof policy!=='object')return false;
+  if(policy.status==='UNAVAILABLE')
+    return policy.passed===false&&policy.holdout_values_used===false;
+  return (policy.selection_partition_only===true||
+      policy.source_partition==='INNER_SELECTION_ONLY')&&
+    policy.holdout_values_used===false&&
+    policy.threshold_selected_on_inner_selection===true&&
+    policy.threshold_frozen_before_outer_validation===true&&
+    policy.round_trip_cost_bps===30&&
+    policy.top_k_per_timestamp===1;
+}
+
 function policySnapshot(policy, name) {
   if (!policy || typeof policy !== 'object') {
     return {
@@ -327,8 +340,6 @@ function policySnapshot(policy, name) {
   }
   return {
     ...policy,
-    source_partition: 'INNER_SELECTION_ONLY',
-    holdout_values_used: false,
     snapshot_name: name
   };
 }
@@ -853,6 +864,12 @@ export function verifyHurdleV2Artifact(artifact) {
         artifact.execution_qualification_status !== expectedQualificationStatus ||
         artifact.training_status !== 'TRAINED')
       return fail('QUALIFICATION_STATUS_INCONSISTENT');
+    const contextualPolicy=artifact.abstention_parameters?.contextual;
+    const pooledPolicy=artifact.abstention_parameters?.pooled;
+    if(!hasInnerSelectionPolicyProvenance(contextualPolicy)||
+      !hasInnerSelectionPolicyProvenance(pooledPolicy)||
+      (qualified&&contextualPolicy?.status==='UNAVAILABLE'))
+      return fail('ABSTENTION_POLICY_PROVENANCE_INVALID');
     if (qualified) {
       const selected = qualification.candidates?.find(candidate =>
         candidate.name === qualification.selected_configuration);

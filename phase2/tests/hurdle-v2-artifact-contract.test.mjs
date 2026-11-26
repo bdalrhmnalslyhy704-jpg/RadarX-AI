@@ -144,6 +144,10 @@ before(async () => {
     selected_return_estimator: 'HURDLE_EXPECTED_VALUE',
     selected_abstention_percentile: 0.2,
     selection_partition_only: true,
+    threshold_selected_on_inner_selection: true,
+    threshold_frozen_before_outer_validation: true,
+    round_trip_cost_bps: 30,
+    top_k_per_timestamp: 1,
     holdout_values_used: false
   };
   fixture = {
@@ -245,6 +249,18 @@ test('03. artifact contains both independently serialized heads', () => {
   assert.equal(artifact.upstream_ordered_ranker_dependency.feature_count,696);
   assert.equal(artifact.upstream_ordered_ranker_dependency.representation,'RAW_ORDERED_696_V1');
 });
+test('03c. Hurdle preserves and rejects non-inner or holdout-tainted inference-policy provenance',()=>{
+  const invalid=structuredClone(fixture);
+  invalid.fit.execution_risk_policy={
+    ...invalid.fit.execution_risk_policy,
+    selection_partition_only:false,
+    source_partition:'OUTER_VALIDATION',
+    holdout_values_used:true
+  };
+  assert.throws(()=>createHurdleV2Artifact(invalid),
+    /HURDLE_V2_ARTIFACT_VERIFY_FAILED:ABSTENTION_POLICY_PROVENANCE_INVALID/);
+});
+
 test('03b. Hurdle rejects an upstream ordered-ranker dependency with mismatched provenance',()=>{
   const invalid=structuredClone(fixture);
   invalid.orderedRankingDependency.dataset_sha256='9'.repeat(64);
