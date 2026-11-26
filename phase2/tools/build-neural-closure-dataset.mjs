@@ -410,6 +410,8 @@ async function main(){
       five_minute_candles:five.candles.length,
       fifteen_minute_candles:fifteen.candles.length,
       valid_events:symbolRows.length,rejected_events:symbolRejected,
+      expected_events:schedule.decision_count,
+      minimum_valid_events:minimumValidEvents,
       coverage:coverage.checks
     });
     rawArchiveRecords.push(...pendingArchives);

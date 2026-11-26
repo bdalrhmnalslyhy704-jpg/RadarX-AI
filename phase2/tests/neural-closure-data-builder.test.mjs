@@ -212,6 +212,15 @@ test('prospective cohort row coverage requires every row to match the declared 4
     /PROSPECTIVE_COHORT_ROW_OFF_SCHEDULE/);
 });
 
+test('prospective builder persists the event-support evidence required by its independent verifier',async()=>{
+  const source=await readFile(new URL(
+    '../tools/build-neural-closure-dataset.mjs',import.meta.url
+  ),'utf8');
+  assert.match(source,/const minimumValidEvents=Math\.ceil\(schedule\.decision_count\*0\.8\)/);
+  assert.match(source,/valid_events:symbolRows\.length,rejected_events:symbolRejected,\s*expected_events:schedule\.decision_count,\s*minimum_valid_events:minimumValidEvents,\s*coverage:coverage\.checks/);
+  assert.match(source,/valid_events:symbolRows\.length,rejected_events:symbolRejected,\s*expected_events:schedule\.decision_count,\s*minimum_valid_events:minimumValidEvents,\s*rejection_reasons:symbolRejectedReasons/);
+});
+
 test('prospective cohort row coverage enforces the 80% event-support floor and complete accounting',()=>{
   const first=Date.UTC(2026,10,18,0,15,0)-1,interval=4*60*60*1000;
   const schedule={
