@@ -168,6 +168,7 @@ before(async () => {
           purged_rows: 12,
           chronology_valid: true,
           source_partition: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+          execution_head_split_source_partition: 'INNER_TRAINING_PARTITION_ONLY',
           representation_out_of_sample: true,
           training_and_execution_head_identities_disjoint: true,
           validation_or_holdout_used: false,
@@ -269,6 +270,11 @@ test('03f. Hurdle rejects overlapping execution-head chronology or a missing pur
   const missingSplit=structuredClone(fixture);
   missingSplit.fit.training.execution_regression_heads.execution_head_split_status='UNAVAILABLE';
   assert.throws(()=>createHurdleV2Artifact(missingSplit),
+    /HURDLE_V2_ARTIFACT_VERIFY_FAILED:EXECUTION_HEAD_CHRONOLOGY_OR_PURGE_INVALID/);
+
+  const wrongSource=structuredClone(fixture);
+  wrongSource.fit.training.execution_regression_heads.execution_head_split_source_partition='OUTER_VALIDATION';
+  assert.throws(()=>createHurdleV2Artifact(wrongSource),
     /HURDLE_V2_ARTIFACT_VERIFY_FAILED:EXECUTION_HEAD_CHRONOLOGY_OR_PURGE_INVALID/);
 });
 

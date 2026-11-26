@@ -699,6 +699,7 @@ export function createHurdleV2Artifact({
       outer_purge_ms: splitDefinition.purge_ms,
       execution_head_fit_partition: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
       source_partition: trainingSummary.source_partition,
+      execution_head_split_source_partition: trainingSummary.execution_head_split_source_partition,
       execution_head_split_status: trainingSummary.execution_head_split_status,
       execution_head_split_method: trainingSummary.execution_head_split_method,
       execution_head_training_rows: trainingSummary.training_rows ?? trainingSummary.trainingRows ?? null,
@@ -960,6 +961,7 @@ export function verifyHurdleV2Artifact(artifact) {
     const executionHeadMinAt=purge?.execution_head_min_at;
     if(purge?.execution_head_fit_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY'||
       purge?.source_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'||
+      purge?.execution_head_split_source_partition!=='INNER_TRAINING_PARTITION_ONLY'||
       purge?.execution_head_split_status!=='READY'||
       purge?.execution_head_split_method!=='LATEST_COMPLETE_15M_GROUPS_WITH_FORWARD_LABEL_PURGE'||
       !Number.isInteger(purge?.execution_head_training_rows)||purge.execution_head_training_rows<20||
