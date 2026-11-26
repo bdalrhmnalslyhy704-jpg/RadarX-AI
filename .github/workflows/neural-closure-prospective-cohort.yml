@@ -125,9 +125,15 @@ jobs:
               selectedSymbols,symbolResults,rows,counts:cohort.counts,
               schedule:cohort.schedule
             });
-            if(rowCoverageAudit.status!=='VERIFIED'||
+            if(rowCoverageAudit.schema!=='PROSPECTIVE_COHORT_ROW_COVERAGE_AUDIT_V2'||
+               rowCoverageAudit.status!=='VERIFIED'||
                rowCoverageAudit.symbols_verified!==cohort.universe?.eligible_candidate_count||
-               rowCoverageAudit.rows_verified!==rows.length)
+               rowCoverageAudit.rows_verified!==rows.length||
+               rowCoverageAudit.decision_count!==cohort.schedule?.decision_count||
+               rowCoverageAudit.minimum_valid_events_per_symbol!==
+                 Math.ceil(Number(cohort.schedule?.decision_count)*0.8)||
+               rowCoverageAudit.per_symbol_event_accounting_matches_schedule!==true||
+               rowCoverageAudit.minimum_event_coverage_met_for_every_symbol!==true)
               failures.push('PROSPECTIVE_ROW_COVERAGE_AUDIT_INVALID');
           }catch(error){
             failures.push('PROSPECTIVE_ROW_COVERAGE_AUDIT_FAILED:'+String(error?.message||error));

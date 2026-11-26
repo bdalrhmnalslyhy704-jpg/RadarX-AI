@@ -385,12 +385,14 @@ async function main(){
       }
       symbolRows.push(built.row);
     }
-    if(symbolRows.length<Math.floor(schedule.decision_count*0.8)){
+    const minimumValidEvents=Math.ceil(schedule.decision_count*0.8);
+    if(symbolRows.length<minimumValidEvents){
       const rejection={
         symbol,status:'REJECTED_LOW_VALID_EVENT_COVERAGE',
         collection_time_quote_volume_24h_usdt:asset.quote_volume_24h,
         valid_events:symbolRows.length,rejected_events:symbolRejected,
         expected_events:schedule.decision_count,
+        minimum_valid_events:minimumValidEvents,
         rejection_reasons:symbolRejectedReasons
       };
       symbolSummaries.push(rejection);

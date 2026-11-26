@@ -178,44 +178,80 @@ test('prospective capture audit rejects duplicate or unexpected symbol results',
 });
 
 test('prospective cohort row coverage requires every row to match the declared 4h decision grid',()=>{
-  const first=Date.UTC(2026,10,18,0,15,0)-1;
-  const interval=4*60*60*1000;
+  const first=Date.UTC(2026,10,18,0,15,0)-1,interval=4*60*60*1000;
   const schedule={
-    first_decision_at:first,
-    last_decision_at:first+2*interval,
-    decision_interval_ms:interval
+    first_decision_at:first,last_decision_at:first+4*interval,
+    decision_interval_ms:interval,decision_count:5,
+    decision_times:Array.from({length:5},(_,index)=>first+index*interval)
   };
+  const validRows=[0,1,2,4].map(index=>({
+    symbol:'BTCUSDT',at:first+index*interval,
+    resolved_at:first+(index+1)*interval
+  }));
   const common={
     selectedSymbols:['BTCUSDT'],
-    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:2}],
-    counts:{rows:2,included_symbols:1,requested_symbols:1},
-    schedule
+    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,
+      rejected_events:1,expected_events:5,minimum_valid_events:4}],
+    counts:{rows:4,included_symbols:1,requested_symbols:1},schedule
   };
-  const valid=verifyProspectiveCohortRowCoverage({
-    ...common,rows:[
-      {symbol:'BTCUSDT',at:first,resolved_at:first+interval},
-      {symbol:'BTCUSDT',at:first+2*interval,resolved_at:first+3*interval}
-    ]
-  });
+  const valid=verifyProspectiveCohortRowCoverage({...common,rows:validRows});
   assert.equal(valid.all_rows_on_declared_decision_grid,true);
+  assert.equal(valid.minimum_valid_events_per_symbol,4);
+  const offGrid=[...validRows];
+  offGrid[0]={...offGrid[0],at:first+1,resolved_at:first+1+interval};
+  assert.throws(()=>verifyProspectiveCohortRowCoverage({...common,rows:offGrid}),
+    /PROSPECTIVE_COHORT_ROW_OFF_SCHEDULE/);
+  const beforeGrid=[...validRows];
+  beforeGrid[0]={...beforeGrid[0],at:first-interval,resolved_at:first};
+  assert.throws(()=>verifyProspectiveCohortRowCoverage({...common,rows:beforeGrid}),
+    /PROSPECTIVE_COHORT_ROW_OFF_SCHEDULE/);
+  const afterGrid=[...validRows];
+  afterGrid[3]={...afterGrid[3],at:first+4*interval+1,
+    resolved_at:first+5*interval+1};
+  assert.throws(()=>verifyProspectiveCohortRowCoverage({...common,rows:afterGrid}),
+    /PROSPECTIVE_COHORT_ROW_OFF_SCHEDULE/);
+});
+
+test('prospective cohort row coverage enforces the 80% event-support floor and complete accounting',()=>{
+  const first=Date.UTC(2026,10,18,0,15,0)-1,interval=4*60*60*1000;
+  const schedule={
+    first_decision_at:first,last_decision_at:first+4*interval,
+    decision_interval_ms:interval,decision_count:5,
+    decision_times:Array.from({length:5},(_,index)=>first+index*interval)
+  };
+  const makeRows=count=>Array.from({length:count},(_,index)=>({
+    symbol:'BTCUSDT',at:first+index*interval,resolved_at:first+(index+1)*interval
+  }));
+  const base={
+    selectedSymbols:['BTCUSDT'],
+    counts:{rows:4,included_symbols:1,requested_symbols:1},schedule
+  };
+  const accepted=verifyProspectiveCohortRowCoverage({
+    ...base,
+    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',
+      valid_events:4,rejected_events:1,expected_events:5,minimum_valid_events:4}],
+    rows:makeRows(4)
+  });
+  assert.equal(accepted.minimum_valid_events_per_symbol,4);
+  assert.equal(accepted.minimum_event_coverage_met_for_every_symbol,true);
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
-    ...common,rows:[
-      {symbol:'BTCUSDT',at:first+1,resolved_at:first+1+interval},
-      {symbol:'BTCUSDT',at:first+2*interval,resolved_at:first+3*interval}
-    ]
-  }),/PROSPECTIVE_COHORT_ROW_OFF_SCHEDULE/);
+    ...base,
+    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',
+      valid_events:3,rejected_events:2,expected_events:5,minimum_valid_events:4}],
+    rows:makeRows(3)
+  }),/PROSPECTIVE_COHORT_SYMBOL_EVENT_COVERAGE_INVALID/);
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
-    ...common,rows:[
-      {symbol:'BTCUSDT',at:first-interval,resolved_at:first},
-      {symbol:'BTCUSDT',at:first+2*interval,resolved_at:first+3*interval}
-    ]
-  }),/PROSPECTIVE_COHORT_ROW_OFF_SCHEDULE/);
+    ...base,
+    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',
+      valid_events:4,rejected_events:0,expected_events:5,minimum_valid_events:4}],
+    rows:makeRows(4)
+  }),/PROSPECTIVE_COHORT_SYMBOL_EVENT_COVERAGE_INVALID/);
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
-    ...common,rows:[
-      {symbol:'BTCUSDT',at:first,resolved_at:first+interval},
-      {symbol:'BTCUSDT',at:first+2*interval+1,resolved_at:first+3*interval+1}
-    ]
-  }),/PROSPECTIVE_COHORT_ROW_OFF_SCHEDULE/);
+    ...base,
+    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',
+      valid_events:4,rejected_events:1,expected_events:4,minimum_valid_events:4}],
+    rows:makeRows(4)
+  }),/PROSPECTIVE_COHORT_SYMBOL_EVENT_COVERAGE_INVALID/);
 });
 
 test('prospective cohort row coverage rejects an invalid decision schedule',()=>{
@@ -229,61 +265,76 @@ test('prospective cohort row coverage rejects an invalid decision schedule',()=>
 });
 
 test('prospective cohort row coverage verifies exact per-symbol row counts and totals',()=>{
-  const first=Date.UTC(2026,10,18,0,15,0)-1;
-  const interval=4*60*60*1000;
+  const first=Date.UTC(2026,10,18,0,15,0)-1,interval=4*60*60*1000;
   const schedule={
-    first_decision_at:first,last_decision_at:first+2*interval,
-    decision_interval_ms:interval
+    first_decision_at:first,last_decision_at:first+4*interval,
+    decision_interval_ms:interval,decision_count:5,
+    decision_times:Array.from({length:5},(_,index)=>first+index*interval)
   };
   const selectedSymbols=['BTCUSDT','ETHUSDT'];
   const symbolResults=[
-    {symbol:'BTCUSDT',status:'INCLUDED',valid_events:2},
-    {symbol:'ETHUSDT',status:'INCLUDED',valid_events:1}
+    {symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,rejected_events:1,
+      expected_events:5,minimum_valid_events:4},
+    {symbol:'ETHUSDT',status:'INCLUDED',valid_events:4,rejected_events:1,
+      expected_events:5,minimum_valid_events:4}
   ];
-  const rows=[
-    {symbol:'BTCUSDT',at:first,resolved_at:first+interval},
-    {symbol:'BTCUSDT',at:first+interval,resolved_at:first+2*interval},
-    {symbol:'ETHUSDT',at:first,resolved_at:first+interval}
-  ];
+  const rows=['BTCUSDT','ETHUSDT'].flatMap(symbol=>
+    [0,1,2,4].map(index=>({
+      symbol,at:first+index*interval,resolved_at:first+(index+1)*interval
+    }))
+  );
   const audit=verifyProspectiveCohortRowCoverage({
     selectedSymbols,symbolResults,rows,schedule,
-    counts:{rows:3,included_symbols:2,requested_symbols:2}
+    counts:{rows:8,included_symbols:2,requested_symbols:2}
   });
   assert.equal(audit.status,'VERIFIED');
   assert.equal(audit.symbols_verified,2);
-  assert.equal(audit.rows_verified,3);
-  assert.equal(audit.no_unexpected_symbols,true);
-  assert.equal(audit.per_symbol_row_counts_match,true);
+  assert.equal(audit.rows_verified,8);
+  assert.equal(audit.decision_count,5);
+  assert.equal(audit.per_symbol_event_accounting_matches_schedule,true);
 });
 
 test('prospective cohort row coverage rejects a symbol whose stored valid-event count lies',()=>{
   const first=Date.UTC(2026,10,18,0,15,0)-1,interval=4*60*60*1000;
+  const schedule={
+    first_decision_at:first,last_decision_at:first+4*interval,
+    decision_interval_ms:interval,decision_count:5,
+    decision_times:Array.from({length:5},(_,index)=>first+index*interval)
+  };
+  const btcRows=[0,1,2,4].map(index=>({
+    symbol:'BTCUSDT',at:first+index*interval,
+    resolved_at:first+(index+1)*interval
+  }));
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
     selectedSymbols:['BTCUSDT','ETHUSDT'],
     symbolResults:[
-      {symbol:'BTCUSDT',status:'INCLUDED',valid_events:2},
-      {symbol:'ETHUSDT',status:'INCLUDED',valid_events:2}
+      {symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,rejected_events:1,
+        expected_events:5,minimum_valid_events:4},
+      {symbol:'ETHUSDT',status:'INCLUDED',valid_events:4,rejected_events:1,
+        expected_events:5,minimum_valid_events:4}
     ],
-    rows:[
-      {symbol:'BTCUSDT',at:first,resolved_at:first+interval},
-      {symbol:'BTCUSDT',at:first+interval,resolved_at:first+2*interval},
-      {symbol:'ETHUSDT',at:first,resolved_at:first+interval}
-    ],
-    schedule:{first_decision_at:first,last_decision_at:first+2*interval,decision_interval_ms:interval},
-    counts:{rows:3,included_symbols:2,requested_symbols:2}
+    rows:[...btcRows,{symbol:'ETHUSDT',at:first,resolved_at:first+interval}],
+    schedule,
+    counts:{rows:5,included_symbols:2,requested_symbols:2}
   }),/PROSPECTIVE_COHORT_SYMBOL_ROW_COUNT_MISMATCH/);
 });
 
 test('prospective cohort row coverage rejects foreign or missing symbol rows',()=>{
   const first=Date.UTC(2026,10,18,0,15,0)-1,interval=4*60*60*1000;
+  const schedule={
+    first_decision_at:first,last_decision_at:first+4*interval,
+    decision_interval_ms:interval,decision_count:5,
+    decision_times:Array.from({length:5},(_,index)=>first+index*interval)
+  };
   const common={
     selectedSymbols:['BTCUSDT','ETHUSDT'],
     symbolResults:[
-      {symbol:'BTCUSDT',status:'INCLUDED',valid_events:1},
-      {symbol:'ETHUSDT',status:'INCLUDED',valid_events:1}
+      {symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,rejected_events:1,
+        expected_events:5,minimum_valid_events:4},
+      {symbol:'ETHUSDT',status:'INCLUDED',valid_events:4,rejected_events:1,
+        expected_events:5,minimum_valid_events:4}
     ],
-    counts:{rows:2,included_symbols:2,requested_symbols:2},
-    schedule:{first_decision_at:first,last_decision_at:first+interval,decision_interval_ms:interval}
+    counts:{rows:8,included_symbols:2,requested_symbols:2},schedule
   };
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
     ...common,rows:[
@@ -298,7 +349,15 @@ test('prospective cohort row coverage rejects foreign or missing symbol rows',()
 
 test('prospective cohort row coverage rejects mismatched aggregate counts and duplicate symbols',()=>{
   const first=Date.UTC(2026,10,18,0,15,0)-1,interval=4*60*60*1000;
-  const schedule={first_decision_at:first,last_decision_at:first+interval,decision_interval_ms:interval};
+  const schedule={
+    first_decision_at:first,last_decision_at:first+4*interval,
+    decision_interval_ms:interval,decision_count:5,
+    decision_times:Array.from({length:5},(_,index)=>first+index*interval)
+  };
+  const fourRows=[0,1,2,4].map(index=>({
+    symbol:'BTCUSDT',at:first+index*interval,
+    resolved_at:first+(index+1)*interval
+  }));
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
     selectedSymbols:['BTCUSDT','ETHUSDT','ETHUSDT'],
     symbolResults:[],rows:[],schedule,
@@ -306,10 +365,10 @@ test('prospective cohort row coverage rejects mismatched aggregate counts and du
   }),/PROSPECTIVE_COHORT_SELECTED_SYMBOLS_INVALID/);
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
     selectedSymbols:['BTCUSDT'],
-    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:1}],
-    rows:[{symbol:'BTCUSDT',at:first,resolved_at:first+interval}],
-    schedule,
-    counts:{rows:2,included_symbols:1,requested_symbols:1}
+    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,
+      rejected_events:1,expected_events:5,minimum_valid_events:4}],
+    rows:fourRows,schedule,
+    counts:{rows:5,included_symbols:1,requested_symbols:1}
   }),/PROSPECTIVE_COHORT_AGGREGATE_COUNTS_MISMATCH/);
 });
 

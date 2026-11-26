@@ -126,12 +126,23 @@ export function verifyProspectiveCohortRowCoverage({
   const firstDecisionAt=Number(schedule.first_decision_at);
   const lastDecisionAt=Number(schedule.last_decision_at);
   const decisionIntervalMs=Number(schedule.decision_interval_ms);
+  const decisionCount=Number(schedule.decision_count);
+  const decisionTimes=Array.isArray(schedule.decision_times)
+    ?schedule.decision_times.map(Number):[];
+  const expectedDecisionCount=Number.isSafeInteger(firstDecisionAt)&&
+    Number.isSafeInteger(lastDecisionAt)&&Number.isSafeInteger(decisionIntervalMs)&&
+    decisionIntervalMs>0
+    ?Math.floor((lastDecisionAt-firstDecisionAt)/decisionIntervalMs)+1:0;
   const validSchedule=Number.isSafeInteger(firstDecisionAt)&&
     Number.isSafeInteger(lastDecisionAt)&&
     Number.isSafeInteger(decisionIntervalMs)&&
     decisionIntervalMs===4*60*60*1000&&
     lastDecisionAt>=firstDecisionAt&&
-    (lastDecisionAt-firstDecisionAt)%decisionIntervalMs===0;
+    (lastDecisionAt-firstDecisionAt)%decisionIntervalMs===0&&
+    Number.isSafeInteger(decisionCount)&&decisionCount===expectedDecisionCount&&
+    decisionTimes.length===decisionCount&&
+    decisionTimes.every((at,index)=>Number.isSafeInteger(at)&&
+      at===firstDecisionAt+index*decisionIntervalMs);
   if(!validSchedule)
     throw new Error('PROSPECTIVE_COHORT_DECISION_SCHEDULE_INVALID');
   const selected=selectedSymbols.map(value=>String(value??'').trim().toUpperCase()).sort();
@@ -140,14 +151,23 @@ export function verifyProspectiveCohortRowCoverage({
   const results=symbolResults.map(item=>({
     symbol:String(item?.symbol??'').trim().toUpperCase(),
     status:item?.status,
-    valid_events:Number(item?.valid_events)
+    valid_events:Number(item?.valid_events),
+    rejected_events:Number(item?.rejected_events),
+    expected_events:Number(item?.expected_events),
+    minimum_valid_events:Number(item?.minimum_valid_events)
   }));
   const resultNames=results.map(item=>item.symbol).sort();
   const same=(a,b)=>a.length===b.length&&a.every((value,index)=>value===b[index]);
+  const minimumValidEvents=Math.ceil(decisionCount*0.8);
   if(results.some(item=>!item.symbol)||new Set(resultNames).size!==resultNames.length||
     !same(selected,resultNames)||results.some(item=>item.status!=='INCLUDED'||
-      !Number.isInteger(item.valid_events)||item.valid_events<1))
-    throw new Error('PROSPECTIVE_COHORT_SYMBOL_RESULT_SET_MISMATCH');
+      !Number.isSafeInteger(item.valid_events)||item.valid_events<minimumValidEvents||
+      !Number.isSafeInteger(item.rejected_events)||item.rejected_events<0||
+      !Number.isSafeInteger(item.expected_events)||item.expected_events!==decisionCount||
+      !Number.isSafeInteger(item.minimum_valid_events)||
+      item.minimum_valid_events!==minimumValidEvents||
+      item.valid_events+item.rejected_events!==item.expected_events))
+    throw new Error('PROSPECTIVE_COHORT_SYMBOL_EVENT_COVERAGE_INVALID');
   const rowCounts=new Map(selected.map(symbol=>[symbol,0]));
   const rowIdentities=new Set();
   for(const row of rows){
@@ -176,15 +196,19 @@ export function verifyProspectiveCohortRowCoverage({
     Number(counts.requested_symbols)!==selected.length)
     throw new Error('PROSPECTIVE_COHORT_AGGREGATE_COUNTS_MISMATCH');
   return {
-    schema:'PROSPECTIVE_COHORT_ROW_COVERAGE_AUDIT_V1',
+    schema:'PROSPECTIVE_COHORT_ROW_COVERAGE_AUDIT_V2',
     status:'VERIFIED',
     symbols_verified:selected.length,
     rows_verified:rows.length,
     first_decision_at:firstDecisionAt,
     last_decision_at:lastDecisionAt,
     decision_interval_ms:decisionIntervalMs,
+    decision_count:decisionCount,
+    minimum_valid_events_per_symbol:minimumValidEvents,
     no_unexpected_symbols:true,
     per_symbol_row_counts_match:true,
+    per_symbol_event_accounting_matches_schedule:true,
+    minimum_event_coverage_met_for_every_symbol:true,
     all_rows_on_declared_decision_grid:true
   };
 }
