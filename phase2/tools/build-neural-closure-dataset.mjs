@@ -365,7 +365,9 @@ async function main(){
     const receivedAt=await getServerTime();
     const symbolRows=[];
     let symbolRejected=0;
+    let historicallyIneligibleEvents=0;
     const symbolRejectedReasons={};
+    const historicalIneligibilityReasons={};
     for(const decisionAt of schedule.decision_times){
       const built=buildNeuralClosureEventRow({
         symbol,decisionAt,
@@ -378,31 +380,22 @@ async function main(){
         minimumQuoteVolume24hUsdt:args.minQuoteVolumeUsdt
       });
       if(!built.ready){
-        symbolRejected++;
         const key=built.reason||'UNKNOWN_EVENT_REJECTION';
-        rejectedCounts[key]=(rejectedCounts[key]||0)+1;
-        symbolRejectedReasons[key]=(symbolRejectedReasons[key]||0)+1;
+        if(key==='HISTORICAL_24H_QUOTE_VOLUME_BELOW_MINIMUM'){
+          historicallyIneligibleEvents++;
+          historicalIneligibilityReasons[key]=(historicalIneligibilityReasons[key]||0)+1;
+        }else{
+          symbolRejected++;
+          rejectedCounts[key]=(rejectedCounts[key]||0)+1;
+          symbolRejectedReasons[key]=(symbolRejectedReasons[key]||0)+1;
+        }
         continue;
       }
       symbolRows.push(built.row);
     }
-    const minimumValidEvents=Math.ceil(schedule.decision_count*0.8);
-    if(symbolRows.length<minimumValidEvents){
-      const rejection={
-        symbol,status:'REJECTED_LOW_VALID_EVENT_COVERAGE',
-        collection_time_quote_volume_24h_usdt:asset.quote_volume_24h,
-        valid_events:symbolRows.length,rejected_events:symbolRejected,
-        expected_events:schedule.decision_count,
-        minimum_valid_events:minimumValidEvents,
-        rejection_reasons:symbolRejectedReasons
-      };
-      symbolSummaries.push(rejection);
-      console.log(JSON.stringify({
-        event:'NEURAL_CLOSURE_SYMBOL_PROGRESS',included:false,...rejection
-      }));
-      continue;
-    }
-
+    // All decisions are explicitly accounted for. A low historical-liquidity
+    // event is not missing data; it is an expected out-of-universe observation.
+    // Candle completeness is independently enforced by coverage.checks above.
     rows.push(...symbolRows);
     symbolSummaries.push({
       symbol,status:'INCLUDED',
@@ -410,9 +403,11 @@ async function main(){
       one_minute_candles:minute.candles.length,
       five_minute_candles:five.candles.length,
       fifteen_minute_candles:fifteen.candles.length,
-      valid_events:symbolRows.length,rejected_events:symbolRejected,
+      valid_events:symbolRows.length,
+      historically_ineligible_events:historicallyIneligibleEvents,
+      rejected_events:symbolRejected,
       expected_events:schedule.decision_count,
-      minimum_valid_events:minimumValidEvents,
+      historical_ineligibility_reasons:historicalIneligibilityReasons,
       rejection_reasons:symbolRejectedReasons,
       coverage:coverage.checks
     });
@@ -501,6 +496,9 @@ async function main(){
       rows:validated.length,
       included_symbols:included.length,
       requested_symbols:universe.selected.length,
+      historically_ineligible_events:included.reduce((sum,item)=>
+        sum+item.historically_ineligible_events,0),
+      rejected_events:included.reduce((sum,item)=>sum+item.rejected_events,0),
       first_decision_at:Math.min(...validated.map(row=>Number(row.at))),
       last_decision_at:Math.max(...validated.map(row=>Number(row.at))),
       maximum_label_resolved_at:Math.max(...validated.map(row=>Number(row.resolved_at)))

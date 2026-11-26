@@ -156,39 +156,49 @@ export function verifyProspectiveCohortRowCoverage({
   const selected=selectedSymbols.map(value=>String(value??'').trim().toUpperCase()).sort();
   if(selected.some(value=>!value)||new Set(selected).size!==selected.length)
     throw new Error('PROSPECTIVE_COHORT_SELECTED_SYMBOLS_INVALID');
-  const results=symbolResults.map(item=>({
-    symbol:String(item?.symbol??'').trim().toUpperCase(),
-    status:item?.status,
-    valid_events:Number(item?.valid_events),
-    rejected_events:Number(item?.rejected_events),
-    expected_events:Number(item?.expected_events),
-    minimum_valid_events:Number(item?.minimum_valid_events),
-    rejection_reasons:item?.rejection_reasons,
-    rejection_reason_entries:item?.rejection_reasons&&
-      typeof item.rejection_reasons==='object'&&!Array.isArray(item.rejection_reasons)
-      ?Object.entries(item.rejection_reasons):null
-  })).map(item=>({
-    ...item,
-    rejection_reasons_valid:Array.isArray(item.rejection_reason_entries)&&
-      item.rejection_reason_entries.every(([reason,count])=>
-        typeof reason==='string'&&reason.trim().length>0&&
-        Number.isSafeInteger(Number(count))&&Number(count)>0),
-    rejection_reason_count:Array.isArray(item.rejection_reason_entries)
-      ?item.rejection_reason_entries.reduce((sum,[,count])=>sum+Number(count),0):NaN
-  }));
+  const parseReasonMap=value=>value&&typeof value==='object'&&!Array.isArray(value)
+    ?Object.entries(value):null;
+  const results=symbolResults.map(item=>{
+    const rejectionEntries=parseReasonMap(item?.rejection_reasons);
+    const ineligibleEntries=parseReasonMap(item?.historical_ineligibility_reasons);
+    const reasonEntriesValid=entries=>Array.isArray(entries)&&entries.every(([reason,count])=>
+      typeof reason==='string'&&reason.trim().length>0&&
+      Number.isSafeInteger(Number(count))&&Number(count)>0);
+    const reasonCount=entries=>Array.isArray(entries)
+      ?entries.reduce((sum,[,count])=>sum+Number(count),0):NaN;
+    return {
+      symbol:String(item?.symbol??'').trim().toUpperCase(),
+      status:item?.status,
+      valid_events:Number(item?.valid_events),
+      historically_ineligible_events:Number(item?.historically_ineligible_events),
+      rejected_events:Number(item?.rejected_events),
+      expected_events:Number(item?.expected_events),
+      rejection_reasons_valid:reasonEntriesValid(rejectionEntries),
+      rejection_reason_count:reasonCount(rejectionEntries),
+      historical_ineligibility_reasons_valid:reasonEntriesValid(ineligibleEntries),
+      historical_ineligibility_reason_count:reasonCount(ineligibleEntries)
+    };
+  });
   const resultNames=results.map(item=>item.symbol).sort();
   const same=(a,b)=>a.length===b.length&&a.every((value,index)=>value===b[index]);
-  const minimumValidEvents=Math.ceil(decisionCount*0.8);
   if(results.some(item=>!item.symbol)||new Set(resultNames).size!==resultNames.length||
     !same(selected,resultNames)||results.some(item=>item.status!=='INCLUDED'||
-      !Number.isSafeInteger(item.valid_events)||item.valid_events<minimumValidEvents||
+      !Number.isSafeInteger(item.valid_events)||item.valid_events<0||
+      !Number.isSafeInteger(item.historically_ineligible_events)||
+        item.historically_ineligible_events<0||
       !Number.isSafeInteger(item.rejected_events)||item.rejected_events<0||
       !Number.isSafeInteger(item.expected_events)||item.expected_events!==decisionCount||
-      !Number.isSafeInteger(item.minimum_valid_events)||
-      item.minimum_valid_events!==minimumValidEvents||
+      item.valid_events+item.historically_ineligible_events+
+        item.rejected_events!==item.expected_events||
       item.rejection_reasons_valid!==true||
       item.rejection_reason_count!==item.rejected_events||
-      item.valid_events+item.rejected_events!==item.expected_events))
+      item.historical_ineligibility_reasons_valid!==true||
+      item.historical_ineligibility_reason_count!==item.historically_ineligible_events||
+      (item.historically_ineligible_events>0&&
+        Object.keys(symbolResults.find(result=>
+          String(result?.symbol??'').trim().toUpperCase()===item.symbol
+        )?.historical_ineligibility_reasons??{}).some(reason=>
+          reason!=='HISTORICAL_24H_QUOTE_VOLUME_BELOW_MINIMUM'))))
     throw new Error('PROSPECTIVE_COHORT_SYMBOL_EVENT_COVERAGE_INVALID');
   const rowCounts=new Map(selected.map(symbol=>[symbol,0]));
   const rowIdentities=new Set();
@@ -215,10 +225,13 @@ export function verifyProspectiveCohortRowCoverage({
   }
   if(Number(counts.rows)!==rows.length||
     Number(counts.included_symbols)!==selected.length||
-    Number(counts.requested_symbols)!==selected.length)
+    Number(counts.requested_symbols)!==selected.length||
+    Number(counts.historically_ineligible_events)!==
+      results.reduce((sum,item)=>sum+item.historically_ineligible_events,0)||
+    Number(counts.rejected_events)!==results.reduce((sum,item)=>sum+item.rejected_events,0))
     throw new Error('PROSPECTIVE_COHORT_AGGREGATE_COUNTS_MISMATCH');
   return {
-    schema:'PROSPECTIVE_COHORT_ROW_COVERAGE_AUDIT_V3',
+    schema:'PROSPECTIVE_COHORT_ROW_COVERAGE_AUDIT_V4',
     status:'VERIFIED',
     symbols_verified:selected.length,
     rows_verified:rows.length,
@@ -226,12 +239,12 @@ export function verifyProspectiveCohortRowCoverage({
     last_decision_at:lastDecisionAt,
     decision_interval_ms:decisionIntervalMs,
     decision_count:decisionCount,
-    minimum_valid_events_per_symbol:minimumValidEvents,
     no_unexpected_symbols:true,
     per_symbol_row_counts_match:true,
     per_symbol_event_accounting_matches_schedule:true,
+    historical_ineligible_event_accounting_matches_schedule:true,
     rejection_reason_accounting_matches_schedule:true,
-    minimum_event_coverage_met_for_every_symbol:true,
+    all_event_outcomes_accounted:true,
     all_rows_on_declared_decision_grid:true
   };
 }

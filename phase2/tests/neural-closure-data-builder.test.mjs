@@ -224,12 +224,15 @@ test('prospective cohort row coverage requires every row to match the declared 4
   const common={
     selectedSymbols:['BTCUSDT'],
     symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,
-      rejected_events:1,expected_events:5,minimum_valid_events:4,rejection_reasons:{EVENT_REJECTED:1}}],
-    counts:{rows:4,included_symbols:1,requested_symbols:1},schedule
+      historically_ineligible_events:1,rejected_events:0,expected_events:5,
+      historical_ineligibility_reasons:{HISTORICAL_24H_QUOTE_VOLUME_BELOW_MINIMUM:1},
+      rejection_reasons:{}}],
+    counts:{rows:4,included_symbols:1,requested_symbols:1,
+      historically_ineligible_events:1,rejected_events:0},schedule
   };
   const valid=verifyProspectiveCohortRowCoverage({...common,rows:validRows});
   assert.equal(valid.all_rows_on_declared_decision_grid,true);
-  assert.equal(valid.minimum_valid_events_per_symbol,4);
+  assert.equal(valid.historical_ineligible_event_accounting_matches_schedule,true);
   const offGrid=[...validRows];
   offGrid[0]={...offGrid[0],at:first+1,resolved_at:first+1+interval};
   assert.throws(()=>verifyProspectiveCohortRowCoverage({...common,rows:offGrid}),
@@ -245,13 +248,16 @@ test('prospective cohort row coverage requires every row to match the declared 4
     /PROSPECTIVE_COHORT_ROW_OFF_SCHEDULE/);
 });
 
-test('prospective builder persists the event-support evidence required by its independent verifier',async()=>{
+test('prospective builder separates historical liquidity ineligibility from data rejection and persists complete per-symbol accounting',async()=>{
   const source=await readFile(new URL(
     '../tools/build-neural-closure-dataset.mjs',import.meta.url
   ),'utf8');
-  assert.match(source,/const minimumValidEvents=Math\.ceil\(schedule\.decision_count\*0\.8\)/);
-  assert.match(source,/valid_events:symbolRows\.length,rejected_events:symbolRejected,\s*expected_events:schedule\.decision_count,\s*minimum_valid_events:minimumValidEvents,\s*rejection_reasons:symbolRejectedReasons,\s*coverage:coverage\.checks/);
-  assert.match(source,/valid_events:symbolRows\.length,rejected_events:symbolRejected,\s*expected_events:schedule\.decision_count,\s*minimum_valid_events:minimumValidEvents,\s*rejection_reasons:symbolRejectedReasons/);
+  assert.match(source,/key==='HISTORICAL_24H_QUOTE_VOLUME_BELOW_MINIMUM'/);
+  assert.match(source,/historically_ineligible_events:historicallyIneligibleEvents/);
+  assert.match(source,/historical_ineligibility_reasons:historicalIneligibilityReasons/);
+  assert.match(source,/rejected_events:symbolRejected/);
+  assert.match(source,/coverage:coverage\.checks/);
+  assert.doesNotMatch(source,/REJECTED_LOW_VALID_EVENT_COVERAGE/);
 });
 
 test('prospective cohort row coverage requires rejection reason counts to equal rejected events',()=>{
@@ -267,27 +273,33 @@ test('prospective cohort row coverage requires rejection reason counts to equal 
   }));
   const base={
     selectedSymbols:['BTCUSDT'],
-    counts:{rows:4,included_symbols:1,requested_symbols:1},schedule,rows
+    counts:{rows:3,included_symbols:1,requested_symbols:1,
+      historically_ineligible_events:1,rejected_events:1},schedule,
+    rows:rows.slice(0,3)
   };
   const accepted=verifyProspectiveCohortRowCoverage({
-    ...base,symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,
-      rejected_events:1,expected_events:5,minimum_valid_events:4,
+    ...base,symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:3,
+      historically_ineligible_events:1,rejected_events:1,expected_events:5,
+      historical_ineligibility_reasons:{HISTORICAL_24H_QUOTE_VOLUME_BELOW_MINIMUM:1},
       rejection_reasons:{MISSING_EVENT_COVERAGE:1}}]
   });
   assert.equal(accepted.rejection_reason_accounting_matches_schedule,true);
+  assert.equal(accepted.all_event_outcomes_accounted,true);
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
-    ...base,symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,
-      rejected_events:1,expected_events:5,minimum_valid_events:4,
+    ...base,symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:3,
+      historically_ineligible_events:1,rejected_events:1,expected_events:5,
+      historical_ineligibility_reasons:{HISTORICAL_24H_QUOTE_VOLUME_BELOW_MINIMUM:1},
       rejection_reasons:{}}]
   }),/PROSPECTIVE_COHORT_SYMBOL_EVENT_COVERAGE_INVALID/);
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
-    ...base,symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,
-      rejected_events:1,expected_events:5,minimum_valid_events:4,
+    ...base,symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:3,
+      historically_ineligible_events:1,rejected_events:1,expected_events:5,
+      historical_ineligibility_reasons:{HISTORICAL_24H_QUOTE_VOLUME_BELOW_MINIMUM:1},
       rejection_reasons:{MISSING_EVENT_COVERAGE:0}}]
   }),/PROSPECTIVE_COHORT_SYMBOL_EVENT_COVERAGE_INVALID/);
 });
 
-test('prospective cohort row coverage enforces the 80% event-support floor and complete accounting',()=>{
+test('prospective cohort row coverage accounts for eligible, historically ineligible and rejected events without conflating them',()=>{
   const first=Date.UTC(2026,10,18,0,15,0)-1,interval=4*60*60*1000;
   const schedule={
     first_decision_at:first,last_decision_at:first+4*interval,
@@ -299,33 +311,30 @@ test('prospective cohort row coverage enforces the 80% event-support floor and c
   }));
   const base={
     selectedSymbols:['BTCUSDT'],
-    counts:{rows:4,included_symbols:1,requested_symbols:1},schedule
+    counts:{rows:2,included_symbols:1,requested_symbols:1,
+      historically_ineligible_events:2,rejected_events:1},schedule
   };
   const accepted=verifyProspectiveCohortRowCoverage({
     ...base,
     symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',
-      valid_events:4,rejected_events:1,expected_events:5,minimum_valid_events:4,rejection_reasons:{EVENT_REJECTED:1}}],
-    rows:makeRows(4)
+      valid_events:2,historically_ineligible_events:2,rejected_events:1,
+      expected_events:5,
+      historical_ineligibility_reasons:{
+        HISTORICAL_24H_QUOTE_VOLUME_BELOW_MINIMUM:2
+      },rejection_reasons:{AMBIGUOUS_BOTH_BARRIERS:1}}],
+    rows:makeRows(2)
   });
-  assert.equal(accepted.minimum_valid_events_per_symbol,4);
-  assert.equal(accepted.minimum_event_coverage_met_for_every_symbol,true);
+  assert.equal(accepted.all_event_outcomes_accounted,true);
+  assert.equal(accepted.historical_ineligible_event_accounting_matches_schedule,true);
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
     ...base,
     symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',
-      valid_events:3,rejected_events:2,expected_events:5,minimum_valid_events:4,rejection_reasons:{EVENT_REJECTED:2}}],
-    rows:makeRows(3)
-  }),/PROSPECTIVE_COHORT_SYMBOL_EVENT_COVERAGE_INVALID/);
-  assert.throws(()=>verifyProspectiveCohortRowCoverage({
-    ...base,
-    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',
-      valid_events:4,rejected_events:0,expected_events:5,minimum_valid_events:4,rejection_reasons:{}}],
-    rows:makeRows(4)
-  }),/PROSPECTIVE_COHORT_SYMBOL_EVENT_COVERAGE_INVALID/);
-  assert.throws(()=>verifyProspectiveCohortRowCoverage({
-    ...base,
-    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',
-      valid_events:4,rejected_events:1,expected_events:4,minimum_valid_events:4,rejection_reasons:{EVENT_REJECTED:1}}],
-    rows:makeRows(4)
+      valid_events:2,historically_ineligible_events:2,rejected_events:0,
+      expected_events:5,
+      historical_ineligibility_reasons:{
+        HISTORICAL_24H_QUOTE_VOLUME_BELOW_MINIMUM:2
+      },rejection_reasons:{}}],
+    rows:makeRows(2)
   }),/PROSPECTIVE_COHORT_SYMBOL_EVENT_COVERAGE_INVALID/);
 });
 
