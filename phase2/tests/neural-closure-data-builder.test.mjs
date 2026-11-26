@@ -248,6 +248,21 @@ test('prospective cohort row coverage requires every row to match the declared 4
     /PROSPECTIVE_COHORT_ROW_OFF_SCHEDULE/);
 });
 
+test('locked out-of-time cohort metadata explicitly identifies retrospective backfill, not live-forward observation',async()=>{
+  const source=await readFile(new URL(
+    '../tools/build-neural-closure-dataset.mjs',import.meta.url
+  ),'utf8');
+  const workflow=await readFile(new URL(
+    '../../.github/workflows/neural-closure-prospective-cohort.yml',import.meta.url
+  ),'utf8');
+  assert.match(source,/role:'RETROSPECTIVE_OUT_OF_TIME_BACKFILL_ONLY'/);
+  assert.match(source,/collection_mode:'BINANCE_PUBLIC_HISTORICAL_BACKFILL_AFTER_LEGACY_LABEL_PURGE'/);
+  assert.match(source,/real_time_forward_observation:false/);
+  assert.match(source,/live_forward_validation:false/);
+  assert.match(workflow,/Capture a retrospective out-of-time, locked, unscored cohort/);
+  assert.match(workflow,/OUT_OF_TIME_BACKFILL_MODE_OR_LIVE_FORWARD_CLAIM_INVALID/);
+});
+
 test('prospective builder separates historical liquidity ineligibility from data rejection and persists complete per-symbol accounting',async()=>{
   const source=await readFile(new URL(
     '../tools/build-neural-closure-dataset.mjs',import.meta.url

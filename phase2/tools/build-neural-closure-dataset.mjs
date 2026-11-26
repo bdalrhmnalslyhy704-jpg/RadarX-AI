@@ -532,7 +532,10 @@ async function main(){
       cohort_contract:{
         schema:'RADARX_PROSPECTIVE_COHORT_LOCK_CONTRACT_V1',
         status:'LOCKED_UNSCORED',
-        role:'PROSPECTIVE_OUT_OF_TIME_EVALUATION_ONLY',
+        role:'RETROSPECTIVE_OUT_OF_TIME_BACKFILL_ONLY',
+        collection_mode:'BINANCE_PUBLIC_HISTORICAL_BACKFILL_AFTER_LEGACY_LABEL_PURGE',
+        real_time_forward_observation:false,
+        live_forward_validation:false,
         legacy_cohort:{
           dataset_sha256:LEGACY_COHORT_DATASET_SHA256,
           last_decision_at:LEGACY_COHORT_LAST_DECISION_AT,

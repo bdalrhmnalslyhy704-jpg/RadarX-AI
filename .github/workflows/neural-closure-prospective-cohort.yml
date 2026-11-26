@@ -1,10 +1,10 @@
-name: Build 224 — Capture Locked Prospective Neural Cohort
+name: Build 224 — Capture Locked Out-of-Time Backfill Cohort
 
 on:
   workflow_dispatch:
     inputs:
       max_symbols:
-        description: "Maximum current Binance Spot USDT candidates (10–500); all eligible pairs are included or the run fails closed"
+        description: "Maximum currently trading Binance Spot USDT candidates (10–500); historical liquidity determines event eligibility; hard cap fails closed"
         required: true
         default: "500"
         type: string
@@ -18,12 +18,13 @@ concurrency:
 
 jobs:
   capture:
-    name: Capture a future-only, locked, unscored cohort
+    name: Capture a retrospective out-of-time, locked, unscored cohort
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
       NODE_OPTIONS: --max-old-space-size=3072
-      # Last closed 15m feature candle in the legacy 32,300-row cohort opened
+      # Retrospective backfill starts after the last resolved legacy event; it is not live-forward data.
+  # Last closed 15m feature candle in the legacy 32,300-row cohort opened
       # at 2026-11-17T16:00:00Z and closed at 16:14:59.999Z.
       LEGACY_LAST_DECISION_AT: "2026-11-17T16:14:59.999Z"
       LEGACY_LAST_LABEL_RESOLVED_AT: "2026-11-17T20:14:59.999Z"
@@ -101,6 +102,12 @@ jobs:
             failures.push('SOURCE_SHA_MISMATCH');
           if(cohort.cohort_contract?.status!=='LOCKED_UNSCORED')
             failures.push('COHORT_NOT_LOCKED');
+          if(cohort.cohort_contract?.role!=='RETROSPECTIVE_OUT_OF_TIME_BACKFILL_ONLY'||
+             cohort.cohort_contract?.collection_mode!==
+               'BINANCE_PUBLIC_HISTORICAL_BACKFILL_AFTER_LEGACY_LABEL_PURGE'||
+             cohort.cohort_contract?.real_time_forward_observation!==false||
+             cohort.cohort_contract?.live_forward_validation!==false)
+            failures.push('OUT_OF_TIME_BACKFILL_MODE_OR_LIVE_FORWARD_CLAIM_INVALID');
           if(cohort.cohort_contract?.training_allowed!==false||
              cohort.cohort_contract?.model_selection_allowed!==false||
              cohort.cohort_contract?.calibration_allowed!==false||
