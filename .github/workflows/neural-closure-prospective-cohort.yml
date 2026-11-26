@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       max_symbols:
-        description: "Maximum current Binance Spot USDT candidates (10–100)"
+        description: "Maximum current Binance Spot USDT candidates (10–500); all eligible pairs are included or the run fails closed"
         required: true
-        default: "100"
+        default: "500"
         type: string
 
 permissions:
@@ -99,6 +99,11 @@ jobs:
           if(cohort.cohort_contract?.legacy_cohort?.last_decision_at!==legacyLast||
              cohort.cohort_contract?.legacy_cohort?.last_label_resolved_at!==legacyLastLabelResolved)
             failures.push('LEGACY_CUTOFF_OR_LABEL_MATURITY_MISMATCH');
+          if(cohort.universe?.all_eligible_candidates_included!==true||
+             cohort.universe?.eligible_candidate_count!==cohort.universe?.selected_candidate_count||
+             cohort.universe?.symbols?.length!==cohort.universe?.eligible_candidate_count||
+             cohort.universe?.hard_cap_failure_mode!=='FAIL_CLOSED_NO_TOP_N_TRUNCATION')
+            failures.push('ELIGIBLE_USDT_UNIVERSE_NOT_FULLY_CAPTURED');
           if(cohort.cohort_contract?.requested_start_at!==expectedStart||
              cohort.schedule?.first_decision_at!==expectedStart||
              !(expectedStart>legacyLastLabelResolved)||
