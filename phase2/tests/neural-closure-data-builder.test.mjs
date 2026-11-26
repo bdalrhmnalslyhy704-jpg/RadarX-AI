@@ -7,6 +7,7 @@ import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
 import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
 import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
+import {selectBinanceSpotUsdtUniverse} from '../core/neural-closure-universe.mjs';
 import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,parseBinanceSpotKline,
@@ -29,6 +30,56 @@ const makeCandle=(openTime,intervalMs,{base=100,step=0,volume=1000,trades=100,ta
     is_closed:true,closed:true,source:'BINANCE_PUBLIC_REST'
   };
 };
+
+
+test('candidate prefilter includes every currently eligible Spot USDT pair above the liquidity floor and never top-N truncates',()=>{
+  const symbols=[];
+  const tickers=[];
+  for(let index=0;index<125;index++){
+    const base='ASSET'+String(index).padStart(3,'0');
+    symbols.push({symbol:base+'USDT',baseAsset:base,quoteAsset:'USDT',
+      status:'TRADING',isSpotTradingAllowed:true});
+    tickers.push({symbol:base+'USDT',quoteVolume:String(900_000+index*1000),
+      lastPrice:'1',priceChangePercent:'0'});
+  }
+  symbols.push({symbol:'BTCUSDT',baseAsset:'BTC',quoteAsset:'USDT',
+    status:'TRADING',isSpotTradingAllowed:true});
+  tickers.push({symbol:'BTCUSDT',quoteVolume:'1000000000',lastPrice:'90000',
+    priceChangePercent:'0'});
+  symbols.push({symbol:'LOWUSDT',baseAsset:'LOW',quoteAsset:'USDT',
+    status:'TRADING',isSpotTradingAllowed:true});
+  tickers.push({symbol:'LOWUSDT',quoteVolume:'749999',lastPrice:'1',
+    priceChangePercent:'0'});
+  symbols.push({symbol:'USDCUSDT',baseAsset:'USDC',quoteAsset:'USDT',
+    status:'TRADING',isSpotTradingAllowed:true});
+  tickers.push({symbol:'USDCUSDT',quoteVolume:'9000000',lastPrice:'1',
+    priceChangePercent:'0'});
+  symbols.push({symbol:'OFFUSDT',baseAsset:'OFF',quoteAsset:'USDT',
+    status:'BREAK',isSpotTradingAllowed:true});
+  tickers.push({symbol:'OFFUSDT',quoteVolume:'9000000',lastPrice:'1',
+    priceChangePercent:'0'});
+  const result=selectBinanceSpotUsdtUniverse({symbols},tickers,{
+    minimumQuoteVolume:750_000,maxSymbols:200
+  });
+  assert.equal(result.eligible.length,126);
+  assert.equal(result.selected.length,126);
+  assert.equal(result.selected.length,result.eligible.length);
+  assert.equal(result.selected.some(item=>item.symbol==='BTCUSDT'),true);
+  assert.equal(result.selected.some(item=>item.symbol==='LOWUSDT'),false);
+  assert.equal(result.selected.some(item=>item.symbol==='USDCUSDT'),false);
+  assert.equal(result.selected.some(item=>item.symbol==='OFFUSDT'),false);
+  assert.throws(()=>selectBinanceSpotUsdtUniverse({symbols},tickers,{
+    minimumQuoteVolume:750_000,maxSymbols:100
+  }),/ELIGIBLE_UNIVERSE_EXCEEDS_CONFIGURED_MAX_SYMBOLS:126:100/);
+});
+
+test('candidate prefilter fails closed when BTC or the exchange universe evidence is missing',()=>{
+  assert.throws(()=>selectBinanceSpotUsdtUniverse({symbols:[]},[],{
+    minimumQuoteVolume:750_000,maxSymbols:500
+  }),/BTCUSDT_NOT_IN_750K_USDT_SPOT_UNIVERSE/);
+  assert.throws(()=>selectBinanceSpotUsdtUniverse(null,[],{}),
+    /BINANCE_SPOT_USDT_UNIVERSE_ARGUMENTS_INVALID/);
+});
 
 test('Binance Spot kline parser preserves closed-candle OHLCV and rejects bad ranges',()=>{
   const raw=[1_000,'100','102','99','101','50',60_999,'5050','125','30','3030','0'];

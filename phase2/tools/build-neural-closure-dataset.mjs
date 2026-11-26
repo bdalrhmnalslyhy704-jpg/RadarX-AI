@@ -6,6 +6,7 @@ import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-wri
 import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
 import {verifyBinanceRawArchives} from '../core/neural-closure-archive-guardian.mjs';
 import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
+import {selectBinanceSpotUsdtUniverse} from '../core/neural-closure-universe.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,NEURAL_CLOSURE_DATASET_INTERVALS,
   NEURAL_CLOSURE_MARKET_DATA_POLICY,createNeuralClosureDecisionSchedule,
@@ -22,10 +23,6 @@ const KLINE_LIMIT=1000;
 const REQUEST_WEIGHT={
   TIME:1,EXCHANGE_INFO:20,TICKER_24HR_ALL:80,KLINES:2
 };
-const STABLE_BASE_ASSETS=new Set([
-  'USDC','BUSD','TUSD','FDUSD','USDP','DAI','USDE','EUR','AEUR',
-  'EURI','TRY','BRL','BIDR','IDRT','UST','USTC','PAXG'
-]);
 const sleep=ms=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 
@@ -34,7 +31,7 @@ const LEGACY_COHORT_LAST_DECISION_AT=Date.parse('2026-11-17T16:14:59.999Z');
 const LEGACY_COHORT_LAST_LABEL_RESOLVED_AT=
   LEGACY_COHORT_LAST_DECISION_AT+4*60*60_000;
 function parseArgs(argv){
-  const result={days:180,maxSymbols:100,minSymbols:40,
+  const result={days:180,maxSymbols:500,minSymbols:40,
     minQuoteVolumeUsdt:750_000,prospectiveOnly:false,startAt:null,
     output:'artifacts/neural-closure/dataset.json',
     archiveDir:'artifacts/neural-closure/raw'};
@@ -61,8 +58,8 @@ function parseArgs(argv){
   }
   if(!Number.isInteger(result.days)||result.days<60||result.days>180)
     throw new Error('DAYS_MUST_BE_AN_INTEGER_FROM_60_TO_180');
-  if(!Number.isInteger(result.maxSymbols)||result.maxSymbols<10||result.maxSymbols>100)
-    throw new Error('MAX_SYMBOLS_MUST_BE_FROM_10_TO_100');
+  if(!Number.isInteger(result.maxSymbols)||result.maxSymbols<10||result.maxSymbols>500)
+    throw new Error('MAX_SYMBOLS_MUST_BE_FROM_10_TO_500');
   if(!Number.isInteger(result.minSymbols)||result.minSymbols<10||
     result.minSymbols>result.maxSymbols)
     throw new Error('MIN_SYMBOLS_MUST_BE_AT_LEAST_10_AND_NOT_EXCEED_MAX_SYMBOLS');
@@ -238,33 +235,6 @@ async function fetchKlines(symbol,interval,startTime,endTime,intervalMs,serverTi
 }
 const num=value=>value===null||value===undefined||value===''?null:Number(value);
 
-function liquidityUniverse(exchangeInfo,tickers,{minimumQuoteVolume,maxSymbols}){
-  const tickerMap=new Map(tickers.map(item=>[String(item.symbol),item]));
-  const allowed=exchangeInfo.symbols.filter(item=>
-    item.status==='TRADING'&&item.quoteAsset==='USDT'&&
-    item.isSpotTradingAllowed===true&&
-    !STABLE_BASE_ASSETS.has(String(item.baseAsset||'').toUpperCase())&&
-    !/(UP|DOWN|BULL|BEAR)$/.test(String(item.baseAsset||'').toUpperCase()));
-  const eligible=allowed.map(symbol=>{
-    const ticker=tickerMap.get(symbol.symbol);
-    const quoteVolume=num(ticker?.quoteVolume);
-    return quoteVolume!==null&&quoteVolume>=minimumQuoteVolume?{
-      symbol:symbol.symbol,base_asset:symbol.baseAsset,
-      quote_asset:symbol.quoteAsset,quote_volume_24h:quoteVolume,
-      last_price:num(ticker?.lastPrice),price_change_pct:num(ticker?.priceChangePercent)
-    }:null;
-  }).filter(Boolean).sort((a,b)=>b.quote_volume_24h-a.quote_volume_24h);
-  const btc=eligible.find(item=>item.symbol==='BTCUSDT');
-  if(!btc)throw new Error('BTCUSDT_NOT_IN_750K_USDT_SPOT_UNIVERSE');
-  let selected=eligible.slice(0,maxSymbols);
-  if(!selected.some(item=>item.symbol==='BTCUSDT')){
-    selected=selected.slice(0,Math.max(0,maxSymbols-1));
-    selected.push(btc);
-    selected.sort((a,b)=>b.quote_volume_24h-a.quote_volume_24h);
-  }
-  return {eligible,selected};
-}
-
 async function main(){
   const args=parseArgs(process.argv);
   const outputPath=resolve(args.output);
@@ -276,7 +246,7 @@ async function main(){
   const exchangeInfo=await getExchangeInfo();
   const {payload:tickers}=await getJson('ticker/24hr',{},REQUEST_WEIGHT.TICKER_24HR_ALL);
   if(!Array.isArray(tickers))throw new Error('BINANCE_24H_TICKERS_INVALID');
-  const universe=liquidityUniverse(exchangeInfo,tickers,{
+  const universe=selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
     minimumQuoteVolume:args.minQuoteVolumeUsdt,maxSymbols:args.maxSymbols
   });
   if(universe.selected.length<args.minSymbols)
@@ -560,11 +530,15 @@ async function main(){
         execution_return_contract:validated[0].execution_return_contract
       },
       universe:{
-        selection:'CURRENT_TOP_100_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1',
+        selection:'ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_ABOVE_CURRENT_24H_VOLUME_FLOOR_WITH_POINT_IN_TIME_EVENT_GATE_V2',
         candidate_prefilter:{
           method:'CURRENT_BINANCE_SPOT_24H_TICKER_AT_COLLECTION_TIME',
           minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
           maximum_symbols:args.maxSymbols,
+          eligible_candidate_count:universe.eligible.length,
+          selected_candidate_count:universe.selected.length,
+          all_eligible_candidates_included:universe.selected.length===universe.eligible.length,
+          hard_cap_failure_mode:'FAIL_CLOSED_NO_TOP_N_TRUNCATION',
           scope:'CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_ONLY'
         },
         historical_eligibility:{
@@ -577,6 +551,10 @@ async function main(){
         quote_asset:'USDT',
         minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
         maximum_symbols:args.maxSymbols,
+        eligible_candidate_count:universe.eligible.length,
+        selected_candidate_count:universe.selected.length,
+        all_eligible_candidates_included:universe.selected.length===universe.eligible.length,
+        hard_cap_failure_mode:'FAIL_CLOSED_NO_TOP_N_TRUNCATION',
         survivorship_bias_warning:true,
         historical_delisted_asset_coverage:false,
         symbols:universe.selected.map(item=>({
