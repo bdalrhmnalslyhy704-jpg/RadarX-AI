@@ -62,8 +62,8 @@ function parseArgs(argv){
     throw new Error('MAX_SYMBOLS_MUST_BE_AN_INTEGER_AT_LEAST_10');
   if(!result.prospectiveOnly&&result.maxSymbols>100)
     throw new Error('LEGACY_MAX_SYMBOLS_MUST_NOT_EXCEED_100');
-  if(result.prospectiveOnly&&result.maxSymbols>500)
-    throw new Error('PROSPECTIVE_MAX_SYMBOLS_MUST_NOT_EXCEED_500');
+  if(result.prospectiveOnly&&result.maxSymbols>1000)
+    throw new Error('PROSPECTIVE_MAX_SYMBOLS_MUST_NOT_EXCEED_1000');
   if(!Number.isInteger(result.minSymbols)||result.minSymbols<10||
     result.minSymbols>result.maxSymbols)
     throw new Error('MIN_SYMBOLS_MUST_BE_AT_LEAST_10_AND_NOT_EXCEED_MAX_SYMBOLS');
