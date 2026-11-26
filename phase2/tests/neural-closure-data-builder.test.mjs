@@ -825,7 +825,7 @@ test('Binance transient 5xx/408 retries are finite, exponential and never mask h
   assert.equal(binanceServerRetryDelayMs(500,2,'0.2'),1500);
 });
 
-test('prospective cohort workflow is manual, locked, data-only and training-free',async()=>{
+test('prospective cohort workflow is marker-gated, recipient-encrypted, locked and training-free',async()=>{
   const workflow=await readFile(new URL(
     '../../.github/workflows/neural-closure-prospective-cohort.yml',import.meta.url
   ),'utf8');
@@ -842,7 +842,11 @@ test('prospective cohort workflow is manual, locked, data-only and training-free
   assert.match(workflow,/training_allowed!==false/);
   assert.match(workflow,/model_scoring_allowed!==false/);
   assert.match(workflow,/retention-days: 90/);
-  assert.match(workflow,/RADARX_PROSPECTIVE_COHORT_ENCRYPTION_KEY_HEX/);
+  assert.match(workflow,/phase2\\/keys\\/prospective-cohort-recipient-public\\.pem/);
+  assert.match(workflow,/seal-prospective-cohort-bundle\\.mjs/);
+  assert.match(workflow,/wrapped_key=/);
+  assert.match(workflow,/CAPTURE-LOCKED-COHORT/);
+  assert.doesNotMatch(workflow,/secrets\\./);
   assert.match(workflow,/secure-prospective-cohort-bundle\.mjs encrypt/);
   assert.match(workflow,/path: artifacts\/secure\/\*\.enc/);
   assert.match(workflow,/rm -rf artifacts\/neural-closure-prospective/);
