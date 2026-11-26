@@ -356,12 +356,12 @@ test('prospective cohort row coverage verifies exact per-symbol row counts and t
     decision_times:Array.from({length:5},(_,index)=>first+index*interval)
   };
   const selectedSymbols=['BTCUSDT','ETHUSDT'];
-  const symbolResults=[
-    {symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,rejected_events:1,
-      expected_events:5,minimum_valid_events:4,rejection_reasons:{EVENT_REJECTED:1}},
-    {symbol:'ETHUSDT',status:'INCLUDED',valid_events:4,rejected_events:1,
-      expected_events:5,minimum_valid_events:4,rejection_reasons:{EVENT_REJECTED:1}}
-  ];
+  const symbolResults=['BTCUSDT','ETHUSDT'].map(symbol=>({
+    symbol,status:'INCLUDED',valid_events:4,historically_ineligible_events:0,
+    rejected_events:1,expected_events:5,
+    historical_ineligibility_reasons:{},
+    rejection_reasons:{EVENT_REJECTED:1}
+  }));
   const rows=['BTCUSDT','ETHUSDT'].flatMap(symbol=>
     [0,1,2,4].map(index=>({
       symbol,at:first+index*interval,resolved_at:first+(index+1)*interval
@@ -369,7 +369,8 @@ test('prospective cohort row coverage verifies exact per-symbol row counts and t
   );
   const audit=verifyProspectiveCohortRowCoverage({
     selectedSymbols,symbolResults,rows,schedule,
-    counts:{rows:8,included_symbols:2,requested_symbols:2}
+    counts:{rows:8,included_symbols:2,requested_symbols:2,
+      historically_ineligible_events:0,rejected_events:2}
   });
   assert.equal(audit.status,'VERIFIED');
   assert.equal(audit.symbols_verified,2);
@@ -392,14 +393,17 @@ test('prospective cohort row coverage rejects a symbol whose stored valid-event 
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
     selectedSymbols:['BTCUSDT','ETHUSDT'],
     symbolResults:[
-      {symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,rejected_events:1,
-        expected_events:5,minimum_valid_events:4,rejection_reasons:{EVENT_REJECTED:1}},
-      {symbol:'ETHUSDT',status:'INCLUDED',valid_events:4,rejected_events:1,
-        expected_events:5,minimum_valid_events:4,rejection_reasons:{EVENT_REJECTED:1}}
+      {symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,
+        historically_ineligible_events:0,rejected_events:1,expected_events:5,
+        historical_ineligibility_reasons:{},rejection_reasons:{EVENT_REJECTED:1}},
+      {symbol:'ETHUSDT',status:'INCLUDED',valid_events:4,
+        historically_ineligible_events:0,rejected_events:1,expected_events:5,
+        historical_ineligibility_reasons:{},rejection_reasons:{EVENT_REJECTED:1}}
     ],
     rows:[...btcRows,{symbol:'ETHUSDT',at:first,resolved_at:first+interval}],
     schedule,
-    counts:{rows:5,included_symbols:2,requested_symbols:2}
+    counts:{rows:5,included_symbols:2,requested_symbols:2,
+      historically_ineligible_events:0,rejected_events:2}
   }),/PROSPECTIVE_COHORT_SYMBOL_ROW_COUNT_MISMATCH/);
 });
 
@@ -412,13 +416,13 @@ test('prospective cohort row coverage rejects foreign or missing symbol rows',()
   };
   const common={
     selectedSymbols:['BTCUSDT','ETHUSDT'],
-    symbolResults:[
-      {symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,rejected_events:1,
-        expected_events:5,minimum_valid_events:4,rejection_reasons:{EVENT_REJECTED:1}},
-      {symbol:'ETHUSDT',status:'INCLUDED',valid_events:4,rejected_events:1,
-        expected_events:5,minimum_valid_events:4,rejection_reasons:{EVENT_REJECTED:1}}
-    ],
-    counts:{rows:8,included_symbols:2,requested_symbols:2},schedule
+    symbolResults:['BTCUSDT','ETHUSDT'].map(symbol=>({
+      symbol,status:'INCLUDED',valid_events:4,historically_ineligible_events:0,
+      rejected_events:1,expected_events:5,
+      historical_ineligibility_reasons:{},rejection_reasons:{EVENT_REJECTED:1}
+    })),
+    counts:{rows:8,included_symbols:2,requested_symbols:2,
+      historically_ineligible_events:0,rejected_events:2},schedule
   };
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
     ...common,rows:[
@@ -445,16 +449,20 @@ test('prospective cohort row coverage rejects mismatched aggregate counts and du
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
     selectedSymbols:['BTCUSDT','ETHUSDT','ETHUSDT'],
     symbolResults:[],rows:[],schedule,
-    counts:{rows:0,included_symbols:3,requested_symbols:3}
+    counts:{rows:0,included_symbols:3,requested_symbols:3,
+      historically_ineligible_events:0,rejected_events:0}
   }),/PROSPECTIVE_COHORT_SELECTED_SYMBOLS_INVALID/);
   assert.throws(()=>verifyProspectiveCohortRowCoverage({
     selectedSymbols:['BTCUSDT'],
     symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED',valid_events:4,
-      rejected_events:1,expected_events:5,minimum_valid_events:4,rejection_reasons:{EVENT_REJECTED:1}}],
+      historically_ineligible_events:0,rejected_events:1,expected_events:5,
+      historical_ineligibility_reasons:{},rejection_reasons:{EVENT_REJECTED:1}}],
     rows:fourRows,schedule,
-    counts:{rows:5,included_symbols:1,requested_symbols:1}
+    counts:{rows:5,included_symbols:1,requested_symbols:1,
+      historically_ineligible_events:0,rejected_events:0}
   }),/PROSPECTIVE_COHORT_AGGREGATE_COUNTS_MISMATCH/);
 });
+
 
 test('Binance Spot kline parser preserves closed-candle OHLCV and rejects bad ranges',()=>{
   const raw=[1_000,'100','102','99','101','50',60_999,'5050','125','30','3030','0'];
