@@ -20,9 +20,9 @@ on:
   workflow_dispatch:
     inputs:
       max_symbols:
-        description: "Maximum currently trading Binance Spot USDT candidates (10–500); historical liquidity determines event eligibility; hard cap fails closed"
+        description: "Maximum currently trading Binance Spot USDT candidates (10–1000); historical liquidity determines event eligibility; hard cap fails closed"
         required: true
-        default: "500"
+        default: "1000"
         type: string
 
 # Recipient RSA private key is kept offline by the owner; only its public key is committed.
@@ -81,7 +81,7 @@ jobs:
 
       - name: Capture real Binance Spot candles after the legacy cohort boundary
         env:
-          MAX_SYMBOLS: ${{ inputs.max_symbols || '500' }}
+          MAX_SYMBOLS: ${{ inputs.max_symbols || '1000' }}
         run: |
           set -euo pipefail
           test "$(date -u -d "$PROSPECTIVE_START_AT" +%s)" -gt "$(date -u -d "$LEGACY_LAST_LABEL_RESOLVED_AT" +%s)"
