@@ -7,7 +7,7 @@ import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
 import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
 import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
-import {selectBinanceSpotUsdtUniverse} from '../core/neural-closure-universe.mjs';
+import {selectBinanceSpotUsdtUniverse,verifyProspectiveUniverseCapture} from '../core/neural-closure-universe.mjs';
 import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,parseBinanceSpotKline,
@@ -119,6 +119,62 @@ test('candidate prefilter fails closed when BTC or the exchange universe evidenc
   }),/BTCUSDT_NOT_IN_750K_USDT_SPOT_UNIVERSE/);
   assert.throws(()=>selectBinanceSpotUsdtUniverse(null,[],{}),
     /BINANCE_SPOT_USDT_UNIVERSE_ARGUMENTS_INVALID/);
+});
+
+test('prospective capture audit requires every eligible symbol to have a complete included result',()=>{
+  const eligible=['BTCUSDT','ETHUSDT','SOLUSDT'];
+  const selected=['BTCUSDT','ETHUSDT','SOLUSDT'];
+  const symbolResults=eligible.map(symbol=>({symbol,status:'INCLUDED'}));
+  const audit=verifyProspectiveUniverseCapture({eligible,selected,symbolResults});
+  assert.equal(audit.status,'COMPLETE');
+  assert.equal(audit.eligible_candidate_count,3);
+  assert.equal(audit.selected_candidate_count,3);
+  assert.equal(audit.included_symbol_count,3);
+  assert.equal(audit.rejected_symbol_count,0);
+  assert.equal(audit.all_eligible_symbols_have_rows,true);
+  assert.deepEqual(audit.included_symbols,['BTCUSDT','ETHUSDT','SOLUSDT']);
+});
+
+test('prospective capture audit fails closed when one eligible symbol has incomplete raw coverage',()=>{
+  const eligible=['BTCUSDT','ETHUSDT','SOLUSDT'];
+  const selected=[...eligible];
+  const symbolResults=[
+    {symbol:'BTCUSDT',status:'INCLUDED'},
+    {symbol:'ETHUSDT',status:'REJECTED_INCOMPLETE_RAW_ARCHIVE',
+      coverage:{one_minute:{valid:false,reason:'MISSING_CANDLE'}}},
+    {symbol:'SOLUSDT',status:'INCLUDED'}
+  ];
+  assert.throws(()=>verifyProspectiveUniverseCapture({
+    eligible,selected,symbolResults
+  }),/PROSPECTIVE_UNIVERSE_COVERAGE_INCOMPLETE/);
+});
+
+test('prospective capture audit fails closed for a missing result or missing selected candidate',()=>{
+  assert.throws(()=>verifyProspectiveUniverseCapture({
+    eligible:['BTCUSDT','ETHUSDT'],selected:['BTCUSDT','ETHUSDT'],
+    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED'}]
+  }),/PROSPECTIVE_UNIVERSE_COVERAGE_INCOMPLETE/);
+  assert.throws(()=>verifyProspectiveUniverseCapture({
+    eligible:['BTCUSDT','ETHUSDT'],selected:['BTCUSDT'],
+    symbolResults:[{symbol:'BTCUSDT',status:'INCLUDED'}]
+  }),/PROSPECTIVE_UNIVERSE_COVERAGE_INCOMPLETE/);
+});
+
+test('prospective capture audit rejects duplicate or unexpected symbol results',()=>{
+  assert.throws(()=>verifyProspectiveUniverseCapture({
+    eligible:['BTCUSDT','ETHUSDT'],selected:['BTCUSDT','ETHUSDT'],
+    symbolResults:[
+      {symbol:'BTCUSDT',status:'INCLUDED'},
+      {symbol:'BTCUSDT',status:'INCLUDED'}
+    ]
+  }),/PROSPECTIVE_UNIVERSE_CAPTURE_DUPLICATE_SYMBOL/);
+  assert.throws(()=>verifyProspectiveUniverseCapture({
+    eligible:['BTCUSDT','ETHUSDT'],selected:['BTCUSDT','ETHUSDT'],
+    symbolResults:[
+      {symbol:'BTCUSDT',status:'INCLUDED'},
+      {symbol:'FAKEUSDT',status:'INCLUDED'}
+    ]
+  }),/PROSPECTIVE_UNIVERSE_COVERAGE_INCOMPLETE/);
 });
 
 test('Binance Spot kline parser preserves closed-candle OHLCV and rejects bad ranges',()=>{
@@ -473,6 +529,10 @@ test('prospective cohort workflow is manual, locked, data-only and training-free
   assert.match(workflow,/workflow_dispatch:/);
   assert.match(workflow,/2026-11-17T20:14:59\.999Z/);
   assert.match(workflow,/--prospectiveOnly true/);
+  assert.match(workflow,/PROSPECTIVE_CANDIDATE_CAPTURE_INCOMPLETE/);
+  assert.match(workflow,/all_eligible_symbols_have_rows/);
+  assert.match(workflow,/if: success\\(\\)/);
+  assert.doesNotMatch(workflow,/if: always\\(\\)/);
   assert.match(workflow,/--startAt "\$PROSPECTIVE_START_AT"/);
   assert.match(workflow,/PROSPECTIVE_COHORT_CAPTURED_LOCKED/);
   assert.match(workflow,/LOCKED_UNSCORED/);

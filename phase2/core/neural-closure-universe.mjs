@@ -49,3 +49,64 @@ export function selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
   }
   return {eligible,selected};
 }
+
+/**
+ * Verify that every eligible current-universe symbol produced valid event rows.
+ * Candidate selection alone is not enough: incomplete history or event coverage
+ * must not silently turn a nominally full universe into a partial cohort.
+ */
+export function verifyProspectiveUniverseCapture({eligible,selected,symbolResults}={}){
+  if(!Array.isArray(eligible)||!Array.isArray(selected)||!Array.isArray(symbolResults))
+    throw new TypeError('PROSPECTIVE_UNIVERSE_CAPTURE_AUDIT_ARGUMENTS_INVALID');
+  const symbols=(items,label)=>{
+    const values=items.map(item=>String(
+      typeof item==='string'?item:item?.symbol??''
+    ));
+    if(values.some(value=>!value))
+      throw new Error('PROSPECTIVE_UNIVERSE_CAPTURE_SYMBOL_INVALID:'+label);
+    if(new Set(values).size!==values.length)
+      throw new Error('PROSPECTIVE_UNIVERSE_CAPTURE_DUPLICATE_SYMBOL:'+label);
+    return values.sort();
+  };
+  const eligibleSymbols=symbols(eligible,'ELIGIBLE');
+  const selectedSymbols=symbols(selected,'SELECTED');
+  const resultSymbols=symbols(symbolResults,'RESULTS');
+  const includedSymbols=symbolResults
+    .filter(item=>item?.status==='INCLUDED')
+    .map(item=>String(item.symbol)).sort();
+  const rejectedSymbols=symbolResults
+    .filter(item=>item?.status!=='INCLUDED')
+    .map(item=>({
+      symbol:String(item?.symbol??''),
+      status:String(item?.status??'MISSING_STATUS'),
+      rejection_reasons:item?.rejection_reasons??item?.coverage??null
+    }));
+  const sameSet=(left,right)=>left.length===right.length&&
+    left.every((value,index)=>value===right[index]);
+  const missingResults=selectedSymbols.filter(symbol=>!resultSymbols.includes(symbol));
+  const unexpectedResults=resultSymbols.filter(symbol=>!eligibleSymbols.includes(symbol));
+  if(!sameSet(eligibleSymbols,selectedSymbols)||
+    !sameSet(eligibleSymbols,includedSymbols)||
+    resultSymbols.length!==selectedSymbols.length||
+    missingResults.length>0||unexpectedResults.length>0||rejectedSymbols.length>0){
+    throw new Error('PROSPECTIVE_UNIVERSE_COVERAGE_INCOMPLETE:'+JSON.stringify({
+      eligible_candidate_count:eligibleSymbols.length,
+      selected_candidate_count:selectedSymbols.length,
+      result_count:resultSymbols.length,
+      included_symbol_count:includedSymbols.length,
+      missing_results:missingResults,
+      unexpected_results:unexpectedResults,
+      rejected_symbols:rejectedSymbols
+    }));
+  }
+  return {
+    schema:'PROSPECTIVE_UNIVERSE_CAPTURE_AUDIT_V1',
+    status:'COMPLETE',
+    eligible_candidate_count:eligibleSymbols.length,
+    selected_candidate_count:selectedSymbols.length,
+    included_symbol_count:includedSymbols.length,
+    rejected_symbol_count:0,
+    all_eligible_symbols_have_rows:true,
+    included_symbols:includedSymbols
+  };
+}

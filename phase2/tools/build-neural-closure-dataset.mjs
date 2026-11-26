@@ -6,7 +6,7 @@ import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-wri
 import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
 import {verifyBinanceRawArchives} from '../core/neural-closure-archive-guardian.mjs';
 import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
-import {selectBinanceSpotUsdtUniverse} from '../core/neural-closure-universe.mjs';
+import {selectBinanceSpotUsdtUniverse,verifyProspectiveUniverseCapture} from '../core/neural-closure-universe.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,NEURAL_CLOSURE_DATASET_INTERVALS,
   NEURAL_CLOSURE_MARKET_DATA_POLICY,createNeuralClosureDecisionSchedule,
@@ -441,6 +441,12 @@ async function main(){
 
   btcFifteenMinute=null;
   const included=symbolSummaries.filter(item=>item.status==='INCLUDED');
+  const prospectiveCaptureAudit=args.prospectiveOnly
+    ?verifyProspectiveUniverseCapture({
+      eligible:universe.eligible,selected:universe.selected,
+      symbolResults:symbolSummaries
+    })
+    :null;
   if(included.length<args.minSymbols)
     throw new Error('VALIDATED_SYMBOL_COUNT_BELOW_MINIMUM:'+included.length);
   if(rows.length<600)throw new Error('NEURAL_CLOSURE_COHORT_BELOW_600_ROWS:'+rows.length);
@@ -560,6 +566,7 @@ async function main(){
         eligible_candidate_count:universe.eligible.length,
         selected_candidate_count:universe.selected.length,
         all_eligible_candidates_included:universe.selected.length===universe.eligible.length,
+        capture_audit:prospectiveCaptureAudit,
         hard_cap_failure_mode:'FAIL_CLOSED_NO_TOP_N_TRUNCATION',
         survivorship_bias_warning:true,
         historical_delisted_asset_coverage:false,

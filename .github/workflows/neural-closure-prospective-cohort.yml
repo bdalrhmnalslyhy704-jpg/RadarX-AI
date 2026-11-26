@@ -104,6 +104,21 @@ jobs:
              cohort.universe?.symbols?.length!==cohort.universe?.eligible_candidate_count||
              cohort.universe?.hard_cap_failure_mode!=='FAIL_CLOSED_NO_TOP_N_TRUNCATION')
             failures.push('ELIGIBLE_USDT_UNIVERSE_NOT_FULLY_CAPTURED');
+          const captureAudit=cohort.universe?.capture_audit;
+          const selectedSymbols=(cohort.universe?.symbols??[]).map(item=>item.symbol).sort();
+          const includedSymbols=(captureAudit?.included_symbols??[]).slice().sort();
+          const symbolResults=cohort.universe?.symbol_results??[];
+          if(captureAudit?.schema!=='PROSPECTIVE_UNIVERSE_CAPTURE_AUDIT_V1'||
+             captureAudit?.status!=='COMPLETE'||
+             captureAudit?.all_eligible_symbols_have_rows!==true||
+             captureAudit?.eligible_candidate_count!==cohort.universe?.eligible_candidate_count||
+             captureAudit?.selected_candidate_count!==cohort.universe?.selected_candidate_count||
+             captureAudit?.included_symbol_count!==cohort.universe?.eligible_candidate_count||
+             captureAudit?.rejected_symbol_count!==0||
+             JSON.stringify(selectedSymbols)!==JSON.stringify(includedSymbols)||
+             symbolResults.length!==cohort.universe?.eligible_candidate_count||
+             symbolResults.some(item=>item.status!=='INCLUDED'))
+            failures.push('PROSPECTIVE_CANDIDATE_CAPTURE_INCOMPLETE');
           if(cohort.cohort_contract?.requested_start_at!==expectedStart||
              cohort.schedule?.first_decision_at!==expectedStart||
              !(expectedStart>legacyLastLabelResolved)||
@@ -159,7 +174,7 @@ jobs:
           NODE
 
       - name: Upload locked prospective cohort and verified raw candle archives
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: radarx-build224-prospective-locked-cohort-${{ github.sha }}
