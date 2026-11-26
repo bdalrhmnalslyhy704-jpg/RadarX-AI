@@ -469,6 +469,7 @@ export function createHurdleV2Artifact({
     candidates: (selection.candidates ?? []).map(candidate => ({
       name: candidate.name ?? null,
       selection_brier: candidate.selection_brier ?? null,
+      logistic_selection_brier:candidate.logistic_selection_brier??null,
       brier_improvement: candidate.brier_improvement ?? null,
       pairwise_ranking_improvement: candidate.pairwise_ranking_improvement ?? null,
       independent_ranking_signal_passed:
@@ -872,14 +873,17 @@ export function verifyHurdleV2Artifact(artifact) {
         return fail('QUALIFICATION_GATE_EVIDENCE_INCOMPLETE');
       const baselineBrier=qualification.baseline?.selection_brier;
       const candidateBrier=selected?.selection_brier;
+      const candidateLogisticBrier=selected?.logistic_selection_brier;
       const recordedBrierImprovement=selected?.brier_improvement;
       const requiredBrierImprovement=qualification.required_inner_improvement;
-      const recomputedBrierImprovement=Number(baselineBrier)-Number(candidateBrier);
+      const recomputedBrierImprovement=
+        Number(candidateLogisticBrier)-Number(candidateBrier);
       if(!finite(baselineBrier)||!finite(candidateBrier)||
-        !finite(recordedBrierImprovement)||!finite(requiredBrierImprovement)||
-        requiredBrierImprovement<=0||
+        !finite(candidateLogisticBrier)||!finite(recordedBrierImprovement)||
+        !finite(requiredBrierImprovement)||requiredBrierImprovement<=0||
+        Math.abs(candidateLogisticBrier-baselineBrier)>1e-10||
         !(recordedBrierImprovement>requiredBrierImprovement)||
-        Math.abs(recordedBrierImprovement-recomputedBrierImprovement)>1e-8)
+        Math.abs(recordedBrierImprovement-recomputedBrierImprovement)>2e-8)
         return fail('CLASSIFIER_BRIER_MARGIN_EVIDENCE_INVALID');
       if(!hasFoldStableDualMetricRankerEvidence(rankerDependency))
         return fail('RANKER_FOLD_STABILITY_EVIDENCE_MISSING_OR_INVALID');

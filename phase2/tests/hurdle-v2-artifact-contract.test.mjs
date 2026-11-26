@@ -555,6 +555,7 @@ test('33c. verifier requires strict pairwise accuracy and log-loss superiority o
     passed_inner_brier_margin:true,
     passed_inner_pairwise_ranking_gate:true,
     selection_brier:0.028,
+    logistic_selection_brier:0.03,
     brier_improvement:0.002,
     independent_ranking_signal_passed:true,
     ranking_head_selection_qualified:true,
@@ -647,6 +648,13 @@ test('33c. verifier requires strict pairwise accuracy and log-loss superiority o
   assert.equal(verifyHurdleV2Artifact(inconsistentBrierResealed).reason,
     'CLASSIFIER_BRIER_MARGIN_EVIDENCE_INVALID',
     'recorded Brier improvement must recompute from the saved Logistic and model Brier values');
+
+  const mismatchedLogisticBrier=structuredClone(supported);
+  mismatchedLogisticBrier.inner_qualification.candidates[0].logistic_selection_brier=0.031;
+  const mismatchedLogisticBrierResealed=resealArtifact(mismatchedLogisticBrier);
+  assert.equal(verifyHurdleV2Artifact(mismatchedLogisticBrierResealed).reason,
+    'CLASSIFIER_BRIER_MARGIN_EVIDENCE_INVALID',
+    'candidate Logistic Brier must match the immutable selected Logistic baseline');
 
   const belowWinGate=structuredClone(supported);
   const winTrial=belowWinGate.inner_qualification.candidates[0].execution_risk_policy.selected_trial;
