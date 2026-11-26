@@ -112,7 +112,7 @@ test('prospective candidate set ignores current ticker liquidity and ordering; e
     'changing collection-time ticker volumes cannot change the candidate cohort or its order');
 });
 
-test('prospective universe includes exactly 500 eligible pairs and rejects 501 without truncation',()=>{
+test('prospective universe includes exactly 1000 eligible pairs and rejects 1001 without truncation',()=>{
   const makeUniverse=count=>{
     const symbols=[];
     const tickers=[];
@@ -130,20 +130,20 @@ test('prospective universe includes exactly 500 eligible pairs and rejects 501 w
     return {exchangeInfo:{symbols},tickers};
   };
 
-  const atCap=makeUniverse(500);
+  const atCap=makeUniverse(1000);
   const complete=selectBinanceSpotUsdtUniverse(atCap.exchangeInfo,atCap.tickers,{
-    minimumQuoteVolume:750_000,maxSymbols:500,includeAllEligible:true
+    minimumQuoteVolume:750_000,maxSymbols:1000,includeAllEligible:true
   });
-  assert.equal(complete.eligible.length,500);
-  assert.equal(complete.selected.length,500);
+  assert.equal(complete.eligible.length,1000);
+  assert.equal(complete.selected.length,1000);
   assert.equal(complete.selected.length,complete.eligible.length);
 
-  const overCap=makeUniverse(501);
+  const overCap=makeUniverse(1001);
   assert.throws(()=>selectBinanceSpotUsdtUniverse(
     overCap.exchangeInfo,overCap.tickers,{
-      minimumQuoteVolume:750_000,maxSymbols:500,includeAllEligible:true
+      minimumQuoteVolume:750_000,maxSymbols:1000,includeAllEligible:true
     }
-  ),/ELIGIBLE_UNIVERSE_EXCEEDS_CONFIGURED_MAX_SYMBOLS:501:500/);
+  ),/ELIGIBLE_UNIVERSE_EXCEEDS_CONFIGURED_MAX_SYMBOLS:1001:1000/);
 });
 
 test('candidate prefilter fails closed when BTC or the exchange universe evidence is missing',()=>{
