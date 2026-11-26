@@ -561,6 +561,26 @@ test('33c. verifier requires strict pairwise accuracy and log-loss superiority o
   assert.equal(sealed.holdout_status,'LOCKED');
   assert.equal(sealed.promotion_status,'NOT_APPROVED');
   assert.equal(sealed.real_order_execution,false);
+
+  const accuracyRegression=structuredClone(supported);
+  const badAccuracyFold=accuracyRegression.upstream_ordered_ranker_dependency
+    .ranker_qualification.selected_candidate.fold_results[1];
+  badAccuracyFold.candidate_pairwise_accuracy_pct=badAccuracyFold.logistic_pairwise_accuracy_pct;
+  badAccuracyFold.accuracy_improvement_pct=0;
+  const accuracyResealed=resealArtifact(accuracyRegression);
+  assert.equal(verifyHurdleV2Artifact(accuracyResealed).reason,
+    'RANKER_FOLD_STABILITY_EVIDENCE_MISSING_OR_INVALID',
+    'one fold with no accuracy improvement must fail closed');
+
+  const lossRegression=structuredClone(supported);
+  const badLossFold=lossRegression.upstream_ordered_ranker_dependency
+    .ranker_qualification.selected_candidate.fold_results[2];
+  badLossFold.candidate_pairwise_log_loss=badLossFold.logistic_pairwise_log_loss+0.001;
+  badLossFold.log_loss_improvement=-0.001;
+  const lossResealed=resealArtifact(lossRegression);
+  assert.equal(verifyHurdleV2Artifact(lossResealed).reason,
+    'RANKER_FOLD_STABILITY_EVIDENCE_MISSING_OR_INVALID',
+    'one fold with worse pairwise log loss must fail closed');
 });
 
 test('34. verifier rejects scientific qualification status drift from the qualification record', () => {
