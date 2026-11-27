@@ -10,6 +10,7 @@ import {
   TCN_LSTM_RANKING_FEATURE_COUNT,
   TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
   fitTcnLstmOrderedRankerForTrainingPartition,
+  isTcnLstmDualMetricCheckpointBetter,
   buildTcnLstmAnchorFeatures,
   fitTcnLstmLogisticAnchor,
   inspectTcnLstmForward,
@@ -1249,6 +1250,30 @@ test('TCN-LSTM shared classifier pairwise ranking loss backpropagates through th
   assert.equal(shared.real_order_execution,false);
 });
 
+test('ordered ranker epoch checkpoints require Pareto improvement on both accuracy and log loss',()=>{
+  const incumbent={pairwise_accuracy_pct:60,pairwise_log_loss:0.50};
+  assert.equal(isTcnLstmDualMetricCheckpointBetter(
+    {pairwise_accuracy_pct:61,pairwise_log_loss:0.49},incumbent),true,
+    'improving both metrics must replace the checkpoint');
+  assert.equal(isTcnLstmDualMetricCheckpointBetter(
+    {pairwise_accuracy_pct:60,pairwise_log_loss:0.49},incumbent),true,
+    'a loss improvement with unchanged accuracy is valid');
+  assert.equal(isTcnLstmDualMetricCheckpointBetter(
+    {pairwise_accuracy_pct:61,pairwise_log_loss:0.50},incumbent),true,
+    'an accuracy improvement with unchanged loss is valid');
+  assert.equal(isTcnLstmDualMetricCheckpointBetter(
+    {pairwise_accuracy_pct:61,pairwise_log_loss:0.51},incumbent),false,
+    'accuracy gains cannot compensate for worse log loss');
+  assert.equal(isTcnLstmDualMetricCheckpointBetter(
+    {pairwise_accuracy_pct:59,pairwise_log_loss:0.49},incumbent),false,
+    'loss gains cannot compensate for worse accuracy');
+  assert.equal(isTcnLstmDualMetricCheckpointBetter(incumbent,incumbent),false,
+    'an exact tie is not a new best checkpoint');
+  assert.throws(()=>isTcnLstmDualMetricCheckpointBetter(
+    {pairwise_accuracy_pct:101,pairwise_log_loss:0.4},incumbent),
+    /TCN_LSTM_DUAL_METRIC_CHECKPOINT_ARGUMENTS_INVALID/);
+});
+
 test('ordered ranker selection fails closed unless the selected V6 candidate beats Logistic on both metrics in all three folds',()=>{
   const foldResults=Array.from({length:3},(_,index)=>({
     fold_index:index+1,
@@ -2303,6 +2328,10 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
   assert.equal(ranker.training_rows,completePartition.length);
   assert.equal(ranker.training.training_rows,completePartition.length);
   assert.equal(ranker.training.standardization.fit_rows,completePartition.length);
+  assert.equal(ranker.training.epoch_checkpoint_selection_policy,
+    'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1');
+  assert.equal(ranker.training.internal_training_validation.epoch_checkpoint_selection_policy,
+    'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1');
   assert.equal(ranker.training_pairs,ranker.pair_support.comparison_pairs);
   assert.ok(ranker.training_pairs>=10);
   assert.equal(ranker.source_partition,'PRE_EXECUTION_MODEL_TRAINING_PARTITION');
