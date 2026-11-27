@@ -209,6 +209,50 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       tuning?.tuning_pairs===tuningFolds.reduce((sum,fold)=>sum+fold.tuning_pairs,0)&&
       tuning?.validation_pairs===tuningFolds.reduce((sum,fold)=>sum+fold.validation_pairs,0)&&
       tuning?.purge_gap_ms===Math.min(...tuningFolds.map(fold=>fold.purge_gap_ms));
+    const pairTypeAuditValid=(candidateMetrics,logisticMetrics,result,fold)=>{
+      const definitions=[
+        {key:'positive_vs_non_positive',count:fold?.validation_positive_vs_non_positive_pairs,
+          accuracyDelta:result?.positive_vs_non_positive_pairwise_accuracy_improvement_pct,
+          lossDelta:result?.positive_vs_non_positive_pairwise_log_loss_improvement},
+        {key:'positive_vs_positive',count:fold?.validation_positive_vs_positive_pairs,
+          accuracyDelta:result?.positive_vs_positive_pairwise_accuracy_improvement_pct,
+          lossDelta:result?.positive_vs_positive_pairwise_log_loss_improvement}
+      ];
+      for(const definition of definitions){
+        const candidate=candidateMetrics?.[definition.key];
+        const logistic=logisticMetrics?.[definition.key];
+        if(!candidate||!logistic||
+          !Number.isInteger(definition.count)||definition.count<0||
+          candidate.pair_count!==definition.count||logistic.pair_count!==definition.count||
+          !Number.isInteger(candidate.decision_group_count)||
+          !Number.isInteger(logistic.decision_group_count)||
+          candidate.decision_group_count!==logistic.decision_group_count||
+          candidate.decision_group_count<0||
+          candidate.decision_group_count>fold.validation_decision_group_count)
+          return false;
+        if(definition.count===0){
+          if(candidate.decision_group_count!==0||logistic.decision_group_count!==0||
+            candidate.pairwise_accuracy_pct!==null||logistic.pairwise_accuracy_pct!==null||
+            candidate.pairwise_log_loss!==null||logistic.pairwise_log_loss!==null||
+            definition.accuracyDelta!==null||definition.lossDelta!==null)return false;
+          continue;
+        }
+        if(candidate.decision_group_count<1||
+          !finite(candidate.pairwise_accuracy_pct)||candidate.pairwise_accuracy_pct<0||
+          candidate.pairwise_accuracy_pct>100||
+          !finite(logistic.pairwise_accuracy_pct)||logistic.pairwise_accuracy_pct<0||
+          logistic.pairwise_accuracy_pct>100||
+          !finite(candidate.pairwise_log_loss)||candidate.pairwise_log_loss<0||
+          !finite(logistic.pairwise_log_loss)||logistic.pairwise_log_loss<0||
+          !finite(definition.accuracyDelta)||!finite(definition.lossDelta)||
+          Math.abs(definition.accuracyDelta-
+            Number((candidate.pairwise_accuracy_pct-logistic.pairwise_accuracy_pct).toFixed(4)))>1e-9||
+          Math.abs(definition.lossDelta-
+            Number((logistic.pairwise_log_loss-candidate.pairwise_log_loss).toFixed(8)))>1e-9)
+          return false;
+      }
+      return true;
+    };
     const candidateGridValid=Array.isArray(tuningGrid)&&tuningGrid.length>=2&&
       new Set(tuningGrid.map(item=>String(item?.temporal_block_count)+'|'+String(item?.l2))).size===tuningGrid.length&&
       tuningGrid.every(item=>{
@@ -258,7 +302,10 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
             finite(result?.best_validation_pairwise_log_loss)&&finite(result?.training_pairwise_log_loss)&&
             result?.training_rows===fold.tuning_rows&&result?.validation_rows===fold.validation_rows&&
             result?.purged_rows===fold.purged_rows&&result?.training_pairs===fold.tuning_pairs&&
-            result?.validation_pairs===fold.validation_pairs;
+            result?.validation_pairs===fold.validation_pairs&&
+            (training?.pair_strategy!=='PROFITABILITY_TOPK_V2'||
+              pairTypeAuditValid(result?.candidate_pair_type_metrics,
+                result?.logistic_pair_type_metrics,result,fold));
         });
         if(!foldResultsValid)return false;
         const checkpointSelectedCount=foldResults.filter(result=>
