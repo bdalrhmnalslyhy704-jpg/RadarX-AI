@@ -125,7 +125,7 @@ jobs:
     # PR qualification remains protected by the repository opt-in variable.
     # This exact research branch also permits an explicit marker-gated push run;
     # that path still trains and qualifies on the inner partition only.
-    if: (github.event_name == 'pull_request' && (vars.RADARX_ENABLE_HURDLE_INNER_QUALIFICATION == 'true' || github.head_ref == 'research/build224-temporal-tied-ranker-20261125') || github.event_name == 'push' && github.ref_name == 'research/build224-temporal-tied-ranker-20261125' && contains(github.event.head_commit.message, '[RUN-HURDLE-INNER-ONLY]')) && (github.head_ref == 'research/build224-hurdle-v2-artifact-export-20261122' || github.head_ref == 'research/build224-purged-execution-block-ranker-20261124' || github.head_ref == 'research/build224-ordered-ranker-persistence-20261124' || github.head_ref == 'research/build224-ranker-full-training-partition-20261124' || github.head_ref == 'research/build224-temporal-tied-ranker-20261125' || github.ref_name == 'research/build224-temporal-tied-ranker-20261125')
+    if: (github.event_name == 'pull_request' && (vars.RADARX_ENABLE_HURDLE_INNER_QUALIFICATION == 'true' || github.head_ref == 'research/build224-temporal-tied-ranker-20261125' || github.head_ref == 'research/build224-hurdle-v2-runtime-closure-20261127') || github.event_name == 'push' && github.ref_name == 'research/build224-temporal-tied-ranker-20261125' && contains(github.event.head_commit.message, '[RUN-HURDLE-INNER-ONLY]')) && (github.head_ref == 'research/build224-hurdle-v2-artifact-export-20261122' || github.head_ref == 'research/build224-purged-execution-block-ranker-20261124' || github.head_ref == 'research/build224-ordered-ranker-persistence-20261124' || github.head_ref == 'research/build224-ranker-full-training-partition-20261124' || github.head_ref == 'research/build224-temporal-tied-ranker-20261125' || github.head_ref == 'research/build224-hurdle-v2-runtime-closure-20261127' || github.ref_name == 'research/build224-temporal-tied-ranker-20261125')
     needs: tcn-v11-regression
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -212,11 +212,26 @@ jobs:
           } from './phase2/core/hurdle-v2-artifact-contract.mjs';
           import {verifyOrderedTemporalRankerArtifact} from
             './phase2/core/ordered-temporal-ranker-artifact.mjs';
+          import {verifyHurdleV2RuntimeBundle} from
+            './phase2/core/hurdle-v2-runtime-bundle.mjs';
 
           const reportPath='artifacts/neural-closure-hurdle-v2-inner/inner-report.json';
           const report=JSON.parse(fs.readFileSync(reportPath,'utf8'));
           const exportStatus=report.hurdle_v2;
           if(!exportStatus?.artifact_path) throw new Error('HURDLE_V2_ARTIFACT_NOT_EXPORTED');
+          const reportedRuntimeBundle=exportStatus.runtime_dependency_bundle;
+          if(reportedRuntimeBundle?.status!=='EXPORTED_AND_FRESH_PROCESS_COMPOSITION_VERIFIED')
+            throw new Error('HURDLE_V2_COMPLETE_RUNTIME_BUNDLE_NOT_FRESH_PROCESS_VERIFIED');
+          if(reportedRuntimeBundle?.dependency_count!==5)
+            throw new Error('HURDLE_V2_RUNTIME_DEPENDENCY_COUNT_MISMATCH');
+          const compositionProbe=reportedRuntimeBundle.fresh_process_probe;
+          if(compositionProbe?.status!=='FRESH_PROCESS_COMPOSITION_PROBE_PASSED'||
+             compositionProbe?.outer_validation_opened!==false||
+             compositionProbe?.holdout_opened!==false||
+             compositionProbe?.labels_read!==0||
+             compositionProbe?.real_order_execution!==false||
+             compositionProbe?.paper_trading!==true)
+            throw new Error('HURDLE_V2_RUNTIME_COMPOSITION_PROBE_OR_RESEARCH_BOUNDARY_FAILED');
           const artifactPath='artifacts/neural-closure-hurdle-v2-inner/model-artifacts/HURDLE_V2.json';
           const manifestPath='artifacts/neural-closure-hurdle-v2-inner/model-artifacts/HURDLE_V2.manifest.json';
           if(!fs.existsSync(artifactPath)||!fs.existsSync(manifestPath))
@@ -234,7 +249,46 @@ jobs:
           const rankerVerification=verifyOrderedTemporalRankerArtifact(rankerArtifact);
           if(!rankerVerification.valid)
             throw new Error('ORDERED_RANKER_ARTIFACT_INVALID:'+rankerVerification.reason);
+          const runtimeBundlePath='artifacts/neural-closure-hurdle-v2-inner/model-artifacts/HURDLE_V2_RUNTIME_BUNDLE.json';
+          const runtimeManifestPath='artifacts/neural-closure-hurdle-v2-inner/model-artifacts/HURDLE_V2_RUNTIME_BUNDLE.manifest.json';
+          const runtimeBundleExists=fs.existsSync(runtimeBundlePath);
+          const runtimeManifestExists=fs.existsSync(runtimeManifestPath);
+          const runtimeBundle=runtimeBundleExists
+            ?JSON.parse(fs.readFileSync(runtimeBundlePath,'utf8')):null;
+          const runtimeManifest=runtimeManifestExists
+            ?JSON.parse(fs.readFileSync(runtimeManifestPath,'utf8')):null;
+          const runtimeExport=exportStatus.runtime_dependency_bundle??null;
+          const runtimeProbe=runtimeExport?.fresh_process_probe??null;
+          const runtimeVerification=runtimeBundle
+            ?verifyHurdleV2RuntimeBundle(runtimeBundle,{
+                rankerArtifact,hurdleArtifact:artifact
+              })
+            :{valid:false,reason:'RUNTIME_BUNDLE_FILE_MISSING'};
+          const runtimeParity=runtimeProbe?.parity_max_abs_error??{};
+          const runtimeParityPassed=Object.keys(runtimeParity).length===5&&
+            Object.values(runtimeParity).every(value=>
+              Number.isFinite(Number(value))&&Number(value)<=1e-8);
           const failures=[];
+          if(!runtimeBundleExists||!runtimeManifestExists)
+            failures.push('RUNTIME_DEPENDENCY_BUNDLE_OR_MANIFEST_MISSING');
+          if(!runtimeVerification.valid)
+            failures.push('RUNTIME_DEPENDENCY_BUNDLE_INVALID:'+runtimeVerification.reason);
+          if(runtimeExport?.status!=='EXPORTED_AND_FRESH_PROCESS_COMPOSITION_VERIFIED')
+            failures.push('FRESH_PROCESS_COMPOSITION_NOT_VERIFIED');
+          if(runtimeManifest&&runtimeBundle&&
+            JSON.stringify(runtimeManifest)!==JSON.stringify(runtimeBundle.artifact_manifest))
+            failures.push('RUNTIME_MANIFEST_DISK_MISMATCH');
+          if(runtimeExport?.artifact_content_hash!==runtimeBundle?.artifact_content_hash||
+            runtimeExport?.artifact_manifest_hash!==runtimeBundle?.artifact_manifest_hash)
+            failures.push('RUNTIME_EXPORT_HASH_MISMATCH');
+          if(runtimeExport?.dependency_count!==5||runtimeVerification.dependency_count!==5)
+            failures.push('RUNTIME_DEPENDENCY_COUNT_MISMATCH');
+          if(runtimeProbe?.status!=='FRESH_PROCESS_COMPOSITION_PROBE_PASSED'||
+            runtimeProbe?.labels_read!==0||runtimeProbe?.outer_validation_rows_read!==0||
+            runtimeProbe?.holdout_rows_read!==0||runtimeProbe?.outer_validation_opened!==false||
+            runtimeProbe?.holdout_opened!==false||runtimeProbe?.real_order_execution!==false||
+            runtimeProbe?.paper_trading!==true||!runtimeParityPassed)
+            failures.push('RUNTIME_FRESH_PROCESS_PROBE_BOUNDARY_OR_PARITY_FAILED');
           if(artifact.code_commit_sha!==process.env.GITHUB_SHA) failures.push('CODE_SHA_MISMATCH');
           if(artifact.dataset_sha256!==process.env.EXPECTED_DATASET_SHA256) failures.push('DATASET_SHA_MISMATCH');
           if(artifact.input_file_sha256!==process.env.EXPECTED_INPUT_FILE_SHA256) failures.push('INPUT_FILE_SHA_MISMATCH');
@@ -292,6 +346,11 @@ jobs:
             contextual_head_features:artifact.contextual_head_parameters.weights.length,
             pooled_head_features:artifact.pooled_head_parameters.weights.length,
             fresh_process_reload_verified:exportStatus.fresh_process_reload_verified,
+            runtime_bundle_content_hash:runtimeBundle.artifact_content_hash,
+            runtime_bundle_manifest_hash:runtimeBundle.artifact_manifest_hash,
+            runtime_dependency_count:runtimeVerification.dependency_count,
+            runtime_fresh_process_probe:runtimeProbe.status,
+            runtime_probe_parity_max_abs_error:runtimeParity,
             dataset_sha256:artifact.dataset_sha256,
             code_commit_sha:artifact.code_commit_sha,
             holdout_status:artifact.holdout_status,

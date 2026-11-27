@@ -63,6 +63,9 @@ import {
   createOrderedTemporalRankerArtifact,writeOrderedTemporalRankerArtifactAtomic
 } from '../core/ordered-temporal-ranker-artifact.mjs';
 import {
+  createHurdleV2RuntimeBundle,writeHurdleV2RuntimeBundleAtomic
+} from '../core/hurdle-v2-runtime-bundle.mjs';
+import {
   fitTunedTemporalLogisticBaseline,predictTemporalLogisticProbability,
   predictCrossFittedCalibratedTemporalLogisticProbability,
   evaluateBinaryProbabilityMetrics
@@ -395,6 +398,7 @@ async function main(){
   const unavailable={};
   let hurdleV2ExportStatus=null;
   let orderedRankerExportStatus=null;
+  let orderedRankerArtifactObject=null;
   const logisticTrainingVectors=split.train.map(row=>
     buildTcnLstmFlattenedFeatures(row.temporal_sequence));
   const fixedLogisticFit=fitLogisticBaseline(split.train);
@@ -1509,7 +1513,7 @@ async function main(){
         const innerQualified=selection.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY'&&
           selectedFit!==null&&calibrator.fitted===true;
         if(selectedFit?.model?.rankingRepresentation==='RAW_ORDERED_696_V1'){
-          const orderedRankerArtifact=createOrderedTemporalRankerArtifact({
+          orderedRankerArtifactObject=createOrderedTemporalRankerArtifact({
             profile:selectedFit,
             provenance:{
               sourceCommitSha,datasetSha256:datasetSha,
@@ -1528,7 +1532,7 @@ async function main(){
             }
           });
           orderedRankerExportStatus=await writeOrderedTemporalRankerArtifactAtomic(
-            join(dirname(outputPath),'model-artifacts'),orderedRankerArtifact
+            join(dirname(outputPath),'model-artifacts'),orderedRankerArtifactObject
           );
         }else{
           orderedRankerExportStatus={
@@ -1565,11 +1569,29 @@ async function main(){
             selectionObjectiveId:selection.selection_scoring?.method??
               'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6'
           });
+          const artifactDirectory=join(dirname(outputPath),'model-artifacts');
           const exportResult=await writeHurdleV2ArtifactAtomic(
-            join(dirname(outputPath),'model-artifacts'),hurdleArtifact
+            artifactDirectory,hurdleArtifact
+          );
+          const runtimeBundle=createHurdleV2RuntimeBundle({
+            profile:selectedFit,
+            rankerArtifact:orderedRankerArtifactObject,
+            hurdleArtifact,
+            provenance:{
+              sourceCommitSha,datasetSha256:datasetSha,
+              inputFileSha256,datasetSourceCommitSha,
+              datasetRowCount:rows.length,
+              roundTripCostBps:args.roundTripCostBps
+            },
+            probeSequence:split.train[0]?.temporal_sequence
+          });
+          const runtimeDependencyBundle=await writeHurdleV2RuntimeBundleAtomic(
+            artifactDirectory,runtimeBundle
           );
           hurdleV2ExportStatus={
-            ...exportResult,inner_qualified:innerQualified,
+            ...exportResult,
+            runtime_dependency_bundle:runtimeDependencyBundle,
+            inner_qualified:innerQualified,
             qualification_status:innerQualified
               ?'INNER_QUALIFIED_FOR_OUTER_REPLAY':'NOT_QUALIFIED',
             selection_status:selection.status,
@@ -1586,6 +1608,7 @@ async function main(){
             evaluation_status:innerQualified?'INNER_QUALIFIED':'NOT_QUALIFIED',
             contextual_head_present:true,pooled_head_present:true,
             ordered_ranker_artifact:orderedRankerExportStatus,
+            runtime_dependency_bundle:runtimeDependencyBundle,
             reload_status:'FRESH_PROCESS_RELOAD_VERIFIED',
             inner_qualification_status:selection.status,
             promotion_status:'NOT_APPROVED'
@@ -1945,6 +1968,7 @@ async function main(){
       split_id:split.schema,split_counts:{train:split.train.length,
         validation:split.validation.length,holdout:split.holdout.length},
       hurdle_v2:hurdleV2ExportStatus,
+      runtime_dependency_bundle:hurdleV2ExportStatus?.runtime_dependency_bundle??null,
       ordered_temporal_ranker:orderedRankerExportStatus,
       tcn_lstm_inner_diagnostics:training.model_internal_diagnostics?.TCN_LSTM_HYBRID??null,
       logistic_baseline_cv:logisticTuning.report??null,
@@ -2036,6 +2060,9 @@ async function main(){
     },null,2));
     if(!hurdleV2ExportStatus?.artifact_path)
       throw new Error(hurdleV2ExportStatus?.reason??'HURDLE_V2_INNER_ONLY_EXPORT_FAILED');
+    if(hurdleV2ExportStatus?.runtime_dependency_bundle?.status!==
+      'EXPORTED_AND_FRESH_PROCESS_COMPOSITION_VERIFIED')
+      throw new Error('HURDLE_V2_RUNTIME_DEPENDENCY_CLOSURE_NOT_VERIFIED');
     return;
   }
 
