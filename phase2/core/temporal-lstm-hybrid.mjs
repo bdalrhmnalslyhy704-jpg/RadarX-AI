@@ -3124,6 +3124,7 @@ function fitTcnLstmPairwiseRankingHead(rows,pairs,model,anchor,{
 function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
   learningRate=0.03,epochs=40,l2=0.001,patience=10,
   validationRows=null,validationPairs=null,temporalBlockCount=24,
+  initialLogisticModel=null,
   epochSelectionMode='VALIDATION_CHECKPOINT'
 }={}){
   const validTemporalBlockCounts=[1,2,3,4,6,8,12,24];
@@ -3134,6 +3135,17 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     !finite(l2)||l2<0||l2>1||
     !Number.isInteger(patience)||patience<1||patience>50||
     !validTemporalBlockCounts.includes(temporalBlockCount)||
+    initialLogisticModel!==null&&(
+      initialLogisticModel?.fit?.training_rows!==rows.length||
+      initialLogisticModel?.standardizer?.fit_rows!==rows.length||
+      !Array.isArray(initialLogisticModel?.fit?.weights)||
+      initialLogisticModel.fit.weights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      initialLogisticModel.fit.weights.some(value=>!finite(value))||
+      !Array.isArray(initialLogisticModel?.standardizer?.scales)||
+      initialLogisticModel.standardizer.scales.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      initialLogisticModel.standardizer.scales.some(value=>!finite(value)||value<=0)||
+      initialLogisticModel?.standardizer?.fit_partition!=='CURRENT_TRAINING_FOLD_ONLY'
+    )||
     !['VALIDATION_CHECKPOINT','FIXED_EPOCHS'].includes(epochSelectionMode)||
     epochSelectionMode==='FIXED_EPOCHS'&&validationRows!==null)
     throw new TypeError('TCN_LSTM_ORDERED_RANKING_HEAD_CONFIGURATION_INVALID');
@@ -3220,12 +3232,37 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
   if(initialFullWeights.length!==featureCount||initialFullWeights.some(value=>!finite(value)))
     throw new TypeError('TCN_LSTM_ORDERED_RANKING_INITIAL_WEIGHTS_INVALID');
   // A tied parameter is the sum of its corresponding expanded coefficients.
+  // When a same-fold Logistic model is supplied, project its raw-feature
+  // coefficients into each temporal block's standardized pooled coordinate.
+  // This gives the pairwise ranker a strong, leakage-safe starting point:
+  // 24 blocks reproduce Logistic exactly; coarser blocks receive a least-squares
+  // coefficient projection before pairwise fine-tuning.
   const initialWeights=Array(parameterCount).fill(0);
-  for(let block=0;block<temporalBlockCount;block++)
-    for(let channel=0;channel<channels;channel++)
-      for(let offset=0;offset<stepsPerBlock;offset++)
-        initialWeights[block*channels+channel]+=
-          initialFullWeights[(block*stepsPerBlock+offset)*channels+channel];
+  let initializationMethod='ZERO_OR_EXPLICIT_RANKER_WEIGHTS_V1';
+  if(initialLogisticModel!==null){
+    const logisticWeights=initialLogisticModel.fit.weights;
+    const logisticScales=initialLogisticModel.standardizer.scales;
+    for(let block=0;block<temporalBlockCount;block++)
+      for(let channel=0;channel<channels;channel++){
+        let rawCoefficientSum=0;
+        const firstStep=block*stepsPerBlock;
+        for(let offset=0;offset<stepsPerBlock;offset++){
+          const feature=(firstStep+offset)*channels+channel;
+          rawCoefficientSum+=logisticWeights[feature]/logisticScales[feature];
+        }
+        initialWeights[block*channels+channel]=
+          groupMoments[block*channels+channel].std*rawCoefficientSum;
+      }
+    initializationMethod=temporalBlockCount===steps
+      ?'EXACT_FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_696_V1'
+      :'PROJECTED_FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_V1';
+  }else{
+    for(let block=0;block<temporalBlockCount;block++)
+      for(let channel=0;channel<channels;channel++)
+        for(let offset=0;offset<stepsPerBlock;offset++)
+          initialWeights[block*channels+channel]+=
+            initialFullWeights[(block*stepsPerBlock+offset)*channels+channel];
+  }
 
   const pooledValue=(vector,block,channel)=>{
     let value=0;
@@ -3357,7 +3394,13 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       fit_partition:'TRAINING_PARTITION_ONLY',fit_rows:rows.length,
       validation_or_holdout_used:false
     },
-    baseline:'NONE_RAW_ORDERED_FEATURE_PAIRWISE_HEAD_INDEPENDENT_OF_CLASSIFIER_AND_LOGISTIC_LOGITS',
+    baseline:initialLogisticModel!==null
+      ?'FOLD_LOCAL_TEMPORAL_LOGISTIC_WEIGHT_WARM_START_THEN_RETURN_PAIRWISE_FINE_TUNING'
+      :'NONE_RAW_ORDERED_FEATURE_PAIRWISE_HEAD_INDEPENDENT_OF_CLASSIFIER_AND_LOGISTIC_LOGITS',
+    initialization_method:initializationMethod,
+    initialization_exact_at_full_temporal_resolution:
+      initialLogisticModel!==null&&temporalBlockCount===steps,
+    initialization_source_rows:initialLogisticModel?.fit?.training_rows??0,
     training_rows:rows.length,training_pairs:pairs.length,
     learning_rate:learningRate,epochs_requested:epochs,epochs_completed:completed,
     l2,patience,early_stopped:completed<epochs,
