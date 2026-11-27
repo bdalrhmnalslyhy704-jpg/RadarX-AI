@@ -3660,8 +3660,12 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       epochLogisticCorrect+=metric.accuracy_contribution;
     }
     const epochLogisticValidationMetrics={
-      pairwise_log_loss:epochLogisticLoss/epochValidationPairSupport.comparison_pairs,
-      pairwise_accuracy_pct:100*epochLogisticCorrect/epochValidationPairSupport.comparison_pairs
+      // Match the ranker report precision before asserting exact parity.
+      // The ranker exposes eight decimals for loss and four for accuracy.
+      pairwise_log_loss:Number((epochLogisticLoss/
+        epochValidationPairSupport.comparison_pairs).toFixed(8)),
+      pairwise_accuracy_pct:Number((100*epochLogisticCorrect/
+        epochValidationPairSupport.comparison_pairs).toFixed(4))
     };
     return {
       epochTrainingRows,epochTrainingPairSupport,
