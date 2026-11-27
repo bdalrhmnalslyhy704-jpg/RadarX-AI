@@ -1,5 +1,5 @@
 const INTERVALS=new Set(['1m','5m','15m']);
-const SYMBOL_PATTERN=/^[\\p{L}\\p{N}][\\p{L}\\p{N}_-]{0,63}USDT$/u;
+const SYMBOL_PATTERN=/^[\p{L}\p{N}][\p{L}\p{N}_-]{0,63}USDT$/u;
 
 /**
  * Normalize and validate the opaque Binance Spot USDT symbol. Binance symbols
@@ -32,5 +32,5 @@ export function binanceRawArchiveFilename(symbol,interval){
 
 export function isBinanceRawArchiveFilename(value){
   return typeof value==='string'&&
-    /^(?:[A-Z0-9_-]+|~[a-f0-9]+)\\.(?:1m|5m|15m)\\.json\\.gz$/.test(value);
+    /^(?:[A-Z0-9_-]+|~[a-f0-9]+)\.(?:1m|5m|15m)\.json\.gz$/.test(value);
 }
