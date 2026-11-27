@@ -3579,6 +3579,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       fold_index:index+1,
       fit_end_fraction:fitFraction,
       tuning_rows:tuningRows.length,
+      tuning_decision_group_count:windowBuckets.length,
       validation_rows:validationRows.length,
       validation_decision_group_count:validationBuckets.length,
       purged_rows:purgedRows.length,
