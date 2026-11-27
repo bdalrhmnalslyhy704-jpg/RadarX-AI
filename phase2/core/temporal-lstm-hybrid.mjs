@@ -1603,6 +1603,25 @@ export function tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit) {
     low_logit_gradient:error,correct:margin>0,tied:margin===0,
     accuracy_contribution:margin>0?1:margin===0?0.5:0};
 }
+
+/** Margin hinge training loss; evaluation continues to use canonical pairwise log-loss. */
+export function tcnLstmPairwiseMarginRankingLoss(highLogit,lowLogit,rankingMargin=0.25) {
+  if(!finite(highLogit)||!finite(lowLogit)||
+    Math.abs(highLogit)>LOGIT_LIMIT||Math.abs(lowLogit)>LOGIT_LIMIT||
+    !finite(rankingMargin)||rankingMargin<=0||rankingMargin>5)
+    throw new TypeError('TCN_LSTM_PAIRWISE_MARGIN_RANKING_ARGUMENT_INVALID');
+  const margin=Number(highLogit)-Number(lowLogit);
+  const violation=Number(rankingMargin)-margin;
+  const active=violation>0;
+  return {
+    margin,required_margin:Number(rankingMargin),
+    loss:Math.max(0,violation),
+    high_logit_gradient:active?-1:0,
+    low_logit_gradient:active?1:0,
+    correct:margin>0,tied:margin===0,
+    accuracy_contribution:margin>0?1:margin===0?0.5:0
+  };
+}
 /**
  * Epoch checkpoints must improve at least one ranking metric without
  * regressing the other. This Pareto rule matches the independent dual-metric
@@ -3124,6 +3143,7 @@ function fitTcnLstmPairwiseRankingHead(rows,pairs,model,anchor,{
 function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
   learningRate=0.03,epochs=40,l2=0.001,patience=10,
   validationRows=null,validationPairs=null,temporalBlockCount=24,
+  trainingObjective='PAIRWISE_LOGISTIC_V1',rankingMargin=0.25,
   epochSelectionMode='VALIDATION_CHECKPOINT'
 }={}){
   const validTemporalBlockCounts=[1,2,3,4,6,8,12,24];
@@ -3134,6 +3154,8 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     !finite(l2)||l2<0||l2>1||
     !Number.isInteger(patience)||patience<1||patience>50||
     !validTemporalBlockCounts.includes(temporalBlockCount)||
+    !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1'].includes(trainingObjective)||
+    !finite(rankingMargin)||rankingMargin<=0||rankingMargin>5||
     !['VALIDATION_CHECKPOINT','FIXED_EPOCHS'].includes(epochSelectionMode)||
     epochSelectionMode==='FIXED_EPOCHS'&&validationRows!==null)
     throw new TypeError('TCN_LSTM_ORDERED_RANKING_HEAD_CONFIGURATION_INVALID');
@@ -3267,9 +3289,11 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
   for(let epoch=1;epoch<=epochs;epoch++){
     const gradient=Array(parameterCount).fill(0);
     for(const pair of pairs){
-      const item=tcnLstmPairwiseLogitRankingLoss(
-        score(pair.high_index,initialWeights),score(pair.low_index,initialWeights)
-      );
+      const highLogit=score(pair.high_index,initialWeights);
+      const lowLogit=score(pair.low_index,initialWeights);
+      const item=trainingObjective==='PAIRWISE_MARGIN_HINGE_V1'
+        ?tcnLstmPairwiseMarginRankingLoss(highLogit,lowLogit,rankingMargin)
+        :tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit);
       const high=vectors[pair.high_index],low=vectors[pair.low_index];
       for(let block=0;block<temporalBlockCount;block++)
         for(let channel=0;channel<channels;channel++){
@@ -3360,6 +3384,7 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     baseline:'NONE_RAW_ORDERED_FEATURE_PAIRWISE_HEAD_INDEPENDENT_OF_CLASSIFIER_AND_LOGISTIC_LOGITS',
     training_rows:rows.length,training_pairs:pairs.length,
     learning_rate:learningRate,epochs_requested:epochs,epochs_completed:completed,
+    training_objective:trainingObjective,ranking_margin:Number(rankingMargin),
     l2,patience,early_stopped:completed<epochs,
     best_epoch:epochSelectionMode==='FIXED_EPOCHS'?completed:
       (validationCheckpointSelected?bestEpoch:null),
@@ -3398,6 +3423,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   roundTripCostBps=30,minimumReturnGapPct=0.50,maxPairsPerTimestamp=16,
   pairStrategy='PROFITABILITY_BOUNDARY_V1',
   learningRate=0.03,epochs=40,l2=0.001,patience=10,
+  trainingObjective='PAIRWISE_LOGISTIC_V1',rankingMargin=0.25,
   l2Grid=[0.0001,0.00025,0.0005,0.001,0.01,0.05,0.10,0.25,0.5,1.0],
   // Include intermediate temporal resolutions; selection remains inside the purged training partition.
   temporalBlockCounts=[1,2,3,4,6,8,12,24],
@@ -3413,6 +3439,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     temporalBlockCounts.some(value=>!validTemporalBlockCounts.includes(value))||
     new Set(temporalBlockCounts).size!==temporalBlockCounts.length||
     !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1','PROFITABILITY_TOPK_V2'].includes(pairStrategy)||
+    !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1'].includes(trainingObjective)||
+    !finite(rankingMargin)||rankingMargin<=0||rankingMargin>5||
     !finite(validationFraction)||validationFraction<0.08||validationFraction>0.40||
     !finite(purgeHorizonMs)||purgeHorizonMs<0)
     throw new TypeError('TCN_LSTM_ORDERED_RANKER_TUNING_CONFIGURATION_INVALID');
@@ -3613,7 +3641,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
             learningRate,epochs,l2:candidateL2,patience,
             validationRows:fold.epochValidationRows,
             validationPairs:fold.epochValidationPairSupport.pairs,
-            temporalBlockCount
+            temporalBlockCount,trainingObjective,rankingMargin
           }
         );
         const tuningModel={
@@ -3631,7 +3659,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
           fold.tuningRows,fold.tuningPairSupport.pairs,tuningModel,{
             learningRate,epochs:refitEpochCount,l2:candidateL2,
             patience:Math.max(1,refitEpochCount),
-            temporalBlockCount,epochSelectionMode:'FIXED_EPOCHS'
+            temporalBlockCount,trainingObjective,rankingMargin,
+            epochSelectionMode:'FIXED_EPOCHS'
           }
         );
         const externalLogits=fold.validationRows.map(row=>{
@@ -3778,6 +3807,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       learningRate,epochs:finalEpochs,l2:selectedTuning.l2,
       patience:Math.min(50,finalEpochs),
       temporalBlockCount:selectedTuning.temporal_block_count,
+      trainingObjective,rankingMargin,
       epochSelectionMode:'FIXED_EPOCHS'
     }
   );
@@ -3861,7 +3891,11 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     final_refit_pairs:pairSupport.comparison_pairs
   };
   training.internal_training_validation.temporal_block_count=selectedTuning.temporal_block_count;
+  training.internal_training_validation.training_objective=trainingObjective;
+  training.internal_training_validation.ranking_margin=Number(rankingMargin);
   training.pair_strategy=pairStrategy;
+  training.training_objective=trainingObjective;
+  training.ranking_margin=Number(rankingMargin);
   return {
     schema:'RADARX_TCN_LSTM_PRE_EXECUTION_ORDERED_RANKER_FIT_V1',
     fitted:true,
@@ -3917,6 +3951,7 @@ export function trainTcnLstmHybrid(trainingRows, {
   rankingPairStrategy='RETURN_EXTREMES_V1',
   rankingRepresentation='LATENT_MULTI_SCALE_V2',
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001,
+  rankingHeadTrainingObjective='PAIRWISE_LOGISTIC_V1',rankingHeadMargin=0.25,
   fitIndependentRankingHead=true,preFittedIndependentRankingHead=null,
   executionHeadRoundTripCostBps=30,executionHeadLearningRate=0.015,
   executionHeadEpochs=100,executionHeadL2=0.002
@@ -3968,6 +4003,8 @@ export function trainTcnLstmHybrid(trainingRows, {
     rankingHeadLearningRate>0.25||!Number.isInteger(rankingHeadEpochs)||
     rankingHeadEpochs<1||rankingHeadEpochs>200||
     !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1||
+    !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1'].includes(rankingHeadTrainingObjective)||
+    !finite(rankingHeadMargin)||rankingHeadMargin<=0||rankingHeadMargin>5||
     !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1','PROFITABILITY_TOPK_V2'].includes(rankingPairStrategy)||
     !TCN_LSTM_RANKING_REPRESENTATIONS.includes(rankingRepresentation)||
     typeof fitIndependentRankingHead!=='boolean')
@@ -4005,6 +4042,8 @@ export function trainTcnLstmHybrid(trainingRows, {
         metadata?.parameter_count||
       metadata?.training_rows!==Number(prefit.training_rows)||
       metadata?.training_pairs!==Number(prefit.training_pairs)||
+      metadata?.training_objective!==rankingHeadTrainingObjective||
+      metadata?.ranking_margin!==rankingHeadMargin||
       metadata?.standardization?.fit_partition!=='TRAINING_PARTITION_ONLY'||
       metadata?.standardization?.fit_rows!==Number(prefit.training_rows)||
       metadata?.validation_or_holdout_used!==false||
@@ -4810,6 +4849,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   rankingPairStrategy='RETURN_EXTREMES_V1',
   rankingRepresentation='LATENT_MULTI_SCALE_V2',
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001,
+  rankingHeadTrainingObjective='PAIRWISE_LOGISTIC_V1',rankingHeadMargin=0.25,
   externalLogisticExecutionContextProvider=null,
   requireExternalLogisticSelectionBaseline=false
 } = {}) {
@@ -4830,6 +4870,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     !finite(rankingHeadLearningRate)||rankingHeadLearningRate<=0||rankingHeadLearningRate>0.25||
     !Number.isInteger(rankingHeadEpochs)||rankingHeadEpochs<1||rankingHeadEpochs>200||
     !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1||
+    !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1'].includes(rankingHeadTrainingObjective)||
+    !finite(rankingHeadMargin)||rankingHeadMargin<=0||rankingHeadMargin>5||
     typeof externalLogisticExecutionContextProvider!=='function'&&
       externalLogisticExecutionContextProvider!==null||
     typeof requireExternalLogisticSelectionBaseline!=='boolean'||
@@ -4887,7 +4929,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       learningRate:rankingHeadLearningRate,
       epochs:rankingHeadEpochs,
       l2:rankingHeadL2,
-      patience:10
+      patience:10,
+      trainingObjective:rankingHeadTrainingObjective,
+      rankingMargin:rankingHeadMargin
     })
     :null;
   let effectiveTrainingRowsForFit=modelTrainingRows.map(row=>{
@@ -5237,6 +5281,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       rankingWeight:Number(config.rankingWeight??0),
       rankingHeadLearningRate:candidateRankingHeadLearningRate,
       rankingHeadEpochs,rankingHeadL2,
+      rankingHeadTrainingObjective,rankingHeadMargin,
       fitIndependentRankingHead:preFittedIndependentRankingHead===null,
       preFittedIndependentRankingHead,
       rankingRoundTripCostBps:roundTripCostBps,
