@@ -59,6 +59,12 @@ test('candidate prefilter includes every currently eligible Spot USDT pair above
     status:'BREAK',isSpotTradingAllowed:true});
   tickers.push({symbol:'OFFUSDT',quoteVolume:'9000000',lastPrice:'1',
     priceChangePercent:'0'});
+  for(const base of ['SNDKB','MUB']){
+    symbols.push({symbol:base+'USDT',baseAsset:base,quoteAsset:'USDT',
+      status:'TRADING',isSpotTradingAllowed:true});
+    tickers.push({symbol:base+'USDT',quoteVolume:'12000000',lastPrice:'100',
+      priceChangePercent:'0'});
+  }
   const result=selectBinanceSpotUsdtUniverse({symbols},tickers,{
     minimumQuoteVolume:750_000,maxSymbols:200,includeAllEligible:true
   });
@@ -69,6 +75,12 @@ test('candidate prefilter includes every currently eligible Spot USDT pair above
   assert.equal(result.selected.some(item=>item.symbol==='LOWUSDT'),false);
   assert.equal(result.selected.some(item=>item.symbol==='USDCUSDT'),false);
   assert.equal(result.selected.some(item=>item.symbol==='OFFUSDT'),false);
+  assert.deepEqual(result.excluded_non_crypto.map(item=>item.symbol),
+    ['MUBUSDT','SNDKBUSDT']);
+  assert.equal(result.excluded_non_crypto.every(item=>
+    item.exclusion_reason==='TOKENIZED_SECURITY_BSTOCK_NOT_CRYPTO_SPOT_ASSET'),true);
+  assert.equal(result.excluded_non_crypto_policy.id,
+    'BINANCE_BSTOCK_TOKENIZED_SECURITIES_V1');
   assert.throws(()=>selectBinanceSpotUsdtUniverse({symbols},tickers,{
     minimumQuoteVolume:750_000,maxSymbols:100,includeAllEligible:true
   }),/ELIGIBLE_UNIVERSE_EXCEEDS_CONFIGURED_MAX_SYMBOLS:126:100/);
