@@ -570,6 +570,8 @@ function rankerQualificationSnapshot(artifact){
     :null;
   return {
     schema:tuning.schema??null,
+    method:tuning.method??null,
+    epoch_checkpoint_selection_policy:tuning.epoch_checkpoint_selection_policy??null,
     fold_count:tuning.fold_count??null,
     selected_candidate_qualified:tuning.selected_candidate_qualified===true,
     fold_stable_dual_metric_superiority:tuning.fold_stable_dual_metric_superiority===true,
