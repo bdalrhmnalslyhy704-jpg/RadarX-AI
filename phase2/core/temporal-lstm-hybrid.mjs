@@ -1603,6 +1603,27 @@ export function tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit) {
     low_logit_gradient:error,correct:margin>0,tied:margin===0,
     accuracy_contribution:margin>0?1:margin===0?0.5:0};
 }
+/**
+ * Epoch checkpoints must improve at least one ranking metric without
+ * regressing the other. This Pareto rule matches the independent dual-metric
+ * Logistic qualification gate and avoids accuracy-first checkpoint bias.
+ */
+export function isTcnLstmDualMetricCheckpointBetter(candidate,incumbent,epsilon=1e-9){
+  const valid=metric=>metric&&
+    finite(metric.pairwise_accuracy_pct)&&
+    metric.pairwise_accuracy_pct>=0&&metric.pairwise_accuracy_pct<=100&&
+    finite(metric.pairwise_log_loss)&&metric.pairwise_log_loss>=0;
+  if(!valid(candidate)||!valid(incumbent)||!finite(epsilon)||epsilon<0||epsilon>1e-3)
+    throw new TypeError('TCN_LSTM_DUAL_METRIC_CHECKPOINT_ARGUMENTS_INVALID');
+  const accuracyNotWorse=candidate.pairwise_accuracy_pct>=
+    incumbent.pairwise_accuracy_pct-epsilon;
+  const lossNotWorse=candidate.pairwise_log_loss<=
+    incumbent.pairwise_log_loss+epsilon;
+  const strictImprovement=
+    candidate.pairwise_accuracy_pct>incumbent.pairwise_accuracy_pct+epsilon||
+    candidate.pairwise_log_loss<incumbent.pairwise_log_loss-epsilon;
+  return accuracyNotWorse&&lossNotWorse&&strictImprovement;
+}
 export function tcnLstmPairwiseReturnRankingLoss(highProbability,lowProbability) {
   if(!finite(highProbability)||!finite(lowProbability)||highProbability<0||
     highProbability>1||lowProbability<0||lowProbability>1)
@@ -3212,9 +3233,11 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     }else{
       const currentAccuracy=validationMetrics.pairwise_accuracy_pct;
       const currentLoss=validationMetrics.pairwise_log_loss;
-      const accuracyImproved=currentAccuracy>bestAccuracy+1e-9;
-      const accuracyTied=Math.abs(currentAccuracy-bestAccuracy)<=1e-9;
-      if(accuracyImproved||(accuracyTied&&currentLoss<bestLoss-1e-9)){
+      const checkpointBetter=isTcnLstmDualMetricCheckpointBetter(
+        {pairwise_accuracy_pct:currentAccuracy,pairwise_log_loss:currentLoss},
+        {pairwise_accuracy_pct:bestAccuracy,pairwise_log_loss:bestLoss}
+      );
+      if(checkpointBetter){
         bestAccuracy=currentAccuracy;bestLoss=currentLoss;
         bestWeights=[...initialWeights];wait=0;bestEpoch=epoch;
       }else wait++;
@@ -3262,10 +3285,14 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     l2,patience,early_stopped:completed<epochs,
     best_epoch:bestEpoch||completed,
     epoch_selection_mode:epochSelectionMode,
+    epoch_checkpoint_selection_policy:epochSelectionMode==='FIXED_EPOCHS'
+      ?'FIXED_EPOCH_COUNT_NO_CHECKPOINT_SELECTION'
+      :'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1',
     selection_metric:epochSelectionMode==='FIXED_EPOCHS'
       ?'FIXED_EPOCH_COUNT_NO_VALIDATION_CHECKPOINT'
-      :validationPairs?'NESTED_PURGED_EPOCH_VALIDATION_PAIRWISE_ACCURACY_THEN_LOG_LOSS'
-        :'TRAINING_PAIRWISE_ACCURACY_THEN_LOG_LOSS',
+      :validationPairs
+        ?'NESTED_PURGED_EPOCH_VALIDATION_PARETO_DUAL_METRIC_NON_REGRESSION'
+        :'TRAINING_PAIRWISE_PARETO_DUAL_METRIC_NON_REGRESSION',
     initial_pairwise_log_loss:Number(initialTrainingMetrics.pairwise_log_loss.toFixed(8)),
     initial_pairwise_accuracy_pct:Number(initialTrainingMetrics.pairwise_accuracy_pct.toFixed(4)),
     final_pairwise_log_loss:Number(finalTrainingMetrics.pairwise_log_loss.toFixed(8)),
@@ -3682,6 +3709,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   training.internal_training_validation={
     schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6',
     method:'THREE_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_DUAL_METRIC_VALIDATION_V1',
+    epoch_checkpoint_selection_policy:
+      'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1',
     epoch_selection_policy:'NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS',
     logistic_baseline_config:{
       schema:'RADARX_FOLD_LOCAL_RAW_TEMPORAL_LOGISTIC_RANKING_REFERENCE_V1',
