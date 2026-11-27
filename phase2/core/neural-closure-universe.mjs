@@ -15,7 +15,15 @@ const BINANCE_BSTOCK_BASE_ASSETS=new Set([
   'METAB','MRVLB','MSFTB','MSTRB','MUB','MUUB','MVLLB','NBISB','NFLXB',
   'NOKB','NVDAB','ORCLB','PLTRB','PYPLB','QCOMB','QNTB','QQQB','RKLBB',
   'SKHYB','SMCIB','SMHB','SNDKB','SOXLB','SOXSB','SPCXB','SPYB','TQQQB',
-  'TSLAB','TSMB','USARB','WDCB'
+  'TSLAB','TSMB','USARB','WDCB',
+  // Subsequent Binance bStocks Spot additions through 2026-11-25.
+  'CRWDB','MRNAB','SQQQB','STXB',
+  'BBB','MDBB','PENGB','UVXYB',
+  'BOTB','BRKBB','KSTRB','TMFB','VSTB',
+  'ADBEB','FWDIB','HPEB','PDDB','SHAZB','WENB','ZMB',
+  'EWJB','EWTB','EWZB','EWZSB','IWMB','MELIB','NUB','ANTB',
+  'ARTYB','FRHCB','IBITB','IGVB','SOXXB',
+  'APPB','BSPB','GEVB','SKDDB','SKUUB'
 ]);
 const finite=value=>value!==null&&value!==undefined&&value!==''&&
   typeof value!=='boolean'&&Number.isFinite(Number(value));
@@ -87,8 +95,8 @@ export function selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
     eligible,selected,
     excluded_non_crypto:excludedNonCrypto,
     excluded_non_crypto_policy:{
-      id:'BINANCE_BSTOCK_TOKENIZED_SECURITIES_V1',
-      source:'BINANCE_OFFICIAL_BSTOCK_SPOT_LISTING_AND_BOTS_NOTICE_2026_08_28',
+      id:'BINANCE_BSTOCK_TOKENIZED_SECURITIES_V2_2026_11_27',
+      source:'BINANCE_OFFICIAL_BSTOCK_SPOT_LISTINGS_2026_08_TO_2026_11_25',
       count:excludedNonCrypto.length
     }
   };
