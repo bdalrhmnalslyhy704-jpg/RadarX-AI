@@ -2329,7 +2329,7 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
   assert.equal(ranker.training.training_rows,completePartition.length);
   assert.equal(ranker.training.standardization.fit_rows,completePartition.length);
   assert.equal(ranker.training.epoch_checkpoint_selection_policy,
-    'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1');
+    'FIXED_EPOCH_COUNT_NO_CHECKPOINT_SELECTION');
   assert.equal(ranker.training.internal_training_validation.epoch_checkpoint_selection_policy,
     'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1');
   assert.equal(ranker.training_pairs,ranker.pair_support.comparison_pairs);
