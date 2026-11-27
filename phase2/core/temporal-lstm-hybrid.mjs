@@ -3263,6 +3263,9 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
           initialWeights[block*channels+channel]+=
             initialFullWeights[(block*stepsPerBlock+offset)*channels+channel];
   }
+  // Regularize the pairwise update as a correction to the Logistic anchor,
+  // rather than shrinking an already qualified baseline toward zero.
+  const regularizationAnchorWeights=[...initialWeights];
 
   const pooledValue=(vector,block,channel)=>{
     let value=0;
@@ -3317,7 +3320,9 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
         }
     }
     const averaged=gradient.map((value,parameter)=>
-      value/pairs.length+l2*initialWeights[parameter]);
+      value/pairs.length+l2*(
+        initialWeights[parameter]-regularizationAnchorWeights[parameter]
+      ));
     const norm=Math.sqrt(averaged.reduce((sum,value)=>sum+value*value,0));
     const clipped=norm>1?averaged.map(value=>value/norm):averaged;
     for(let parameter=0;parameter<parameterCount;parameter++){
@@ -3398,6 +3403,8 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       ?'FOLD_LOCAL_TEMPORAL_LOGISTIC_WEIGHT_WARM_START_THEN_RETURN_PAIRWISE_FINE_TUNING'
       :'NONE_RAW_ORDERED_FEATURE_PAIRWISE_HEAD_INDEPENDENT_OF_CLASSIFIER_AND_LOGISTIC_LOGITS',
     initialization_method:initializationMethod,
+    regularization_anchor_method:initialLogisticModel!==null
+      ?'SAME_FOLD_LOGISTIC_WEIGHTS_RESIDUAL_PENALTY_V1':'ZERO_WEIGHT_ORIGINAL_L2_V1',
     initialization_exact_at_full_temporal_resolution:
       initialLogisticModel!==null&&temporalBlockCount===steps,
     initialization_source_rows:initialLogisticModel?.fit?.training_rows??0,
