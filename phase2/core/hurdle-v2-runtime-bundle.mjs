@@ -41,6 +41,31 @@ const fail=reason=>({valid:false,reason});
 const logit=p=>Math.log(Math.max(1e-9,Math.min(1-1e-9,p))/
   (1-Math.max(1e-9,Math.min(1-1e-9,p))));
 
+function orderedRankerAnchorMatches(profile,artifact){
+  const model=profile?.model,parameters=artifact?.parameters;
+  const modelWeights=model?.orderedRankingAnchorWeights;
+  const modelMeans=model?.orderedRankingAnchorFeatureMean;
+  const modelStds=model?.orderedRankingAnchorFeatureStd;
+  const artifactWeights=parameters?.anchor_weights;
+  const artifactMeans=parameters?.anchor_feature_mean;
+  const artifactStds=parameters?.anchor_feature_std;
+  if(!Array.isArray(modelWeights)||modelWeights.length!==696||
+    !Array.isArray(modelMeans)||modelMeans.length!==696||
+    !Array.isArray(modelStds)||modelStds.length!==696||
+    !Array.isArray(artifactWeights)||artifactWeights.length!==696||
+    !Array.isArray(artifactMeans)||artifactMeans.length!==696||
+    !Array.isArray(artifactStds)||artifactStds.length!==696||
+    [...modelWeights,...modelMeans,...modelStds,...artifactWeights,...artifactMeans,...artifactStds]
+      .some(value=>!finite(value))||
+    modelStds.some(value=>value<=0)||artifactStds.some(value=>value<=0)||
+    !finite(model?.orderedRankingAnchorBias)||!finite(parameters?.anchor_bias))
+    return false;
+  return canonical(modelWeights)===canonical(artifactWeights)&&
+    canonical(modelMeans)===canonical(artifactMeans)&&
+    canonical(modelStds)===canonical(artifactStds)&&
+    Number(model.orderedRankingAnchorBias)===Number(parameters.anchor_bias);
+}
+
 function manifestFrom(core){
   const profile=core.inference_profile;
   const ranker=core.dependencies.ordered_ranker;
@@ -113,6 +138,8 @@ export function createHurdleV2RuntimeBundle({
   const rankerCheck=verifyOrderedTemporalRankerArtifact(rankerArtifact);
   if(!rankerCheck.valid)
     throw new TypeError('HURDLE_V2_RUNTIME_ORDERED_RANKER_INVALID:'+rankerCheck.reason);
+  if(!orderedRankerAnchorMatches(profile,rankerArtifact))
+    throw new TypeError('HURDLE_V2_RUNTIME_ORDERED_RANKER_LOGISTIC_ANCHOR_MISMATCH');
   const hurdleCheck=verifyHurdleV2Artifact(hurdleArtifact);
   if(!hurdleCheck.valid)
     throw new TypeError('HURDLE_V2_RUNTIME_HURDLE_ARTIFACT_INVALID:'+hurdleCheck.reason);
@@ -264,6 +291,8 @@ export function verifyHurdleV2RuntimeBundle(bundle,{rankerArtifact,hurdleArtifac
       rankerCheck.content_hash!==bundle.dependencies.ordered_ranker.artifact_content_hash||
       rankerCheck.manifest_hash!==bundle.dependencies.ordered_ranker.artifact_manifest_hash)
       return fail('RUNTIME_ORDERED_RANKER_HASH_OR_CONTRACT_MISMATCH');
+    if(!orderedRankerAnchorMatches(profile,rankerArtifact))
+      return fail('RUNTIME_ORDERED_RANKER_LOGISTIC_ANCHOR_MISMATCH');
     const hurdleCheck=verifyHurdleV2Artifact(hurdleArtifact);
     if(!hurdleCheck.valid||
       hurdleCheck.content_hash!==bundle.dependencies.hurdle_v2.artifact_content_hash||
