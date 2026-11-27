@@ -552,6 +552,78 @@ test('profitability-boundary rank pairs compare only positive net opportunities 
   assert.equal(metrics.holdout_values_used,false);
 });
 
+test('profitability Top-K rank pairs also order profitable candidates against each other',()=>{
+  const returnsByGroup=[
+    [4,2,-1,-3],
+    [-0.5,-1,-2,-3],
+    [1,1.2,2,3],
+    [3,2,-2,-4],
+    [-0.2,0.1,-0.1,0.8]
+  ];
+  const rows=returnsByGroup.flatMap((groupReturns,group)=>groupReturns.map(
+    (realized_return_pct,rank)=>{
+      const at=BASE+group*DAY+rank*75;
+      return {
+        id:'topk-pair-'+group+'-'+rank,
+        symbol:'TOPK'+rank+'USDT',
+        at,resolved_at:at+4*60*60*1000,
+        target:rank%2===0?1:0,
+        realized_return_pct,
+        sequence:makeSequence(rank<2?1:-1,group*0.041+rank*0.13),
+        temporal_sequence_timestamps:Array.from({length:24},(_,step)=>
+          at-(23-step)*900000)
+      };
+    }
+  ));
+  const fitRows=rows.map(({realized_return_pct,...row})=>row);
+  const options={
+    roundTripCostBps:30,minimumReturnGapPct:0.5,
+    maxPairsPerTimestamp:16,pairStrategy:'PROFITABILITY_TOPK_V2'
+  };
+  const built=buildTcnLstmReturnRankingPairs(fitRows,rows,options);
+  assert.equal(built.pair_strategy,'PROFITABILITY_TOPK_V2');
+  assert.equal(built.schema,'RADARX_TCN_LSTM_PROFITABILITY_TOPK_RANK_PAIRS_V2');
+  assert.equal(built.decision_group_count,5);
+  assert.equal(built.positive_vs_non_positive_pairs,11);
+  assert.equal(built.positive_vs_positive_pairs,7);
+  assert.equal(built.comparison_pairs,18);
+  assert.ok(built.pairs.every(pair=>{
+    const high=rows[pair.high_index].realized_return_pct-0.30;
+    const low=rows[pair.low_index].realized_return_pct-0.30;
+    return high>low&&high-low>=0.5&&
+      (pair.pair_type==='POSITIVE_VS_NON_POSITIVE'
+        ?high>0&&low<=0
+        :pair.pair_type==='POSITIVE_VS_POSITIVE'&&high>0&&low>0);
+  }));
+  const logits=rows.map(row=>2*(row.realized_return_pct-0.30));
+  const metrics=summarizeTcnLstmPairwiseLogitRanking(rows,logits,options);
+  assert.equal(metrics.status,'AVAILABLE');
+  assert.equal(metrics.pair_strategy,'PROFITABILITY_TOPK_V2');
+  assert.equal(metrics.positive_vs_non_positive_pairs,11);
+  assert.equal(metrics.positive_vs_positive_pairs,7);
+  assert.equal(metrics.comparison_pairs,18);
+  assert.equal(metrics.pairwise_accuracy_pct,100);
+  assert.equal(metrics.holdout_values_used,false);
+});
+
+test('ordered ranker threads Top-K pair policy through every purged inner fold',()=>{
+  const rows=makeRankedRows(0,100,'topk-ranker-fit');
+  const fitted=fitTcnLstmOrderedRankerForTrainingPartition(rows,{
+    roundTripCostBps:30,minimumReturnGapPct:0.5,maxPairsPerTimestamp:16,
+    pairStrategy:'PROFITABILITY_TOPK_V2',
+    learningRate:0.03,epochs:4,l2:0.001,patience:2,
+    l2Grid:[0.001,0.01],temporalBlockCounts:[1],validationFraction:0.08
+  });
+  assert.equal(fitted.pair_support.pair_strategy,'PROFITABILITY_TOPK_V2');
+  assert.equal(fitted.training.pair_strategy,'PROFITABILITY_TOPK_V2');
+  assert.equal(fitted.pair_support.positive_vs_non_positive_pairs,400);
+  assert.equal(fitted.pair_support.positive_vs_positive_pairs,100);
+  assert.equal(fitted.training.internal_training_validation.pair_strategy,
+    'PROFITABILITY_TOPK_V2');
+  assert.equal(fitted.training.internal_training_validation.fold_count,3);
+  assert.equal(fitted.training.validation_or_holdout_used,false);
+});
+
 test('pairwise return-ranking evaluation reports only selection-supplied ranking evidence',()=>{
   const rows=makeRankedRows(0,10,'rank-eval');
   const probabilities=rows.map(row=>[0.84,0.72,0.28,0.16][Number(row.id.split('-').at(-1))]);
