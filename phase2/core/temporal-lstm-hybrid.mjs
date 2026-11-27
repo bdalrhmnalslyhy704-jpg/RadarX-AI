@@ -3740,12 +3740,25 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         );
         const externalLogits=fold.validationRows.map(row=>{
           const vector=buildTcnLstmFlattenedFeatures(row.sequence);
-          let score=0;
-          for(let feature=0;feature<vector.length;feature++){
+          const anchorWeights=tuningModel.orderedRankingAnchorWeights;
+          const anchorMeans=tuningModel.orderedRankingAnchorFeatureMean;
+          const anchorStds=tuningModel.orderedRankingAnchorFeatureStd;
+          let anchorScore=Number(tuningModel.orderedRankingAnchorBias);
+          if(!Array.isArray(anchorWeights)||anchorWeights.length!==vector.length||
+            !Array.isArray(anchorMeans)||anchorMeans.length!==vector.length||
+            !Array.isArray(anchorStds)||anchorStds.length!==vector.length||
+            !finite(anchorScore))
+            throw new TypeError('TCN_LSTM_ORDERED_RANKER_LOGISTIC_ANCHOR_STATE_INVALID');
+          for(let feature=0;feature<vector.length;feature++)
+            anchorScore+=anchorWeights[feature]*
+              ((vector[feature]-anchorMeans[feature])/anchorStds[feature]);
+          if(!finite(anchorScore))
+            throw new TypeError('TCN_LSTM_ORDERED_RANKER_LOGISTIC_ANCHOR_NON_FINITE');
+          let score=clamp(anchorScore,-LOGIT_LIMIT,LOGIT_LIMIT);
+          for(let feature=0;feature<vector.length;feature++)
             score+=tuningModel.orderedRankingHeadWeights[feature]*
               ((vector[feature]-tuningModel.orderedRankingFeatureMean[feature])/
                 tuningModel.orderedRankingFeatureStd[feature]);
-          }
           if(!finite(score))throw new TypeError('TCN_LSTM_ORDERED_RANKER_OUTER_FOLD_SCORE_NON_FINITE');
           return clamp(score,-LOGIT_LIMIT,LOGIT_LIMIT);
         });
@@ -3928,7 +3941,9 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     logistic_baseline_config:{
       schema:'RADARX_FOLD_LOCAL_RAW_TEMPORAL_LOGISTIC_RANKING_REFERENCE_V1',
       ranker_initialization_method:
-        'FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_THEN_RETURN_PAIRWISE_FINE_TUNING_V1',
+        'FOLD_LOCAL_LOGISTIC_RAW_SCORE_PLUS_ZERO_INITIALIZED_TEMPORAL_RETURN_RESIDUAL_V1',
+      anchor_score_semantics:
+        'EXACT_FOLD_LOCAL_LOGISTIC_LOGIT_CLAMPED_BEFORE_ZERO_INITIALIZED_TEMPORAL_RESIDUAL',
       exact_feature_mapping_temporal_blocks:TCN_LSTM_STEPS,
       feature_schema_id:TCN_LSTM_ORDERED_RANKING_FEATURE_SCHEMA_ID,
       feature_count:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
@@ -3983,7 +3998,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     selected_parameter_count:selectedTuning.parameter_count,
     final_refit_epoch_selection_mode:'FIXED_EPOCHS_FROM_NESTED_PURGED_FOLD_EARLY_STOPPING',
     final_refit_ranker_initialization:
-      'FULL_TRAINING_PARTITION_TEMPORAL_LOGISTIC_WEIGHT_WARM_START',
+      'FULL_TRAINING_PARTITION_LOGISTIC_RAW_SCORE_PLUS_ZERO_INITIALIZED_TEMPORAL_RESIDUAL',
     final_refit_rows:ordered.length,
     final_refit_pairs:pairSupport.comparison_pairs
   };
@@ -4014,7 +4029,11 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       rankingRepresentation:'RAW_ORDERED_696_V1',
       orderedRankingHeadWeights:[...rankerModel.orderedRankingHeadWeights],
       orderedRankingFeatureMean:[...rankerModel.orderedRankingFeatureMean],
-      orderedRankingFeatureStd:[...rankerModel.orderedRankingFeatureStd]
+      orderedRankingFeatureStd:[...rankerModel.orderedRankingFeatureStd],
+      orderedRankingAnchorWeights:[...rankerModel.orderedRankingAnchorWeights],
+      orderedRankingAnchorFeatureMean:[...rankerModel.orderedRankingAnchorFeatureMean],
+      orderedRankingAnchorFeatureStd:[...rankerModel.orderedRankingAnchorFeatureStd],
+      orderedRankingAnchorBias:Number(rankerModel.orderedRankingAnchorBias)
     },
     training:{
       ...training,
