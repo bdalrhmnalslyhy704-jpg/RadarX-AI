@@ -4498,6 +4498,8 @@ export function trainTcnLstmHybrid(trainingRows, {
         representation:rankingRepresentation,
         shared_classifier_loss_weight:Number(rankingWeight),
         pair_strategy:rankingPairStrategy,
+        training_objective:rankingHeadFit.training_objective??'PAIRWISE_LOGISTIC_V1',
+        ranking_margin:rankingHeadFit.ranking_margin??0.25,
         pair_schema:ranking.schema,source_partition:ranking.source_partition,
         decision_group_count:ranking.decision_group_count,
         comparison_pairs:ranking.comparison_pairs,
