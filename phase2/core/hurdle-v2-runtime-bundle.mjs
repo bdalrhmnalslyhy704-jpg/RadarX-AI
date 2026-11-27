@@ -41,7 +41,7 @@ const fail=reason=>({valid:false,reason});
 const logit=p=>Math.log(Math.max(1e-9,Math.min(1-1e-9,p))/
   (1-Math.max(1e-9,Math.min(1-1e-9,p))));
 
-function orderedRankerAnchorMatches(profile,artifact){
+export function verifyOrderedTemporalRankerRuntimeBinding(profile,artifact){
   const model=profile?.model,parameters=artifact?.parameters;
   const modelResidualWeights=model?.orderedRankingHeadWeights;
   const modelResidualMeans=model?.orderedRankingFeatureMean;
@@ -148,7 +148,7 @@ export function createHurdleV2RuntimeBundle({
   const rankerCheck=verifyOrderedTemporalRankerArtifact(rankerArtifact);
   if(!rankerCheck.valid)
     throw new TypeError('HURDLE_V2_RUNTIME_ORDERED_RANKER_INVALID:'+rankerCheck.reason);
-  if(!orderedRankerAnchorMatches(profile,rankerArtifact))
+  if(!verifyOrderedTemporalRankerRuntimeBinding(profile,rankerArtifact))
     throw new TypeError('HURDLE_V2_RUNTIME_ORDERED_RANKER_LOGISTIC_ANCHOR_MISMATCH');
   const hurdleCheck=verifyHurdleV2Artifact(hurdleArtifact);
   if(!hurdleCheck.valid)
@@ -301,7 +301,7 @@ export function verifyHurdleV2RuntimeBundle(bundle,{rankerArtifact,hurdleArtifac
       rankerCheck.content_hash!==bundle.dependencies.ordered_ranker.artifact_content_hash||
       rankerCheck.manifest_hash!==bundle.dependencies.ordered_ranker.artifact_manifest_hash)
       return fail('RUNTIME_ORDERED_RANKER_HASH_OR_CONTRACT_MISMATCH');
-    if(!orderedRankerAnchorMatches(profile,rankerArtifact))
+    if(!verifyOrderedTemporalRankerRuntimeBinding(profile,rankerArtifact))
       return fail('RUNTIME_ORDERED_RANKER_LOGISTIC_ANCHOR_MISMATCH');
     const hurdleCheck=verifyHurdleV2Artifact(hurdleArtifact);
     if(!hurdleCheck.valid||
