@@ -608,6 +608,41 @@ test('profitability Top-K rank pairs also order profitable candidates against ea
   assert.equal(metrics.holdout_values_used,false);
 });
 
+test('profitability Top-K rank pairs use the full 32-pair budget with balanced strata',()=>{
+  const rows=Array.from({length:30},(_,rank)=>{
+    const at=BASE+rank*75;
+    const realized_return_pct=rank<15?2-rank*0.02:-1-(rank-15)*0.02;
+    return {
+      id:'topk-budget-32-'+rank,
+      symbol:'BUDGET'+rank+'USDT',
+      at,resolved_at:at+4*60*60*1000,
+      target:rank<15?1:0,
+      realized_return_pct,
+      sequence:makeSequence(rank<15?1:-1,rank*0.013),
+      temporal_sequence_timestamps:Array.from({length:24},(_,step)=>
+        at-(23-step)*900000)
+    };
+  });
+  const fitRows=rows.map(({realized_return_pct,...row})=>row);
+  const options={
+    roundTripCostBps:30,minimumReturnGapPct:0.05,
+    maxPairsPerTimestamp:32,pairStrategy:'PROFITABILITY_TOPK_V2'
+  };
+  const built=buildTcnLstmReturnRankingPairs(fitRows,rows,options);
+  assert.equal(built.decision_group_count,1);
+  assert.equal(built.comparison_pairs,32);
+  assert.equal(built.positive_vs_non_positive_pairs,16);
+  assert.equal(built.positive_vs_positive_pairs,16);
+  assert.ok(built.pairs.every(pair=>{
+    const high=rows[pair.high_index].realized_return_pct-0.30;
+    const low=rows[pair.low_index].realized_return_pct-0.30;
+    return high>low&&high-low>=0.05&&
+      (pair.pair_type==='POSITIVE_VS_NON_POSITIVE'
+        ?high>0&&low<=0
+        :pair.pair_type==='POSITIVE_VS_POSITIVE'&&high>0&&low>0);
+  }));
+});
+
 test('ordered ranker threads Top-K pair policy through every purged inner fold',()=>{
   const rows=makeRankedRows(0,100,'topk-ranker-fit');
   const fitted=fitTcnLstmOrderedRankerForTrainingPartition(rows,{
