@@ -38,7 +38,7 @@ permissions:
 # Prospective capture hard cap is 1000; the collector still fails closed above this value.
 concurrency:
   group: build224-prospective-neural-cohort
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   capture:
@@ -150,8 +150,8 @@ jobs:
             failures.push('ELIGIBLE_USDT_UNIVERSE_NOT_FULLY_CAPTURED');
           const candidatePrefilter=cohort.universe?.candidate_prefilter;
           if(cohort.universe?.selection!==
-               'ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_COMPLETE_15M_PREHISTORY_AND_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V4'||
-             candidatePrefilter?.method!=='CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY_PLUS_EXACT_15M_PREHISTORY_GATE'||
+               'CRYPTO_ONLY_ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_COMPLETE_15M_PREHISTORY_AND_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V8_PINNED_OFFICIAL_BSTOCK_LIST_86'||
+             candidatePrefilter?.method!=='CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY_PLUS_PINNED_86_BSTOCK_EXCLUSION_V3_PLUS_EXACT_15M_PREHISTORY_GATE'||
              candidatePrefilter?.current_24h_ticker_used_for_eligibility!==false||
              candidatePrefilter?.current_24h_ticker_used_for_ordering!==false||
              candidatePrefilter?.current_24h_ticker_volume_is_diagnostic_only!==true)
