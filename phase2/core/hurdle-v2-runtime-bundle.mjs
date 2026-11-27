@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {mkdir,readFile,rename,writeFile} from 'node:fs/promises';
-import {join} from 'node:path';
+import {dirname,join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 
 import {
@@ -88,8 +88,20 @@ export function createHurdleV2RuntimeBundle({
   const logisticMetadata=profile.execution_logistic_context_metadata;
   const temporalLogistic=profile.execution_logistic_context_model;
   if(logisticMetadata?.status!=='AVAILABLE'||
+    logisticMetadata?.logistic_cv_schema!==
+      'RADARX_TRAIN_ONLY_PURGED_EXPANDING_LOGISTIC_CV_V2'||
     logisticMetadata?.logistic_feature_schema_id!==
       'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1'||
+    logisticMetadata?.predictions_are_out_of_sample_for_scoring_rows!==true||
+    logisticMetadata?.training_predictions_are_out_of_fold!==true||
+    logisticMetadata?.training_predictions_source_partition!==
+      'PURGED_EXPANDING_TRAIN_ONLY_OOF_FOLDS'||
+    logisticMetadata?.classifier_training_baseline_source!==
+      'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF'||
+    logisticMetadata?.validation_or_holdout_used!==false||
+    logisticMetadata?.training_prediction_coverage?.outer_validation_or_holdout_used!==false||
+    !Number.isInteger(logisticMetadata?.training_prediction_coverage?.oof_scored_rows)||
+    logisticMetadata.training_prediction_coverage.oof_scored_rows<20||
     temporalLogistic?.training_partition_only!==true||
     !temporalLogistic?.standardizer||!temporalLogistic?.fit)
     throw new TypeError('HURDLE_V2_RUNTIME_TEMPORAL_LOGISTIC_DEPENDENCY_INVALID');
@@ -288,20 +300,36 @@ export function runHurdleV2RuntimeCompositionProbe(bundle,{rankerArtifact,hurdle
   });
   const hurdleHead=predictHurdleV2ArtifactHead(
     input.features,hurdleArtifact.contextual_head_parameters);
+  const pooledInput=buildTcnLstmExecutionHeadInputFeatures(
+    sequence,profile.model,profile.baseline_fit,{variant:'POOLED_ONLY'});
+  const pooledExecution=predictTcnLstmHybridExecutionHeads(sequence,profile,{
+    variant:'POOLED_ONLY'
+  });
+  const pooledHurdleHead=predictHurdleV2ArtifactHead(
+    pooledInput.features,hurdleArtifact.pooled_head_parameters);
   const differences={
     ranker_score:Math.abs(rankerArtifactScore-profileRankerScore),
-    hurdle_expected_net_return_pct:Math.abs(
+    contextual_hurdle_expected_net_return_pct:Math.abs(
       Number(hurdleHead.expected_net_return_pct)-
       Number(execution.predicted_hurdle_net_return_pct)),
-    hurdle_positive_probability:Math.abs(
+    contextual_hurdle_positive_probability:Math.abs(
       Number(hurdleHead.probability_positive_net_return)-
-      Number(execution.predicted_positive_net_return_probability))
+      Number(execution.predicted_positive_net_return_probability)),
+    pooled_hurdle_expected_net_return_pct:Math.abs(
+      Number(pooledHurdleHead.expected_net_return_pct)-
+      Number(pooledExecution.predicted_hurdle_net_return_pct)),
+    pooled_hurdle_positive_probability:Math.abs(
+      Number(pooledHurdleHead.probability_positive_net_return)-
+      Number(pooledExecution.predicted_positive_net_return_probability))
   };
   if(!finite(classificationProbability)||classificationProbability<0||
     classificationProbability>1||
     !finite(execution.predicted_net_return_pct)||
     !finite(execution.predicted_hurdle_net_return_pct)||
     !finite(execution.predicted_positive_net_return_probability)||
+    !finite(pooledExecution.predicted_net_return_pct)||
+    !finite(pooledExecution.predicted_hurdle_net_return_pct)||
+    !finite(pooledExecution.predicted_positive_net_return_probability)||
     Object.values(differences).some(value=>!finite(value)||value>1e-8))
     throw new TypeError('HURDLE_V2_RUNTIME_COMPOSITION_PARITY_FAILED');
   return {
@@ -311,8 +339,10 @@ export function runHurdleV2RuntimeCompositionProbe(bundle,{rankerArtifact,hurdle
     calibrated_temporal_logistic_probability:temporalProbability,
     neural_classifier_probability:classificationProbability,
     independent_ranker_score:rankerArtifactScore,
-    hurdle_expected_net_return_pct:hurdleHead.expected_net_return_pct,
-    hurdle_positive_net_return_probability:hurdleHead.probability_positive_net_return,
+    contextual_hurdle_expected_net_return_pct:hurdleHead.expected_net_return_pct,
+    contextual_hurdle_positive_net_return_probability:hurdleHead.probability_positive_net_return,
+    pooled_hurdle_expected_net_return_pct:pooledHurdleHead.expected_net_return_pct,
+    pooled_hurdle_positive_net_return_probability:pooledHurdleHead.probability_positive_net_return,
     parity_max_abs_error:differences,
     labels_read:0,outer_validation_rows_read:0,holdout_rows_read:0,
     outer_validation_opened:false,holdout_opened:false,
@@ -321,7 +351,7 @@ export function runHurdleV2RuntimeCompositionProbe(bundle,{rankerArtifact,hurdle
 }
 
 async function atomicJson(path,value){
-  await mkdir(join(path,'..'),{recursive:true});
+  await mkdir(dirname(path),{recursive:true});
   const temp=path+'.tmp-'+process.pid;
   await writeFile(temp,JSON.stringify(value,null,2)+'\n',{flag:'wx'});
   await rename(temp,path);
