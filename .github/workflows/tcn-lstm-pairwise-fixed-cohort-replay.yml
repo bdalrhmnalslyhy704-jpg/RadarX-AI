@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/build224-temporal-tied-ranker-20261125
+      - research/build224-pareto-checkpoint-validity-20261127
     paths:
       - '.github/workflows/tcn-lstm-pairwise-fixed-cohort-replay.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
