@@ -393,7 +393,7 @@ test('Top-K artifact preserves per-fold pair-type metric provenance',()=>{
   const tuning=profile.training.return_ranking.ranking_head.internal_training_validation;
   profile.training.return_ranking.pair_strategy='PROFITABILITY_TOPK_V2';
   tuning.validation_fraction=0.15;
-  tuning.validation_group_count=2;
+  tuning.validation_group_count=5;
   for(let index=0;index<tuning.folds.length;index++){
     const fold=tuning.folds[index];
     Object.assign(fold,{
@@ -401,7 +401,7 @@ test('Top-K artifact preserves per-fold pair-type metric provenance',()=>{
       tuning_decision_group_count:4,
       tuning_positive_vs_non_positive_pairs:24,
       tuning_positive_vs_positive_pairs:24,
-      validation_decision_group_count:2,
+      validation_decision_group_count:5,
       validation_positive_vs_non_positive_pairs:8,
       validation_positive_vs_positive_pairs:8,
       epoch_training_decision_group_count:2,
