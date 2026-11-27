@@ -649,7 +649,7 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
     roundTripCostBps:30,minimumReturnGapPct:0.5,maxPairsPerTimestamp:16,
     pairStrategy:'PROFITABILITY_TOPK_V2',
     learningRate:0.03,learningRateGrid:[0.01,0.03],epochs:4,l2:0.001,patience:2,
-    l2Grid:[0.001,0.01],temporalBlockCounts:[1],validationFraction:0.08
+    l2Grid:[0.001,0.01],temporalBlockCounts:[1],validationFraction:0.15
   });
   assert.equal(fitted.pair_support.pair_strategy,'PROFITABILITY_TOPK_V2');
   assert.equal(fitted.training.pair_strategy,'PROFITABILITY_TOPK_V2');
@@ -658,6 +658,11 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
   assert.equal(fitted.training.internal_training_validation.pair_strategy,
     'PROFITABILITY_TOPK_V2');
   assert.equal(fitted.training.internal_training_validation.fold_count,3);
+  assert.equal(fitted.training.internal_training_validation.validation_fraction,0.15);
+  assert.equal(fitted.training.internal_training_validation.validation_group_count,15);
+  assert.ok(fitted.training.internal_training_validation.folds.every(fold=>
+    fold.validation_decision_group_count===15
+  ),'each purged fold must use exactly 15 chronological validation groups');
   const tuningGrid=fitted.training.internal_training_validation.candidate_grid;
   assert.equal(tuningGrid.length,4);
   assert.deepEqual([...new Set(tuningGrid.map(item=>item.learning_rate))].sort((a,b)=>a-b),
