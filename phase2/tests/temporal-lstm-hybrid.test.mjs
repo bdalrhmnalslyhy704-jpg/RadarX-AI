@@ -663,6 +663,20 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
   assert.ok(fitted.training.internal_training_validation.folds.every(fold=>
     fold.validation_decision_group_count===15
   ),'each purged fold must use exactly 15 chronological validation groups');
+  const nestedPolicy=fitted.training.internal_training_validation.nested_epoch_window_policy;
+  assert.equal(nestedPolicy.fit_fraction,0.35);
+  assert.equal(nestedPolicy.validation_fraction,0.25);
+  assert.equal(nestedPolicy.minimum_group_count,5);
+  assert.equal(nestedPolicy.selection_partition_only,true);
+  assert.equal(nestedPolicy.outer_validation_or_holdout_used,false);
+  assert.ok(fitted.training.internal_training_validation.folds.every(fold=>
+    fold.epoch_training_decision_group_count===
+      Math.max(5,Math.floor(fold.tuning_decision_group_count*0.35))&&
+    fold.epoch_validation_decision_group_count===
+      Math.max(5,Math.floor(fold.tuning_decision_group_count*0.25))&&
+    fold.epoch_purged_decision_group_count>=0&&
+    fold.epoch_unused_decision_group_count>=0
+  ),'each fold must disclose its exact nested fit/validation/purge group counts');
   const tuningGrid=fitted.training.internal_training_validation.candidate_grid;
   assert.equal(tuningGrid.length,4);
   assert.deepEqual([...new Set(tuningGrid.map(item=>item.learning_rate))].sort((a,b)=>a-b),

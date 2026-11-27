@@ -3599,10 +3599,15 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   // Use a nested purged window to select epochs only. Each later fold window
   // remains untouched until scoring; all candidates and Logistic are refit on
   // the complete, identical outer-fold training rows before scoring.
+  const nestedEpochFitFraction=0.35;
+  const nestedEpochValidationFraction=0.25;
+  const nestedEpochMinimumGroupCount=5;
   const nestedEpochWindows=folds.map(fold=>{
     const windowBuckets=[...new Set(fold.tuningRows.map(bucketAt))].sort((a,b)=>a-b);
-    const fitGroupCount=Math.max(5,Math.floor(windowBuckets.length*0.40));
-    const epochValidationGroupCount=Math.max(5,Math.floor(windowBuckets.length*0.20));
+    const fitGroupCount=Math.max(nestedEpochMinimumGroupCount,
+      Math.floor(windowBuckets.length*nestedEpochFitFraction));
+    const epochValidationGroupCount=Math.max(nestedEpochMinimumGroupCount,
+      Math.floor(windowBuckets.length*nestedEpochValidationFraction));
     const fitGroups=new Set(windowBuckets.slice(0,fitGroupCount));
     const epochTrainingRows=fold.tuningRows.filter(row=>fitGroups.has(bucketAt(row)));
     const epochTrainingMaxAt=Math.max(...epochTrainingRows.map(row=>Number(row.at)));
@@ -3640,12 +3645,19 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       epochValidationRows.some(row=>epochTrainingIds.has(sampleIdentity(row)))||
       epochTrainingRows.some(row=>epochValidationIds.has(sampleIdentity(row))))
       throw new TypeError('TCN_LSTM_ORDERED_RANKER_NESTED_EPOCH_WINDOW_PURGE_VIOLATION:'+String(fold.fold_index));
-    const epochPurgedRows=fold.tuningRows.filter(row=>
+    const epochPurgedRowSet=fold.tuningRows.filter(row=>
       !epochTrainingIds.has(sampleIdentity(row))&&
       bucketAt(row)<=epochValidationStartAfter
-    ).length;
-    const epochUnusedRows=fold.tuningRows.length-
-      epochTrainingRows.length-epochValidationRows.length-epochPurgedRows;
+    );
+    const epochPurgedRows=epochPurgedRowSet.length;
+    const epochPurgedDecisionGroupCount=new Set(epochPurgedRowSet.map(bucketAt)).size;
+    const epochUnusedRowSet=fold.tuningRows.filter(row=>
+      !epochTrainingIds.has(sampleIdentity(row))&&
+      !epochValidationIds.has(sampleIdentity(row))&&
+      bucketAt(row)>epochValidationStartAfter
+    );
+    const epochUnusedRows=epochUnusedRowSet.length;
+    const epochUnusedDecisionGroupCount=new Set(epochUnusedRowSet.map(bucketAt)).size;
     if(epochUnusedRows<0)
       throw new TypeError('TCN_LSTM_ORDERED_RANKER_NESTED_EPOCH_WINDOW_ROW_ACCOUNTING_INVALID');
     // The epoch-selection warm start is fitted only on this nested fit window.
@@ -3685,11 +3697,15 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       epochValidationRows,epochValidationPairSupport,epochLogisticBaseline,
       epochLogisticValidationMetrics,
       epoch_training_rows:epochTrainingRows.length,
+      epoch_training_decision_group_count:fitGroupCount,
       epoch_training_pairs:epochTrainingPairSupport.comparison_pairs,
       epoch_validation_rows:epochValidationRows.length,
+      epoch_validation_decision_group_count:epochValidationBuckets.length,
       epoch_validation_pairs:epochValidationPairSupport.comparison_pairs,
       epoch_purged_rows:epochPurgedRows,
+      epoch_purged_decision_group_count:epochPurgedDecisionGroupCount,
       epoch_unused_rows:epochUnusedRows,
+      epoch_unused_decision_group_count:epochUnusedDecisionGroupCount,
       epoch_training_max_at:epochTrainingMaxAt,
       epoch_training_max_resolved_at:epochTrainingMaxResolvedAt,
       epoch_validation_min_at:epochValidationMinAt,
@@ -4006,6 +4022,17 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     purge_horizon_ms:purgeHorizonMs,
     validation_fraction:Number(validationFraction),
     validation_group_count:validationGroupCount,
+    nested_epoch_window_policy:{
+      schema:'RADARX_TCN_LSTM_NESTED_EPOCH_WINDOW_SPLIT_V1',
+      fit_fraction:nestedEpochFitFraction,
+      validation_fraction:nestedEpochValidationFraction,
+      minimum_group_count:nestedEpochMinimumGroupCount,
+      fit_group_rule:'EARLIEST_CHRONOLOGICAL_GROUPS_WITHIN_OUTER_FOLD_TUNING_WINDOW',
+      validation_group_rule:'NEXT_GROUPS_AFTER_FOUR_HOUR_LABEL_MATURITY_PURGE',
+      leftover_groups:'UNUSED_FOR_EPOCH_SELECTION_AND_FIT',
+      selection_partition_only:true,
+      outer_validation_or_holdout_used:false
+    },
     fold_count:foldMetadata.length,
     folds:foldMetadata,
     tuning_max_resolved_at:Math.max(...foldMetadata.map(item=>item.tuning_max_resolved_at)),

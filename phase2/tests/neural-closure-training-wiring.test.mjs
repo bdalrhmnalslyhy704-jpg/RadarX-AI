@@ -418,6 +418,14 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'execution-head diagnostics must disclose the regularized objective');
   assert.match(temporal,/constant_mean_baseline_selected:/,
     'execution-head training must report when its constant predictor remains selected');
+  assert.match(temporal,/const nestedEpochFitFraction=0\.35/);
+  assert.match(temporal,/const nestedEpochValidationFraction=0\.25/);
+  assert.match(temporal,/epoch_purge_gap_ms:epochPurgeGapMs/);
+  assert.match(temporal,/nested_epoch_window_policy:\s*\{/,
+    'the report must disclose nested epoch selection support');
+  assert.match(temporal,/epoch_validation_decision_group_count:epochValidationBuckets\.length/);
+  assert.match(temporal,/outer_validation_or_holdout_used:false/,
+    'the nested epoch split must attest that outer validation and holdout were not used');
   assert.match(temporal,/const stageOneQualified=evaluated\.filter/,
     'execution heads must be skipped for candidates that fail inner Brier or independent ranking');
   assert.match(temporal,/item\.brier_improvement>requiredImprovement/);
