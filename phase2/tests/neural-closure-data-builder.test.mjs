@@ -797,6 +797,28 @@ test('raw Binance Spot archives stream canonical JSON and preserve raw/compresse
   }
 });
 
+test('raw archive accepts safe Binance identifier separators and rejects path traversal with diagnostics',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'radarx-raw-archive-symbol-'));
+  try{
+    const result=await writeRawSpotKlineArchive({
+      symbol:'A_B-CUSDT',interval:'1m',archiveDir:directory,rawRows:[['valid']]
+    });
+    assert.equal(result.file,'A_B-CUSDT.1m.json.gz');
+    await assert.rejects(
+      writeRawSpotKlineArchive({
+        symbol:'../EVILUSDT',interval:'1m',archiveDir:directory,rawRows:[['valid']]
+      }),
+      error=>{
+        assert.equal(error.message,'NEURAL_RAW_ARCHIVE_SYMBOL_INVALID:"../EVILUSDT"');
+        return true;
+      }
+    );
+    assert.deepEqual(await readdir(directory),['A_B-CUSDT.1m.json.gz']);
+  }finally{
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+
 test('raw archive stream fails closed without leaving a partial gzip file',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'radarx-raw-archive-fail-'));
   try{
