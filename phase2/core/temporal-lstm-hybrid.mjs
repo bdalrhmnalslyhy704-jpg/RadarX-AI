@@ -3714,8 +3714,18 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         );
         const externalLogits=fold.validationRows.map(row=>{
           const vector=buildTcnLstmFlattenedFeatures(row.sequence);
-          let score=0;
+          const anchorWeights=tuningModel.orderedRankingAnchorWeights;
+          const anchorMeans=tuningModel.orderedRankingAnchorFeatureMean;
+          const anchorStds=tuningModel.orderedRankingAnchorFeatureStd;
+          let score=Number(tuningModel.orderedRankingAnchorBias);
+          if(!Array.isArray(anchorWeights)||anchorWeights.length!==vector.length||
+            !Array.isArray(anchorMeans)||anchorMeans.length!==vector.length||
+            !Array.isArray(anchorStds)||anchorStds.length!==vector.length||
+            !finite(score))
+            throw new TypeError('TCN_LSTM_ORDERED_RANKER_LOGISTIC_ANCHOR_STATE_INVALID');
           for(let feature=0;feature<vector.length;feature++){
+            const normalized=(vector[feature]-anchorMeans[feature])/anchorStds[feature];
+            score+=anchorWeights[feature]*normalized;
             score+=tuningModel.orderedRankingHeadWeights[feature]*
               ((vector[feature]-tuningModel.orderedRankingFeatureMean[feature])/
                 tuningModel.orderedRankingFeatureStd[feature]);
@@ -3744,6 +3754,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
           best_validation_pairwise_accuracy_pct:Number(externalMetrics.pairwise_accuracy_pct.toFixed(4)),
           epoch_selection_pairwise_log_loss:epochSelection.best_validation_pairwise_log_loss,
           epoch_selection_pairwise_accuracy_pct:epochSelection.best_validation_pairwise_accuracy_pct,
+          epoch_initial_pairwise_log_loss:epochSelection.initial_validation_pairwise_log_loss,
+          epoch_initial_pairwise_accuracy_pct:epochSelection.initial_validation_pairwise_accuracy_pct,
           logistic_validation_pairwise_log_loss:logistic.pairwise_log_loss,
           logistic_validation_pairwise_accuracy_pct:logistic.pairwise_accuracy_pct,
           training_pairwise_log_loss:tuned.final_pairwise_log_loss,
@@ -3976,7 +3988,11 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       rankingRepresentation:'RAW_ORDERED_696_V1',
       orderedRankingHeadWeights:[...rankerModel.orderedRankingHeadWeights],
       orderedRankingFeatureMean:[...rankerModel.orderedRankingFeatureMean],
-      orderedRankingFeatureStd:[...rankerModel.orderedRankingFeatureStd]
+      orderedRankingFeatureStd:[...rankerModel.orderedRankingFeatureStd],
+      orderedRankingAnchorWeights:[...rankerModel.orderedRankingAnchorWeights],
+      orderedRankingAnchorFeatureMean:[...rankerModel.orderedRankingAnchorFeatureMean],
+      orderedRankingAnchorFeatureStd:[...rankerModel.orderedRankingAnchorFeatureStd],
+      orderedRankingAnchorBias:Number(rankerModel.orderedRankingAnchorBias)
     },
     training:{
       ...training,
