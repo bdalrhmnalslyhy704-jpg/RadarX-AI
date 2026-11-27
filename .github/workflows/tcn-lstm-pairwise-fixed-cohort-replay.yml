@@ -1,11 +1,19 @@
 name: Build 224 TCN-LSTM Pairwise Ranking Contract Tests
 
 on:
+  push:
+    branches:
+      - research/build224-temporal-tied-ranker-20261125
+    paths:
+      - '.github/workflows/tcn-lstm-pairwise-fixed-cohort-replay.yml'
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
   pull_request:
     branches:
       - research/build224-point-in-time-liquidity-20261117
       - research/build224-tcn-lstm-pairwise-rank-20261118
       - research/build224-tcn-lstm-logit-ranking-fix-20261118
+      - research/build224-ranker-artifact-provenance-20261124
     paths:
       - '.github/workflows/tcn-lstm-pairwise-fixed-cohort-replay.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
