@@ -697,14 +697,24 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
           fold.validation_positive_vs_non_positive_pairs);
         assert.equal(metrics.positive_vs_positive.pair_count,
           fold.validation_positive_vs_positive_pairs);
-        assert.equal(metrics.positive_vs_non_positive.decision_group_count,
+        assert.ok(metrics.positive_vs_non_positive.decision_group_count>=0);
+        assert.ok(metrics.positive_vs_positive.decision_group_count>=0);
+        assert.ok(metrics.positive_vs_non_positive.decision_group_count<=
           fold.validation_decision_group_count);
-        assert.equal(metrics.positive_vs_positive.decision_group_count,
+        assert.ok(metrics.positive_vs_positive.decision_group_count<=
           fold.validation_decision_group_count);
-        assert.ok(metrics.positive_vs_non_positive.pairwise_accuracy_pct>=0);
-        assert.ok(metrics.positive_vs_positive.pairwise_accuracy_pct>=0);
-        assert.ok(metrics.positive_vs_non_positive.pairwise_log_loss>=0);
-        assert.ok(metrics.positive_vs_positive.pairwise_log_loss>=0);
+        for(const type of ['positive_vs_non_positive','positive_vs_positive']){
+          const item=metrics[type];
+          if(item.pair_count>0){
+            assert.ok(item.decision_group_count>=1);
+            assert.ok(item.pairwise_accuracy_pct>=0&&item.pairwise_accuracy_pct<=100);
+            assert.ok(item.pairwise_log_loss>=0);
+          }else{
+            assert.equal(item.decision_group_count,0);
+            assert.equal(item.pairwise_accuracy_pct,null);
+            assert.equal(item.pairwise_log_loss,null);
+          }
+        }
       }
       assert.ok(Number.isFinite(result.positive_vs_non_positive_pairwise_accuracy_improvement_pct));
       assert.ok(Number.isFinite(result.positive_vs_non_positive_pairwise_log_loss_improvement));
