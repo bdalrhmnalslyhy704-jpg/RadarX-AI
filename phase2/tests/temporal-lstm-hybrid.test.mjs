@@ -1514,17 +1514,6 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     item.ranking_head?.downstream_feature_contract?.training_and_execution_feature_identities_disjoint===true&&
     item.ranking_head?.downstream_feature_contract?.chronology_valid===true
   ),'every execution-head rank feature must be scored by a ranker fit on earlier disjoint training rows');
-  const refitDiagnostics=result.candidates.map(item=>({
-    name:item.name,
-    model_training_rows:result.model_training_rows,
-    final_refit_rows:item.ranking_head?.internal_training_validation?.final_refit_rows,
-    final_refit_pairs:item.ranking_head?.internal_training_validation?.final_refit_pairs,
-    ranker_training_rows:item.ranking_head?.training_rows,
-    ranker_training_pairs:item.ranking_head?.training_pairs,
-    final_refit_epoch_selection_mode:item.ranking_head?.internal_training_validation?.final_refit_epoch_selection_mode,
-    ranker_epoch_selection_mode:item.ranking_head?.epoch_selection_mode
-  }));
-  console.log('TCN_LSTM_RANKER_REFIT_DIAGNOSTICS',JSON.stringify(refitDiagnostics));
   assert.ok(result.candidates.every(item=>{
     const internal=item.ranking_head?.internal_training_validation;
     return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6'&&
@@ -1560,9 +1549,11 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
         internal.folds[index+1].tuning_max_at>=fold.validation_max_at)&&
       internal?.validation_rows>=40&&internal?.purged_rows>=0&&
       internal?.purge_gap_ms>=4*60*60*1000&&
-      internal?.candidate_grid?.length===56&&
-       [0.001,0.01,0.05,0.10,0.25,0.5,1.0].every(l2=>
-         internal.candidate_grid.some(candidate=>candidate.l2===l2))&&
+      internal?.l2_grid?.length===10&&
+      [0.0001,0.00025,0.0005,0.001,0.01,0.05,0.10,0.25,0.5,1.0].every(l2=>
+        internal.l2_grid.includes(l2)&&
+        internal.candidate_grid.some(candidate=>candidate.l2===l2))&&
+      internal?.candidate_grid?.length===80&&
       [1,2,3,4,6,8,12,24].every(blockCount=>
         internal.candidate_grid.some(candidate=>candidate.temporal_block_count===blockCount))&&
       internal.candidate_grid.every(candidate=>
