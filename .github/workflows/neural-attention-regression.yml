@@ -219,12 +219,12 @@ jobs:
           const report=JSON.parse(fs.readFileSync(reportPath,'utf8'));
           const exportStatus=report.hurdle_v2;
           if(!exportStatus?.artifact_path) throw new Error('HURDLE_V2_ARTIFACT_NOT_EXPORTED');
-          const runtimeBundle=exportStatus.runtime_dependency_bundle;
-          if(runtimeBundle?.status!=='EXPORTED_AND_FRESH_PROCESS_COMPOSITION_VERIFIED')
+          const reportedRuntimeBundle=exportStatus.runtime_dependency_bundle;
+          if(reportedRuntimeBundle?.status!=='EXPORTED_AND_FRESH_PROCESS_COMPOSITION_VERIFIED')
             throw new Error('HURDLE_V2_COMPLETE_RUNTIME_BUNDLE_NOT_FRESH_PROCESS_VERIFIED');
-          if(runtimeBundle?.dependency_count!==5)
+          if(reportedRuntimeBundle?.dependency_count!==5)
             throw new Error('HURDLE_V2_RUNTIME_DEPENDENCY_COUNT_MISMATCH');
-          const compositionProbe=runtimeBundle.fresh_process_probe;
+          const compositionProbe=reportedRuntimeBundle.fresh_process_probe;
           if(compositionProbe?.status!=='FRESH_PROCESS_COMPOSITION_PROBE_PASSED'||
              compositionProbe?.outer_validation_opened!==false||
              compositionProbe?.holdout_opened!==false||
