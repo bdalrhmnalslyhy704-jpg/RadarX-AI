@@ -9,7 +9,7 @@ import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs
 import {selectBinanceSpotUsdtUniverse,verifyProspectiveUniverseCapture} from '../core/neural-closure-universe.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,NEURAL_CLOSURE_DATASET_INTERVALS,
-  NEURAL_CLOSURE_MARKET_DATA_POLICY,createNeuralClosureDecisionSchedule,
+  buildNeuralClosureMarketDataPolicy,createNeuralClosureDecisionSchedule,
   parseBinanceSpotKline,verifyNeuralClosureRawCoverage,buildNeuralClosureEventRow
 } from '../core/neural-closure-data-builder.mjs';
 import {
@@ -630,10 +630,11 @@ async function main(){
         exact_240_closed_1m_bars_required:true,
         no_synthetic_or_mock_rows:true
       },
-      policy:{
-        ...NEURAL_CLOSURE_MARKET_DATA_POLICY,
-        paper_trading:true,real_order_execution:false
-      },
+      policy:buildNeuralClosureMarketDataPolicy({
+        prospectiveOnly:args.prospectiveOnly,
+        maxSymbols:args.maxSymbols,
+        minQuoteVolumeUsdt:args.minQuoteVolumeUsdt
+      }),
       training_allowed:false,
       model_scoring_allowed:false,
       outer_validation_opened:false,
@@ -773,10 +774,11 @@ async function main(){
       counts:split.counts,
       class_support:classSupport
     },
-    policy:{
-      ...NEURAL_CLOSURE_MARKET_DATA_POLICY,
-      paper_trading:true,real_order_execution:false
-    },
+    policy:buildNeuralClosureMarketDataPolicy({
+      prospectiveOnly:false,
+      maxSymbols:args.maxSymbols,
+      minQuoteVolumeUsdt:args.minQuoteVolumeUsdt
+    }),
     models_expected:[...NEURAL_CLOSURE_MODEL_FAMILIES]
   };
   await writeJsonObjectWithArrayStreaming(outputPath,{...output,rows:validated},'rows');
