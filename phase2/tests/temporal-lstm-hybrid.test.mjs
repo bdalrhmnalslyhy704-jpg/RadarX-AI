@@ -1287,6 +1287,8 @@ test('ordered ranker selection fails closed unless the selected V6 candidate bea
     representation:'RAW_ORDERED_696_V1',
     internal_training_validation:{
       schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6',
+      method:'THREE_FOLD_NESTED_PARETO_DUAL_METRIC_LOGISTIC_ANCHORED_VALIDATION_V2',
+      epoch_checkpoint_selection_policy:'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1',
       fold_count:3,
       selected_candidate_qualified:true,
       fold_stable_dual_metric_superiority:true,
@@ -1313,6 +1315,12 @@ test('ordered ranker selection fails closed unless the selected V6 candidate bea
   unqualified.internal_training_validation.robustness_status='ABSTAIN_NO_FOLD_STABLE_DUAL_SUPERIORITY';
   unqualified.internal_training_validation.fold_stable_dual_metric_candidate_count=0;
   assert.equal(hasFoldStableOrderedRankerQualification(unqualified,'RAW_ORDERED_696_V1'),false);
+
+  const missingParetoPolicy=structuredClone(rankHead);
+  missingParetoPolicy.internal_training_validation.epoch_checkpoint_selection_policy=
+    'ACCURACY_FIRST_THEN_LOG_LOSS';
+  assert.equal(hasFoldStableOrderedRankerQualification(missingParetoPolicy,'RAW_ORDERED_696_V1'),false,
+    'the runtime qualification gate must reject an undeclared checkpoint policy');
 
   const accuracyRegression=structuredClone(rankHead);
   accuracyRegression.internal_training_validation.candidate_grid[0]
@@ -1497,7 +1505,9 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.ok(result.candidates.every(item=>{
     const internal=item.ranking_head?.internal_training_validation;
     return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6'&&
-      internal?.method==='THREE_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_DUAL_METRIC_VALIDATION_V1'&&
+      internal?.method==='THREE_FOLD_NESTED_PARETO_DUAL_METRIC_LOGISTIC_ANCHORED_VALIDATION_V2'&&
+      internal?.epoch_checkpoint_selection_policy===
+        'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1'&&
       internal?.epoch_selection_policy===
         'NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS'&&
       internal?.chronology_valid===true&&
@@ -2423,6 +2433,10 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
   assert.equal(v6Verification.valid,true,v6Verification.reason);
   const v6Tuning=v6Artifact.training_provenance.internal_training_validation;
   assert.equal(v6Tuning.fold_count,3);
+  assert.equal(v6Tuning.method,
+    'THREE_FOLD_NESTED_PARETO_DUAL_METRIC_LOGISTIC_ANCHORED_VALIDATION_V2');
+  assert.equal(v6Tuning.epoch_checkpoint_selection_policy,
+    'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1');
   assert.equal(v6Tuning.schema,
     'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6');
   assert.equal(v6Tuning.selected_candidate_qualified,
