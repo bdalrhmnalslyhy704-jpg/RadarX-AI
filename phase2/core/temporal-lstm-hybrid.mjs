@@ -3582,9 +3582,19 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       epochTrainingRows.length-epochValidationRows.length-epochPurgedRows;
     if(epochUnusedRows<0)
       throw new TypeError('TCN_LSTM_ORDERED_RANKER_NESTED_EPOCH_WINDOW_ROW_ACCOUNTING_INVALID');
+    // The epoch-selection warm start is fitted only on this nested fit window.
+    // The later nested validation rows are passed for chronology checks only;
+    // their labels and realized returns are never used by Logistic fitting.
+    const epochLogisticBaseline=fitTemporalLogisticFoldRankingReference(
+      epochTrainingRows,
+      epochTrainingRows.map(row=>buildTcnLstmFlattenedFeatures(row.sequence)),{
+        validationRows:epochValidationRows,
+        l2:1,learningRate:0.03,maxEpochs:160,purgeHorizonMs
+      }
+    );
     return {
       epochTrainingRows,epochTrainingPairSupport,
-      epochValidationRows,epochValidationPairSupport,
+      epochValidationRows,epochValidationPairSupport,epochLogisticBaseline,
       epoch_training_rows:epochTrainingRows.length,
       epoch_training_pairs:epochTrainingPairSupport.comparison_pairs,
       epoch_validation_rows:epochValidationRows.length,
@@ -3638,7 +3648,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       training_rows:baseline.training_rows,
       validation_rows:baseline.validation_rows,
       validation_labels_read:baseline.validation_labels_read,
-      validation_or_holdout_used:baseline.validation_or_holdout_used
+      validation_or_holdout_used:baseline.validation_or_holdout_used,
+      model:baseline
     };
   });
   const tuningCandidates=[];
@@ -3656,7 +3667,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
             learningRate,epochs,l2:candidateL2,patience,
             validationRows:fold.epochValidationRows,
             validationPairs:fold.epochValidationPairSupport.pairs,
-            temporalBlockCount
+            temporalBlockCount,
+            initialLogisticModel:fold.epochLogisticBaseline
           }
         );
         const tuningModel={
@@ -3674,7 +3686,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
           fold.tuningRows,fold.tuningPairSupport.pairs,tuningModel,{
             learningRate,epochs:refitEpochCount,l2:candidateL2,
             patience:Math.max(1,refitEpochCount),
-            temporalBlockCount,epochSelectionMode:'FIXED_EPOCHS'
+            temporalBlockCount,initialLogisticModel:foldLogisticBaselines[index].model,
+            epochSelectionMode:'FIXED_EPOCHS'
           }
         );
         const externalLogits=fold.validationRows.map(row=>{
@@ -3810,6 +3823,11 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   const selectedTuning=foldStableDualMetricCandidates[0]??tuningCandidates[0];
   const selectedCandidateQualified=foldStableDualMetricCandidates.length>0;
   const finalEpochs=Math.max(1,selectedTuning.best_epoch);
+  const finalLogisticRankingBaseline=fitTemporalLogisticFoldRankingReference(
+    ordered,ordered.map(row=>buildTcnLstmFlattenedFeatures(row.sequence)),{
+      l2:1,learningRate:0.03,maxEpochs:160,purgeHorizonMs
+    }
+  );
   const rankerModel={
     orderedRankingHeadWeights:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0),
     orderedRankingFeatureMean:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0),
@@ -3821,6 +3839,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       learningRate,epochs:finalEpochs,l2:selectedTuning.l2,
       patience:Math.min(50,finalEpochs),
       temporalBlockCount:selectedTuning.temporal_block_count,
+      initialLogisticModel:finalLogisticRankingBaseline,
       epochSelectionMode:'FIXED_EPOCHS'
     }
   );
@@ -3849,6 +3868,9 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     epoch_selection_policy:'NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS',
     logistic_baseline_config:{
       schema:'RADARX_FOLD_LOCAL_RAW_TEMPORAL_LOGISTIC_RANKING_REFERENCE_V1',
+      ranker_initialization_method:
+        'FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_THEN_RETURN_PAIRWISE_FINE_TUNING_V1',
+      exact_feature_mapping_temporal_blocks:TCN_LSTM_STEPS,
       feature_schema_id:TCN_LSTM_ORDERED_RANKING_FEATURE_SCHEMA_ID,
       feature_count:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
       l2:1,learning_rate:0.03,max_epochs:160,
@@ -3900,6 +3922,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     selected_parameterization_id:selectedTuning.parameterization_id,
     selected_parameter_count:selectedTuning.parameter_count,
     final_refit_epoch_selection_mode:'FIXED_EPOCHS_FROM_NESTED_PURGED_FOLD_EARLY_STOPPING',
+    final_refit_ranker_initialization:
+      'FULL_TRAINING_PARTITION_TEMPORAL_LOGISTIC_WEIGHT_WARM_START',
     final_refit_rows:ordered.length,
     final_refit_pairs:pairSupport.comparison_pairs
   };
