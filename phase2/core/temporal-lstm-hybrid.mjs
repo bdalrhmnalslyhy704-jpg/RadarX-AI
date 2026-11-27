@@ -3961,6 +3961,8 @@ function summarizeTcnLstmPairTypeMetrics(logits,pairs){
     outer_validation_or_holdout_used:false,
     model_selection_partition_used:false,
     purge_horizon_ms:purgeHorizonMs,
+    validation_fraction:Number(validationFraction),
+    validation_group_count:validationGroupCount,
     fold_count:foldMetadata.length,
     folds:foldMetadata,
     tuning_max_resolved_at:Math.max(...foldMetadata.map(item=>item.tuning_max_resolved_at)),
@@ -4061,6 +4063,7 @@ export function trainTcnLstmHybrid(trainingRows, {
   rankingRepresentation='LATENT_MULTI_SCALE_V2',
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001,
   rankingHeadTrainingObjective='PAIRWISE_LOGISTIC_V1',rankingHeadMargin=0.25,
+  rankingValidationFraction=0.08,
   fitIndependentRankingHead=true,preFittedIndependentRankingHead=null,
   executionHeadRoundTripCostBps=30,executionHeadLearningRate=0.015,
   executionHeadEpochs=100,executionHeadL2=0.002
@@ -4114,6 +4117,8 @@ export function trainTcnLstmHybrid(trainingRows, {
     !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1||
     !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1','PAIRWISE_SOFTPLUS_MARGIN_V1'].includes(rankingHeadTrainingObjective)||
     !finite(rankingHeadMargin)||rankingHeadMargin<=0||rankingHeadMargin>5||
+    !finite(rankingValidationFraction)||rankingValidationFraction<0.08||
+      rankingValidationFraction>0.40||
     !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1','PROFITABILITY_TOPK_V2'].includes(rankingPairStrategy)||
     !TCN_LSTM_RANKING_REPRESENTATIONS.includes(rankingRepresentation)||
     typeof fitIndependentRankingHead!=='boolean')
@@ -4153,6 +4158,7 @@ export function trainTcnLstmHybrid(trainingRows, {
       metadata?.training_pairs!==Number(prefit.training_pairs)||
       metadata?.training_objective!==rankingHeadTrainingObjective||
       metadata?.ranking_margin!==rankingHeadMargin||
+      metadata?.internal_training_validation?.validation_fraction!==rankingValidationFraction||
       metadata?.standardization?.fit_partition!=='TRAINING_PARTITION_ONLY'||
       metadata?.standardization?.fit_rows!==Number(prefit.training_rows)||
       metadata?.validation_or_holdout_used!==false||
@@ -4961,6 +4967,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   rankingRepresentation='LATENT_MULTI_SCALE_V2',
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001,
   rankingHeadTrainingObjective='PAIRWISE_LOGISTIC_V1',rankingHeadMargin=0.25,
+  rankingValidationFraction=0.08,
   externalLogisticExecutionContextProvider=null,
   requireExternalLogisticSelectionBaseline=false
 } = {}) {
@@ -4983,6 +4990,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1||
     !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1','PAIRWISE_SOFTPLUS_MARGIN_V1'].includes(rankingHeadTrainingObjective)||
     !finite(rankingHeadMargin)||rankingHeadMargin<=0||rankingHeadMargin>5||
+    !finite(rankingValidationFraction)||rankingValidationFraction<0.08||
+      rankingValidationFraction>0.40||
     typeof externalLogisticExecutionContextProvider!=='function'&&
       externalLogisticExecutionContextProvider!==null||
     typeof requireExternalLogisticSelectionBaseline!=='boolean'||
@@ -5042,7 +5051,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       l2:rankingHeadL2,
       patience:10,
       trainingObjective:rankingHeadTrainingObjective,
-      rankingMargin:rankingHeadMargin
+      rankingMargin:rankingHeadMargin,
+      validationFraction:rankingValidationFraction
     })
     :null;
   let effectiveTrainingRowsForFit=modelTrainingRows.map(row=>{
@@ -5393,6 +5403,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       rankingHeadLearningRate:candidateRankingHeadLearningRate,
       rankingHeadEpochs,rankingHeadL2,
       rankingHeadTrainingObjective,rankingHeadMargin,
+      rankingValidationFraction,
       fitIndependentRankingHead:preFittedIndependentRankingHead===null,
       preFittedIndependentRankingHead,
       rankingRoundTripCostBps:roundTripCostBps,
