@@ -14,9 +14,9 @@ export const HURDLE_V2_POOLED_SCHEMA =
 export const HURDLE_V2_FEATURE_SCHEMA =
   'RADARX_TCN_LSTM_HURDLE_V2_CONTEXTUAL_44_AND_POOLED_8_FEATURES_V2';
 export const HURDLE_V2_OBJECTIVE =
-  'RADARX_HURDLE_V2_BINARY_LOGISTIC_NLL_PLUS_CLASS_CONDITIONAL_HUBER_V1';
+  'RADARX_HURDLE_V2_BINARY_LOGISTIC_NLL_PLUS_CLASS_CONDITIONAL_HUBER_PURGED_AFFINE_CALIBRATION_V2';
 export const HURDLE_V2_CALIBRATION_ID =
-  'RADARX_HURDLE_V2_PURGED_EXECUTION_HEAD_PLATT_CALIBRATION_V1';
+  'RADARX_HURDLE_V2_PURGED_EXECUTION_HEAD_PLATT_AND_CLASS_MEAN_CALIBRATION_V2';
 
 const HURDLE_V2_FIXED_DATASET_ROWS = 32300;
 const HURDLE_V2_FIXED_DATASET_SHA256 =
@@ -114,6 +114,63 @@ function validateNormalizer(normalizer, count, name) {
     throw new TypeError('HURDLE_V2_NORMALIZATION_INVALID:' + name);
   }
 }
+function validateConditionalMeanCalibration(calibration,positive,probabilityCalibration,name){
+  const expectedClass=positive?'POSITIVE_NET_RETURN':'NON_POSITIVE_NET_RETURN';
+  const expectedSamples=positive
+    ?probabilityCalibration?.calibration_positive_rows
+    :probabilityCalibration?.calibration_non_positive_rows;
+  const targetSignValid=positive
+    ?finite(calibration?.calibration_target_min_pct)&&
+      calibration.calibration_target_min_pct>0&&
+      finite(calibration?.calibration_target_max_pct)&&
+      calibration.calibration_target_min_pct<=calibration.calibration_target_max_pct
+    :finite(calibration?.calibration_target_min_pct)&&
+      finite(calibration?.calibration_target_max_pct)&&
+      calibration.calibration_target_min_pct<=calibration.calibration_target_max_pct&&
+      calibration.calibration_target_max_pct<=0;
+  if(calibration?.schema!=='RADARX_HURDLE_CLASS_CONDITIONAL_MEAN_AFFINE_CALIBRATOR_V1'||
+    calibration?.method!=='REGULARIZED_AFFINE_HUBER_ON_LATER_PURGED_CLASS_CONDITIONAL_RETURNS_V1'||
+    calibration?.fitted!==true||calibration?.class_condition!==expectedClass||
+    !finite(calibration?.slope)||calibration.slope<0.05||calibration.slope>8||
+    !finite(calibration?.intercept)||calibration.intercept< -8||calibration.intercept>8||
+    !Number.isInteger(calibration?.samples)||calibration.samples<8||
+    calibration.samples!==expectedSamples||
+    calibration?.fit_boundary!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK_ONLY'||
+    calibration?.target_definition!=='REALIZED_FIRST_TOUCH_RETURN_MINUS_FIXED_ROUND_TRIP_COST'||
+    calibration?.round_trip_cost_already_applied!==true||
+    !finite(calibration?.initial_objective)||calibration.initial_objective<0||
+    !finite(calibration?.final_objective)||calibration.final_objective<0||
+    !finite(calibration?.learning_rate)||calibration.learning_rate<=0||
+    !finite(calibration?.regularization)||calibration.regularization<0||
+    !finite(calibration?.huber_delta)||calibration.huber_delta<=0||
+    !Array.isArray(calibration?.slope_bounds)||calibration.slope_bounds.length!==2||
+    calibration.slope_bounds[0]!==0.05||calibration.slope_bounds[1]!==8||
+    !Array.isArray(calibration?.intercept_bounds)||calibration.intercept_bounds.length!==2||
+    calibration.intercept_bounds[0]!==-8||calibration.intercept_bounds[1]!==8||
+    !targetSignValid||
+    calibration?.training_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_TRAINING_BLOCK'||
+    calibration?.calibration_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK'||
+    calibration?.training_rows!==probabilityCalibration?.training_rows||
+    calibration?.training_positive_rows!==probabilityCalibration?.training_positive_rows||
+    calibration?.training_non_positive_rows!==probabilityCalibration?.training_non_positive_rows||
+    calibration?.training_max_at!==probabilityCalibration?.training_max_at||
+    calibration?.training_max_resolved_at!==probabilityCalibration?.training_max_resolved_at||
+    calibration?.calibration_rows!==probabilityCalibration?.calibration_rows||
+    calibration?.calibration_positive_rows!==probabilityCalibration?.calibration_positive_rows||
+    calibration?.calibration_non_positive_rows!==probabilityCalibration?.calibration_non_positive_rows||
+    calibration?.calibration_min_at!==probabilityCalibration?.calibration_min_at||
+    calibration?.purged_rows!==probabilityCalibration?.purged_rows||
+    calibration?.purged_groups!==probabilityCalibration?.purged_groups||
+    calibration?.horizon_ms!==probabilityCalibration?.horizon_ms||
+    calibration?.resolved_label_gap_ms!==probabilityCalibration?.resolved_label_gap_ms||
+    calibration?.training_decision_time_gap_ms!==probabilityCalibration?.training_decision_time_gap_ms||
+    calibration?.chronology_valid!==true||
+    calibration?.complete_decision_groups!==true||
+    calibration?.disjoint_sample_identities!==true||
+    calibration?.source_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY'||
+    calibration?.validation_or_holdout_used!==false)
+    throw new TypeError('HURDLE_V2_CONDITIONAL_MEAN_CALIBRATION_INVALID:'+name);
+}
 function validateHead(head, names, name) {
   const count = names.length;
   const calibration=head?.probability_calibration;
@@ -169,6 +226,9 @@ function validateHead(head, names, name) {
         (positive ? model.training_target_min_pct <= 0 : model.training_target_max_pct > 0)) {
       throw new TypeError('HURDLE_V2_CONDITIONAL_MEAN_INVALID:' + name + ':' + label);
     }
+    validateConditionalMeanCalibration(
+      model.conditional_mean_calibration,positive,calibration,name+':'+label
+    );
   }
   return head;
 }
@@ -552,7 +612,7 @@ export function createHurdleV2Artifact({
       pooled: hashObject(pooled)
     },
     model_family: 'TCN_LSTM_HURDLE_EXPECTED_NET_RETURN',
-    model_version: 'HURDLE_V2_FEATURE_CONDITIONAL_MEANS_V4_PURGED_PLATT_CALIBRATED_EXECUTION_POLICY',
+    model_version: 'HURDLE_V2_FEATURE_CONDITIONAL_MEANS_V5_PURGED_CLASS_MEAN_AND_PLATT_CALIBRATION_EXECUTION_POLICY',
     code_commit_sha: String(codeCommitSha).toLowerCase(),
     dataset_sha256: String(datasetSha256).toLowerCase(),
     input_file_sha256: String(inputFileSha256).toLowerCase(),
@@ -668,11 +728,13 @@ export function createHurdleV2Artifact({
       probability: 'UNWEIGHTED_BINARY_LOGISTIC_NEGATIVE_LOG_LIKELIHOOD_WITH_L2_0_05',
       positive_conditional_return: 'CLASS_CONDITIONAL_HUBER_DELTA_1_L2_0_1',
       non_positive_conditional_return: 'CLASS_CONDITIONAL_HUBER_DELTA_1_L2_0_1',
+      conditional_mean_calibration:
+        'SEPARATE_REGULARIZED_AFFINE_HUBER_CALIBRATORS_FIT_ON_LATER_PURGED_POSITIVE_AND_NON_POSITIVE_CALIBRATION_ROWS',
       class_reweighting: false,
       probability_class_weights: {positive: 1, non_positive: 1}
     },
     calibration_definition:
-      'HURDLE_RAW_SIGMOID_POSITIVE_NET_RETURN_PROBABILITY_USES_PURGED_EXECUTION_HEAD_PLATT_CALIBRATION_ON_A_LATER_BLOCK; THE CALIBRATION BLOCK IS DISJOINT FROM THE EARLIER HURDLE FIT BLOCK AND INNER SELECTION; THE FOUR_HOUR_LABEL_MATURITY_GAP_IS_ENFORCED; OUTER_VALIDATION_AND_HOLDOUT_ARE_NOT_USED',
+      'HURDLE_RAW_SIGMOID_POSITIVE_NET_RETURN_PROBABILITY_AND_BOTH_CLASS_CONDITIONAL_RETURN_MEANS_USE_SEPARATE_REGULARIZED_CALIBRATORS_FIT_ON_THE_SAME_LATER_PURGED_EXECUTION_HEAD_CALIBRATION_BLOCK; THE_CALIBRATION_BLOCK_IS_DISJOINT_FROM_THE_EARLIER_HURDLE_FIT_BLOCK_AND_INNER_SELECTION; THE_FOUR_HOUR_LABEL_MATURITY_GAP_IS_ENFORCED; OUTER_VALIDATION_AND_HOLDOUT_ARE_NOT_USED',
     calibration_id: HURDLE_V2_CALIBRATION_ID,
     cost_model_id: 'FIXED_LINEAR_ROUND_TRIP_BPS_V1',
     round_trip_cost_bps: roundTripCostBps,
@@ -738,6 +800,16 @@ export function createHurdleV2Artifact({
           non_positive_rows: pooled.non_positive_rows,
           empirical_positive_rate: pooled.empirical_positive_rate,
           class_reweighting_used: pooled.class_reweighting_used
+        },
+        conditional_mean_calibration:{
+          contextual:{
+            positive:contextual.positive_conditional_mean_model.conditional_mean_calibration,
+            non_positive:contextual.non_positive_conditional_mean_model.conditional_mean_calibration
+          },
+          pooled:{
+            positive:pooled.positive_conditional_mean_model.conditional_mean_calibration,
+            non_positive:pooled.non_positive_conditional_mean_model.conditional_mean_calibration
+          }
         },
         probability_calibration:{
           contextual:{
