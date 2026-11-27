@@ -577,7 +577,7 @@ test('profitability Top-K rank pairs also order profitable candidates against ea
   ));
   const fitRows=rows.map(({realized_return_pct,...row})=>row);
   const options={
-    roundTripCostBps:30,minimumReturnGapPct:0.5,
+    roundTripCostBps:30,minimumReturnGapPct:0.05,
     maxPairsPerTimestamp:16,pairStrategy:'PROFITABILITY_TOPK_V2'
   };
   const built=buildTcnLstmReturnRankingPairs(fitRows,rows,options);
@@ -585,8 +585,10 @@ test('profitability Top-K rank pairs also order profitable candidates against ea
   assert.equal(built.schema,'RADARX_TCN_LSTM_PROFITABILITY_TOPK_RANK_PAIRS_V2');
   assert.equal(built.decision_group_count,5);
   assert.equal(built.positive_vs_non_positive_pairs,11);
-  assert.equal(built.positive_vs_positive_pairs,7);
-  assert.equal(built.comparison_pairs,18);
+  assert.equal(built.positive_vs_positive_pairs,8);
+  assert.equal(built.comparison_pairs,19);
+  assert.ok(built.pairs.some(pair=>pair.pair_type==='POSITIVE_VS_POSITIVE'&&
+    pair.return_gap_pct<0.5));
   assert.ok(built.pairs.every(pair=>{
     const high=rows[pair.high_index].realized_return_pct-0.30;
     const low=rows[pair.low_index].realized_return_pct-0.30;
@@ -600,8 +602,8 @@ test('profitability Top-K rank pairs also order profitable candidates against ea
   assert.equal(metrics.status,'AVAILABLE');
   assert.equal(metrics.pair_strategy,'PROFITABILITY_TOPK_V2');
   assert.equal(metrics.positive_vs_non_positive_pairs,11);
-  assert.equal(metrics.positive_vs_positive_pairs,7);
-  assert.equal(metrics.comparison_pairs,18);
+  assert.equal(metrics.positive_vs_positive_pairs,8);
+  assert.equal(metrics.comparison_pairs,19);
   assert.equal(metrics.pairwise_accuracy_pct,100);
   assert.equal(metrics.holdout_values_used,false);
 });
