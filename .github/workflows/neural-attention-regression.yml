@@ -14,6 +14,7 @@ on:
       - research/build224-topk-margin-ranker-20261127
       - research/build224-topk-softplus-margin-20261127
       - research/build224-topk-pairtype-fold-audit-20261127
+      - research/build224-hurdle-conditional-mean-calibration-20261127
       - research/build224-topk-pairtype-fold-audit-20261127
     paths:
       - 'phase2/core/temporal-neural-brain.mjs'
