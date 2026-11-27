@@ -1116,6 +1116,7 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
     (value-rankingMeans[index])/rankingStds[index]
   );
   let rankingScore=0;
+  let rankingAnchorScore=0;
   for(let index=0;index<TCN_LSTM_RANKING_FEATURE_COUNT;index++)
     rankingScore+=rankingWeights[index]*normalizedRankingFeatures[index];
   rankingScore=clamp(rankingScore,-LOGIT_LIMIT,LOGIT_LIMIT);
@@ -1152,7 +1153,6 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
     const anchorStds=model.orderedRankingAnchorFeatureStd;
     const hasAnchor=anchorWeights!==undefined||anchorMeans!==undefined||
       anchorStds!==undefined||model.orderedRankingAnchorBias!==undefined;
-    let rankingAnchorScore=0;
     if(hasAnchor){
       if(!Array.isArray(anchorWeights)||
         anchorWeights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
