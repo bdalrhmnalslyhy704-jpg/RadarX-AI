@@ -3632,6 +3632,44 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     epochValidationRows:nestedEpochWindows[index].epochValidationRows,
     epochValidationPairSupport:nestedEpochWindows[index].epochValidationPairSupport
   }));
+function summarizeTcnLstmPairTypeMetrics(logits,pairs){
+  if(!Array.isArray(logits)||!Array.isArray(pairs)||pairs.length<1)
+    throw new TypeError('TCN_LSTM_PAIR_TYPE_METRICS_INPUT_INVALID');
+  const definitions=['POSITIVE_VS_NON_POSITIVE','POSITIVE_VS_POSITIVE'];
+  const states=new Map(definitions.map(type=>[type,{
+    pair_count:0,decision_groups:new Set(),loss:0,correct:0
+  }]));
+  for(const pair of pairs){
+    const state=states.get(pair?.pair_type);
+    if(!state||!Number.isInteger(pair.high_index)||!Number.isInteger(pair.low_index)||
+      pair.high_index<0||pair.low_index<0||pair.high_index>=logits.length||
+      pair.low_index>=logits.length||pair.high_index===pair.low_index||
+      !finite(pair.decision_at))
+      throw new TypeError('TCN_LSTM_PAIR_TYPE_METRICS_PAIR_INVALID');
+    const metric=tcnLstmPairwiseLogitRankingLoss(
+      logits[pair.high_index],logits[pair.low_index]
+    );
+    state.pair_count++;
+    state.decision_groups.add(Number(pair.decision_at));
+    state.loss+=metric.loss;
+    state.correct+=metric.accuracy_contribution;
+  }
+  const result={};
+  for(const type of definitions){
+    const state=states.get(type);
+    result[type==='POSITIVE_VS_NON_POSITIVE'
+      ?'positive_vs_non_positive':'positive_vs_positive']={
+        pair_count:state.pair_count,
+        decision_group_count:state.decision_groups.size,
+        pairwise_accuracy_pct:state.pair_count
+          ?Number((100*state.correct/state.pair_count).toFixed(4)):null,
+        pairwise_log_loss:state.pair_count
+          ?Number((state.loss/state.pair_count).toFixed(8)):null
+      };
+  }
+  return result;
+}
+
   // Fit the fixed project Logistic specification separately inside each
   // purged outer fold. Both models train on all rows in that fold's fit window
   // and are evaluated on identical later profitability-boundary pairs.
@@ -3663,6 +3701,9 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       schema:baseline.schema,
       pairwise_log_loss:Number((loss/fold.validationPairSupport.comparison_pairs).toFixed(8)),
       pairwise_accuracy_pct:Number((100*correct/fold.validationPairSupport.comparison_pairs).toFixed(4)),
+      pair_type_metrics:pairStrategy==='PROFITABILITY_TOPK_V2'
+        ?summarizeTcnLstmPairTypeMetrics(validationLogits,fold.validationPairSupport.pairs)
+        :null,
       training_rows:baseline.training_rows,
       validation_rows:baseline.validation_rows,
       validation_labels_read:baseline.validation_labels_read,
@@ -3730,12 +3771,37 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
           pairwise_accuracy_pct:100*externalCorrect/fold.validationPairSupport.comparison_pairs
         };
         const logistic=foldLogisticBaselines[index];
+        const candidatePairTypeMetrics=pairStrategy==='PROFITABILITY_TOPK_V2'
+          ?summarizeTcnLstmPairTypeMetrics(externalLogits,fold.validationPairSupport.pairs)
+          :null;
+        const pairTypeImprovement=(type,metric)=>{
+          const candidate=candidatePairTypeMetrics?.[type];
+          const baseline=logistic.pair_type_metrics?.[type];
+          if(!candidate||!baseline||candidate.pair_count!==baseline.pair_count||
+            candidate.decision_group_count!==baseline.decision_group_count||
+            !finite(candidate.pairwise_accuracy_pct)||!finite(baseline.pairwise_accuracy_pct)||
+            !finite(candidate.pairwise_log_loss)||!finite(baseline.pairwise_log_loss))
+            return null;
+          return metric==='accuracy'
+            ?Number((candidate.pairwise_accuracy_pct-baseline.pairwise_accuracy_pct).toFixed(4))
+            :Number((baseline.pairwise_log_loss-candidate.pairwise_log_loss).toFixed(8));
+        };
         return {
           fold_index:fold.fold_index,
           best_epoch:refitEpochCount,
           epoch_checkpoint_selected:epochSelection.validation_checkpoint_selected===true,
           best_validation_pairwise_log_loss:Number(externalMetrics.pairwise_log_loss.toFixed(8)),
           best_validation_pairwise_accuracy_pct:Number(externalMetrics.pairwise_accuracy_pct.toFixed(4)),
+          candidate_pair_type_metrics:candidatePairTypeMetrics,
+          logistic_pair_type_metrics:logistic.pair_type_metrics,
+          positive_vs_non_positive_pairwise_accuracy_improvement_pct:
+            pairTypeImprovement('positive_vs_non_positive','accuracy'),
+          positive_vs_non_positive_pairwise_log_loss_improvement:
+            pairTypeImprovement('positive_vs_non_positive','log_loss'),
+          positive_vs_positive_pairwise_accuracy_improvement_pct:
+            pairTypeImprovement('positive_vs_positive','accuracy'),
+          positive_vs_positive_pairwise_log_loss_improvement:
+            pairTypeImprovement('positive_vs_positive','log_loss'),
           epoch_selection_pairwise_log_loss:epochSelection.best_validation_pairwise_log_loss,
           epoch_selection_pairwise_accuracy_pct:epochSelection.best_validation_pairwise_accuracy_pct,
           logistic_validation_pairwise_log_loss:logistic.pairwise_log_loss,

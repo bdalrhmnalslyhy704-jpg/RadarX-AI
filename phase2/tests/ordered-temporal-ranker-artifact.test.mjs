@@ -388,6 +388,65 @@ test('atomic sidecar export reloads and verifies both artifact and manifest',asy
 });
 
 
+test('Top-K artifact preserves per-fold pair-type metric provenance',()=>{
+  const profile=makeProfile();
+  const tuning=profile.training.return_ranking.ranking_head.internal_training_validation;
+  profile.training.return_ranking.pair_strategy='PROFITABILITY_TOPK_V2';
+  for(let index=0;index<tuning.folds.length;index++){
+    const fold=tuning.folds[index];
+    Object.assign(fold,{
+      pair_strategy:'PROFITABILITY_TOPK_V2',
+      tuning_decision_group_count:4,
+      tuning_positive_vs_non_positive_pairs:24,
+      tuning_positive_vs_positive_pairs:24,
+      validation_decision_group_count:2,
+      validation_positive_vs_non_positive_pairs:8,
+      validation_positive_vs_positive_pairs:8,
+      epoch_training_decision_group_count:2,
+      epoch_training_positive_vs_non_positive_pairs:12,
+      epoch_training_positive_vs_positive_pairs:12,
+      epoch_validation_decision_group_count:2,
+      epoch_validation_positive_vs_non_positive_pairs:8,
+      epoch_validation_positive_vs_positive_pairs:8
+    });
+  }
+  for(const candidate of tuning.candidate_grid){
+    candidate.fold_results.forEach((result,index)=>{
+      const makeTypeMetrics=(accuracy,loss)=>({
+        pair_count:8,decision_group_count:2,
+        pairwise_accuracy_pct:accuracy,pairwise_log_loss:loss
+      });
+      result.candidate_pair_type_metrics={
+        positive_vs_non_positive:makeTypeMetrics(67,0.63),
+        positive_vs_positive:makeTypeMetrics(55,0.70)
+      };
+      result.logistic_pair_type_metrics={
+        positive_vs_non_positive:makeTypeMetrics(60,0.66),
+        positive_vs_positive:makeTypeMetrics(61,0.64)
+      };
+      result.positive_vs_non_positive_pairwise_accuracy_improvement_pct=7;
+      result.positive_vs_non_positive_pairwise_log_loss_improvement=0.03;
+      result.positive_vs_positive_pairwise_accuracy_improvement_pct=-6;
+      result.positive_vs_positive_pairwise_log_loss_improvement=-0.06;
+    });
+  }
+  const artifact=createOrderedTemporalRankerArtifact({profile,provenance});
+  const verification=verifyOrderedTemporalRankerArtifact(artifact);
+  assert.equal(verification.valid,true);
+  const folds=artifact.training_provenance.internal_training_validation.folds;
+  assert.equal(folds[0].validation_positive_vs_non_positive_pairs,8);
+  const result=artifact.training_provenance.internal_training_validation.candidate_grid[0].fold_results[0];
+  assert.equal(result.candidate_pair_type_metrics.positive_vs_positive.pairwise_accuracy_pct,55);
+  assert.equal(result.logistic_pair_type_metrics.positive_vs_non_positive.pairwise_log_loss,0.66);
+  assert.equal(result.positive_vs_positive_pairwise_accuracy_improvement_pct,-6);
+
+  const forged=structuredClone(profile);
+  forged.training.return_ranking.ranking_head.internal_training_validation.candidate_grid[0]
+    .fold_results[0].candidate_pair_type_metrics.positive_vs_positive.pair_count++;
+  assert.throws(()=>createOrderedTemporalRankerArtifact({profile:forged,provenance}),
+    /ORDERED_RANKER_ARTIFACT_VERIFY_FAILED:ORDERED_RANKER_TRAINING_BOUNDARY_INVALID/);
+});
+
 test('artifact verifier rejects confusing the expanded 696 inference width with tied free parameters',()=>{
   const profile=makeProfile();
   profile.training.return_ranking.ranking_head.parameter_count=

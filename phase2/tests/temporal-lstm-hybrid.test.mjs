@@ -685,6 +685,43 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
     assert.ok(fold.epoch_training_decision_group_count>0);
     assert.ok(fold.epoch_validation_decision_group_count>0);
   }
+  for(const candidate of fitted.training.internal_training_validation.candidate_grid){
+    assert.equal(candidate.fold_results.length,3);
+    for(let index=0;index<3;index++){
+      const fold=fitted.training.internal_training_validation.folds[index];
+      const result=candidate.fold_results[index];
+      for(const field of ['candidate_pair_type_metrics','logistic_pair_type_metrics']){
+        const metrics=result[field];
+        assert.ok(metrics);
+        assert.equal(metrics.positive_vs_non_positive.pair_count,
+          fold.validation_positive_vs_non_positive_pairs);
+        assert.equal(metrics.positive_vs_positive.pair_count,
+          fold.validation_positive_vs_positive_pairs);
+        assert.ok(metrics.positive_vs_non_positive.decision_group_count>=0);
+        assert.ok(metrics.positive_vs_positive.decision_group_count>=0);
+        assert.ok(metrics.positive_vs_non_positive.decision_group_count<=
+          fold.validation_decision_group_count);
+        assert.ok(metrics.positive_vs_positive.decision_group_count<=
+          fold.validation_decision_group_count);
+        for(const type of ['positive_vs_non_positive','positive_vs_positive']){
+          const item=metrics[type];
+          if(item.pair_count>0){
+            assert.ok(item.decision_group_count>=1);
+            assert.ok(item.pairwise_accuracy_pct>=0&&item.pairwise_accuracy_pct<=100);
+            assert.ok(item.pairwise_log_loss>=0);
+          }else{
+            assert.equal(item.decision_group_count,0);
+            assert.equal(item.pairwise_accuracy_pct,null);
+            assert.equal(item.pairwise_log_loss,null);
+          }
+        }
+      }
+      assert.ok(Number.isFinite(result.positive_vs_non_positive_pairwise_accuracy_improvement_pct));
+      assert.ok(Number.isFinite(result.positive_vs_non_positive_pairwise_log_loss_improvement));
+      assert.ok(Number.isFinite(result.positive_vs_positive_pairwise_accuracy_improvement_pct));
+      assert.ok(Number.isFinite(result.positive_vs_positive_pairwise_log_loss_improvement));
+    }
+  }
   assert.equal(fitted.training.internal_training_validation.ranking_margin,0.25);
   assert.equal(fitted.training.validation_or_holdout_used,false);
 });
