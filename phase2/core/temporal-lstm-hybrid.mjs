@@ -1116,6 +1116,7 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
     (value-rankingMeans[index])/rankingStds[index]
   );
   let rankingScore=0;
+  let rankingAnchorScore=0;
   for(let index=0;index<TCN_LSTM_RANKING_FEATURE_COUNT;index++)
     rankingScore+=rankingWeights[index]*normalizedRankingFeatures[index];
   rankingScore=clamp(rankingScore,-LOGIT_LIMIT,LOGIT_LIMIT);
@@ -1144,7 +1145,30 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
     rankingScore=0;
     for(let index=0;index<TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT;index++)
       rankingScore+=orderedWeights[index]*rankingScoreFeatures[index];
-    rankingScore=clamp(rankingScore,-LOGIT_LIMIT,LOGIT_LIMIT);
+    const anchorWeights=model.orderedRankingAnchorWeights;
+    const anchorMeans=model.orderedRankingAnchorFeatureMean;
+    const anchorStds=model.orderedRankingAnchorFeatureStd;
+    const hasAnchor=anchorWeights!==undefined||anchorMeans!==undefined||
+      anchorStds!==undefined||model.orderedRankingAnchorBias!==undefined;
+    if(hasAnchor){
+      if(!Array.isArray(anchorWeights)||
+        anchorWeights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+        anchorWeights.some(value=>!finite(value))||
+        !Array.isArray(anchorMeans)||
+        anchorMeans.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+        anchorMeans.some(value=>!finite(value))||
+        !Array.isArray(anchorStds)||
+        anchorStds.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+        anchorStds.some(value=>!finite(value)||value<=0)||
+        !finite(model.orderedRankingAnchorBias))
+        throw new TypeError('TCN_LSTM_ORDERED_RANKING_LOGISTIC_ANCHOR_STATE_INVALID');
+      rankingAnchorScore=Number(model.orderedRankingAnchorBias);
+      for(let index=0;index<TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT;index++)
+        rankingAnchorScore+=anchorWeights[index]*
+          ((orderedFeatures[index]-anchorMeans[index])/anchorStds[index]);
+      rankingAnchorScore=clamp(rankingAnchorScore,-LOGIT_LIMIT,LOGIT_LIMIT);
+    }
+    rankingScore=clamp(rankingAnchorScore+rankingScore,-LOGIT_LIMIT,LOGIT_LIMIT);
   }else if(rankingRepresentation!=='LATENT_MULTI_SCALE_V2'){
     throw new TypeError('TCN_LSTM_RANKING_REPRESENTATION_INVALID');
   }
@@ -1154,6 +1178,8 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
   const rankingLogit = rankingScore;
   return {
     probability, logit, ranking_score: rankingScore, ranking_logit: rankingLogit,
+    ranking_anchor_score:rankingRepresentation==='RAW_ORDERED_696_V1'
+      ?(finite(model.orderedRankingAnchorBias)?rankingAnchorScore:null):null,
     ranking_representation:rankingRepresentation,
     ranking_score_feature_count:rankingScoreFeatures.length,
     residual_logit: residualLogit,
@@ -2249,14 +2275,22 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
       throw new TypeError('TCN_LSTM_EXECUTION_HEAD_STANDARDIZATION_NON_FINITE:'+targetKey+':'+featureKey);
     let weights=Array(featureCount).fill(0),bias=0;
     const m=Array(featureCount).fill(0),v=Array(featureCount).fill(0);
-    let mb=0,vb=0,bestLoss=Infinity,best={weights:[...weights],bias},wait=0,done=0;
+    let mb=0,vb=0,bestLoss=NaN,best={weights:[...weights],bias},wait=0,done=0;
     const predict=(item,w,b)=>b+item.features.reduce((sum,x,i)=>sum+x*w[i],0);
-    const loss=()=>normalizedVectors.reduce((sum,item)=>{
-      const error=predict(item,weights,bias)-item.target;
-      return sum+(Math.abs(error)<=huberDelta
-        ?0.5*error*error:huberDelta*(Math.abs(error)-0.5*huberDelta));
-    },0)/normalizedVectors.length;
+    const loss=()=>{
+      const dataLoss=normalizedVectors.reduce((sum,item)=>{
+        const error=predict(item,weights,bias)-item.target;
+        return sum+(Math.abs(error)<=huberDelta
+          ?0.5*error*error:huberDelta*(Math.abs(error)-0.5*huberDelta));
+      },0)/normalizedVectors.length;
+      const penalty=weights.reduce((sum,value)=>sum+value*value,0);
+      return dataLoss+0.5*l2*penalty;
+    };
     const initial=loss();
+    if(!finite(initial))
+      throw new TypeError('TCN_LSTM_EXECUTION_HEAD_INITIAL_LOSS_NON_FINITE:'+targetKey+':'+featureKey);
+    // Keep the constant sample-mean predictor and score the same L2 objective as the gradient.
+    bestLoss=initial;
     for(let epoch=1;epoch<=epochs;epoch++){
       const gw=Array(featureCount).fill(0);let gb=0;
       for(const item of normalizedVectors){
@@ -2293,6 +2327,9 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
       zero_variance_feature_count:featureMoments.filter(item=>item.constant).length,
       initial_huber_loss:Number(initial.toFixed(8)),
       final_huber_loss:Number(bestLoss.toFixed(8)),
+      constant_mean_baseline_selected:best.weights.every(value=>value===0)&&
+        Math.abs(best.bias)<=1e-12,
+      l2_penalty_in_objective:true,
       epochs_completed:done,feature_count:featureCount
     };
   };
@@ -3141,6 +3178,10 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       !Array.isArray(initialLogisticModel?.fit?.weights)||
       initialLogisticModel.fit.weights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
       initialLogisticModel.fit.weights.some(value=>!finite(value))||
+      !finite(initialLogisticModel?.fit?.bias)||
+      !Array.isArray(initialLogisticModel?.standardizer?.means)||
+      initialLogisticModel.standardizer.means.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      initialLogisticModel.standardizer.means.some(value=>!finite(value))||
       !Array.isArray(initialLogisticModel?.standardizer?.scales)||
       initialLogisticModel.standardizer.scales.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
       initialLogisticModel.standardizer.scales.some(value=>!finite(value)||value<=0)||
@@ -3231,40 +3272,28 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     ?[...model.orderedRankingHeadWeights]:Array(featureCount).fill(0);
   if(initialFullWeights.length!==featureCount||initialFullWeights.some(value=>!finite(value)))
     throw new TypeError('TCN_LSTM_ORDERED_RANKING_INITIAL_WEIGHTS_INVALID');
-  // A tied parameter is the sum of its corresponding expanded coefficients.
-  // When a same-fold Logistic model is supplied, project its raw-feature
-  // coefficients into each temporal block's standardized pooled coordinate.
-  // This gives the pairwise ranker a strong, leakage-safe starting point:
-  // 24 blocks reproduce Logistic exactly; coarser blocks receive a least-squares
-  // coefficient projection before pairwise fine-tuning.
+  // Preserve the complete fold-local Logistic score as an immutable anchor.
+  // The temporal head learns only a residual initialized to exactly zero, so
+  // every block count starts at the incumbent Logistic pair scores.
   const initialWeights=Array(parameterCount).fill(0);
   let initializationMethod='ZERO_OR_EXPLICIT_RANKER_WEIGHTS_V1';
+  const logisticAnchor=initialLogisticModel===null?null:{
+    weights:[...initialLogisticModel.fit.weights],
+    means:[...initialLogisticModel.standardizer.means],
+    scales:[...initialLogisticModel.standardizer.scales],
+    bias:Number(initialLogisticModel.fit.bias)
+  };
   if(initialLogisticModel!==null){
-    const logisticWeights=initialLogisticModel.fit.weights;
-    const logisticScales=initialLogisticModel.standardizer.scales;
-    for(let block=0;block<temporalBlockCount;block++)
-      for(let channel=0;channel<channels;channel++){
-        let rawCoefficientSum=0;
-        const firstStep=block*stepsPerBlock;
-        for(let offset=0;offset<stepsPerBlock;offset++){
-          const feature=(firstStep+offset)*channels+channel;
-          rawCoefficientSum+=logisticWeights[feature]/logisticScales[feature];
-        }
-        initialWeights[block*channels+channel]=
-          groupMoments[block*channels+channel].std*rawCoefficientSum;
-      }
-    initializationMethod=temporalBlockCount===steps
-      ?'EXACT_FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_696_V1'
-      :'PROJECTED_FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_V1';
+    initializationMethod='FOLD_LOCAL_LOGISTIC_ANCHORED_ZERO_RESIDUAL_HEAD_V1';
   }else{
+    // Preserve the legacy initializer for independent diagnostic use.
     for(let block=0;block<temporalBlockCount;block++)
       for(let channel=0;channel<channels;channel++)
         for(let offset=0;offset<stepsPerBlock;offset++)
           initialWeights[block*channels+channel]+=
             initialFullWeights[(block*stepsPerBlock+offset)*channels+channel];
   }
-  // Regularize the pairwise update as a correction to the Logistic anchor,
-  // rather than shrinking an already qualified baseline toward zero.
+  // L2 penalizes only the learned temporal residual, not the incumbent.
   const regularizationAnchorWeights=[...initialWeights];
 
   const pooledValue=(vector,block,channel)=>{
@@ -3274,21 +3303,30 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       value+=vector[(firstStep+offset)*channels+channel]/stepsPerBlock;
     return value;
   };
-  const score=(index,currentWeights,featureVectors=vectors)=>{
-    const vector=featureVectors[index];
-    let value=0;
-    for(let block=0;block<temporalBlockCount;block++)
-      for(let channel=0;channel<channels;channel++)
-        value+=currentWeights[block*channels+channel]*
-          pooledValue(vector,block,channel);
+  const anchorScore=(index,rawFeatureVectors=rawVectors)=>{
+    if(logisticAnchor===null)return 0;
+    const vector=rawFeatureVectors[index];
+    let value=logisticAnchor.bias;
+    for(let feature=0;feature<featureCount;feature++)
+      value+=((vector[feature]-logisticAnchor.means[feature])/
+        logisticAnchor.scales[feature])*logisticAnchor.weights[feature];
     return clamp(value,-LOGIT_LIMIT,LOGIT_LIMIT);
   };
-  const evaluate=(currentWeights,pairRows=pairs,featureVectors=vectors)=>{
+  const score=(index,currentWeights,featureVectors=vectors,rawFeatureVectors=rawVectors)=>{
+    const vector=featureVectors[index];
+    let residual=0;
+    for(let block=0;block<temporalBlockCount;block++)
+      for(let channel=0;channel<channels;channel++)
+        residual+=currentWeights[block*channels+channel]*
+          pooledValue(vector,block,channel);
+    return clamp(anchorScore(index,rawFeatureVectors)+residual,-LOGIT_LIMIT,LOGIT_LIMIT);
+  };
+  const evaluate=(currentWeights,pairRows=pairs,featureVectors=vectors,rawFeatureVectors=rawVectors)=>{
     let loss=0,correct=0;
     for(const pair of pairRows){
       const metric=tcnLstmPairwiseLogitRankingLoss(
-        score(pair.high_index,currentWeights,featureVectors),
-        score(pair.low_index,currentWeights,featureVectors)
+        score(pair.high_index,currentWeights,featureVectors,rawFeatureVectors),
+        score(pair.low_index,currentWeights,featureVectors,rawFeatureVectors)
       );
       loss+=metric.loss;
       correct+=metric.accuracy_contribution;
@@ -3297,7 +3335,7 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
   };
   const initialTrainingMetrics=evaluate(initialWeights);
   const initialValidationMetrics=validationPairs
-    ?evaluate(initialWeights,validationPairs,validationVectors):initialTrainingMetrics;
+    ?evaluate(initialWeights,validationPairs,validationVectors,validationRawVectors):initialTrainingMetrics;
   let bestLoss=initialValidationMetrics.pairwise_log_loss;
   let bestAccuracy=initialValidationMetrics.pairwise_accuracy_pct;
   let bestWeights=[...initialWeights],wait=0,completed=0,bestEpoch=0;
@@ -3336,7 +3374,7 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     }
     const trainingMetrics=evaluate(initialWeights);
     const validationMetrics=validationPairs
-      ?evaluate(initialWeights,validationPairs,validationVectors):trainingMetrics;
+      ?evaluate(initialWeights,validationPairs,validationVectors,validationRawVectors):trainingMetrics;
     if(!finite(trainingMetrics.pairwise_log_loss)||!finite(trainingMetrics.pairwise_accuracy_pct)||
       !finite(validationMetrics.pairwise_log_loss)||!finite(validationMetrics.pairwise_accuracy_pct)||
       initialWeights.some(value=>!finite(value)))
@@ -3373,9 +3411,16 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
   model.orderedRankingHeadWeights=expandedWeights;
   model.orderedRankingFeatureMean=means;
   model.orderedRankingFeatureStd=stds;
+  if(logisticAnchor!==null){
+    model.orderedRankingAnchorWeights=[...logisticAnchor.weights];
+    model.orderedRankingAnchorFeatureMean=[...logisticAnchor.means];
+    model.orderedRankingAnchorFeatureStd=[...logisticAnchor.scales];
+    model.orderedRankingAnchorBias=logisticAnchor.bias;
+  }
   model.rankingRepresentation='RAW_ORDERED_696_V1';
   const finalTrainingMetrics=evaluate(bestWeights);
-  const finalValidationMetrics=validationPairs?evaluate(bestWeights,validationPairs,validationVectors):null;
+  const finalValidationMetrics=validationPairs
+    ?evaluate(bestWeights,validationPairs,validationVectors,validationRawVectors):null;
   if(!finite(finalTrainingMetrics.pairwise_log_loss)||!finite(finalTrainingMetrics.pairwise_accuracy_pct)||
     finalValidationMetrics!==null&&(!finite(finalValidationMetrics.pairwise_log_loss)||
       !finite(finalValidationMetrics.pairwise_accuracy_pct))||
@@ -3400,13 +3445,14 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       validation_or_holdout_used:false
     },
     baseline:initialLogisticModel!==null
-      ?'FOLD_LOCAL_TEMPORAL_LOGISTIC_WEIGHT_WARM_START_THEN_RETURN_PAIRWISE_FINE_TUNING'
+      ?'FOLD_LOCAL_LOGISTIC_RAW_SCORE_PLUS_ORDERED_PAIRWISE_RETURN_RESIDUAL_V1'
       :'NONE_RAW_ORDERED_FEATURE_PAIRWISE_HEAD_INDEPENDENT_OF_CLASSIFIER_AND_LOGISTIC_LOGITS',
     initialization_method:initializationMethod,
     regularization_anchor_method:initialLogisticModel!==null
-      ?'SAME_FOLD_LOGISTIC_WEIGHTS_RESIDUAL_PENALTY_V1':'ZERO_WEIGHT_ORIGINAL_L2_V1',
+      ?'ZERO_RESIDUAL_CORRECTION_PENALTY_V1':'ZERO_WEIGHT_ORIGINAL_L2_V1',
     initialization_exact_at_full_temporal_resolution:
       initialLogisticModel!==null&&temporalBlockCount===steps,
+    initialization_preserves_logistic_pair_scores:initialLogisticModel!==null,
     initialization_source_rows:initialLogisticModel?.fit?.training_rows??0,
     training_rows:rows.length,training_pairs:pairs.length,
     learning_rate:learningRate,epochs_requested:epochs,epochs_completed:completed,
@@ -3426,6 +3472,10 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
         :'TRAINING_PAIRWISE_PARETO_DUAL_METRIC_NON_REGRESSION',
     initial_pairwise_log_loss:Number(initialTrainingMetrics.pairwise_log_loss.toFixed(8)),
     initial_pairwise_accuracy_pct:Number(initialTrainingMetrics.pairwise_accuracy_pct.toFixed(4)),
+    initial_validation_pairwise_log_loss:validationPairs===null?null:
+      Number(initialValidationMetrics.pairwise_log_loss.toFixed(8)),
+    initial_validation_pairwise_accuracy_pct:validationPairs===null?null:
+      Number(initialValidationMetrics.pairwise_accuracy_pct.toFixed(4)),
     final_pairwise_log_loss:Number(finalTrainingMetrics.pairwise_log_loss.toFixed(8)),
     final_pairwise_accuracy_pct:Number(finalTrainingMetrics.pairwise_accuracy_pct.toFixed(4)),
     best_validation_pairwise_log_loss:finalValidationMetrics===null?null:Number(finalValidationMetrics.pairwise_log_loss.toFixed(8)),
@@ -3449,9 +3499,10 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   pairStrategy='PROFITABILITY_BOUNDARY_V1',
   learningRate=0.03,learningRateGrid=null,epochs=40,l2=0.001,patience=10,
   l2Grid=[0.25,0.5,1,2],
-  // Focus compute on resolutions with the strongest previous purged-fold evidence.
-  // Lower learning rates test conservative residual updates around the Logistic anchor.
-  temporalBlockCounts=[4,6,8,24],
+  // Include low-capacity temporal partitions because early nested folds have
+  // limited decision-group support. Keep intermediate and full-resolution
+  // controls; all existing purged-fold and dual-metric qualification gates stay fixed.
+  temporalBlockCounts=[1,2,3,4,6,8,24],
   validationFraction=0.08,purgeHorizonMs=4*60*60*1000
 }={}){
   const validTemporalBlockCounts=[1,2,3,4,6,8,12,24];
@@ -3529,6 +3580,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       fit_end_fraction:fitFraction,
       tuning_rows:tuningRows.length,
       validation_rows:validationRows.length,
+      validation_decision_group_count:validationBuckets.length,
       purged_rows:purgedRows.length,
       tuning_pairs:tuningPairSupport.comparison_pairs,
       validation_pairs:validationPairSupport.comparison_pairs,
@@ -3606,9 +3658,32 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         l2:1,learningRate:0.03,maxEpochs:160,purgeHorizonMs
       }
     );
+    const epochLogisticValidationLogits=epochValidationRows.map(row=>
+      predictTemporalLogisticRawLogit(
+        buildTcnLstmFlattenedFeatures(row.sequence),epochLogisticBaseline
+      )
+    );
+    let epochLogisticLoss=0,epochLogisticCorrect=0;
+    for(const pair of epochValidationPairSupport.pairs){
+      const metric=tcnLstmPairwiseLogitRankingLoss(
+        epochLogisticValidationLogits[pair.high_index],
+        epochLogisticValidationLogits[pair.low_index]
+      );
+      epochLogisticLoss+=metric.loss;
+      epochLogisticCorrect+=metric.accuracy_contribution;
+    }
+    const epochLogisticValidationMetrics={
+      // Match the ranker report precision before asserting exact parity.
+      // The ranker exposes eight decimals for loss and four for accuracy.
+      pairwise_log_loss:Number((epochLogisticLoss/
+        epochValidationPairSupport.comparison_pairs).toFixed(8)),
+      pairwise_accuracy_pct:Number((100*epochLogisticCorrect/
+        epochValidationPairSupport.comparison_pairs).toFixed(4))
+    };
     return {
       epochTrainingRows,epochTrainingPairSupport,
       epochValidationRows,epochValidationPairSupport,epochLogisticBaseline,
+      epochLogisticValidationMetrics,
       epoch_training_rows:epochTrainingRows.length,
       epoch_training_pairs:epochTrainingPairSupport.comparison_pairs,
       epoch_validation_rows:epochValidationRows.length,
@@ -3626,7 +3701,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     epochTrainingRows:nestedEpochWindows[index].epochTrainingRows,
     epochTrainingPairSupport:nestedEpochWindows[index].epochTrainingPairSupport,
     epochValidationRows:nestedEpochWindows[index].epochValidationRows,
-    epochValidationPairSupport:nestedEpochWindows[index].epochValidationPairSupport
+    epochValidationPairSupport:nestedEpochWindows[index].epochValidationPairSupport,
+    epochLogisticValidationMetrics:nestedEpochWindows[index].epochLogisticValidationMetrics
   }));
   // Fit the fixed project Logistic specification separately inside each
   // purged outer fold. Both models train on all rows in that fold's fit window
@@ -3707,12 +3783,25 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         );
         const externalLogits=fold.validationRows.map(row=>{
           const vector=buildTcnLstmFlattenedFeatures(row.sequence);
-          let score=0;
-          for(let feature=0;feature<vector.length;feature++){
+          const anchorWeights=tuningModel.orderedRankingAnchorWeights;
+          const anchorMeans=tuningModel.orderedRankingAnchorFeatureMean;
+          const anchorStds=tuningModel.orderedRankingAnchorFeatureStd;
+          let anchorScore=Number(tuningModel.orderedRankingAnchorBias);
+          if(!Array.isArray(anchorWeights)||anchorWeights.length!==vector.length||
+            !Array.isArray(anchorMeans)||anchorMeans.length!==vector.length||
+            !Array.isArray(anchorStds)||anchorStds.length!==vector.length||
+            !finite(anchorScore))
+            throw new TypeError('TCN_LSTM_ORDERED_RANKER_LOGISTIC_ANCHOR_STATE_INVALID');
+          for(let feature=0;feature<vector.length;feature++)
+            anchorScore+=anchorWeights[feature]*
+              ((vector[feature]-anchorMeans[feature])/anchorStds[feature]);
+          if(!finite(anchorScore))
+            throw new TypeError('TCN_LSTM_ORDERED_RANKER_LOGISTIC_ANCHOR_NON_FINITE');
+          let score=clamp(anchorScore,-LOGIT_LIMIT,LOGIT_LIMIT);
+          for(let feature=0;feature<vector.length;feature++)
             score+=tuningModel.orderedRankingHeadWeights[feature]*
               ((vector[feature]-tuningModel.orderedRankingFeatureMean[feature])/
                 tuningModel.orderedRankingFeatureStd[feature]);
-          }
           if(!finite(score))throw new TypeError('TCN_LSTM_ORDERED_RANKER_OUTER_FOLD_SCORE_NON_FINITE');
           return clamp(score,-LOGIT_LIMIT,LOGIT_LIMIT);
         });
@@ -3737,6 +3826,15 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
           best_validation_pairwise_accuracy_pct:Number(externalMetrics.pairwise_accuracy_pct.toFixed(4)),
           epoch_selection_pairwise_log_loss:epochSelection.best_validation_pairwise_log_loss,
           epoch_selection_pairwise_accuracy_pct:epochSelection.best_validation_pairwise_accuracy_pct,
+          epoch_initial_pairwise_log_loss:epochSelection.initial_validation_pairwise_log_loss,
+          epoch_initial_pairwise_accuracy_pct:epochSelection.initial_validation_pairwise_accuracy_pct,
+          epoch_logistic_validation_pairwise_log_loss:fold.epochLogisticValidationMetrics.pairwise_log_loss,
+          epoch_logistic_validation_pairwise_accuracy_pct:fold.epochLogisticValidationMetrics.pairwise_accuracy_pct,
+          epoch_initial_matches_logistic_anchor:
+            Math.abs(epochSelection.initial_validation_pairwise_log_loss-
+              fold.epochLogisticValidationMetrics.pairwise_log_loss)<=1e-10&&
+            Math.abs(epochSelection.initial_validation_pairwise_accuracy_pct-
+              fold.epochLogisticValidationMetrics.pairwise_accuracy_pct)<=1e-8,
           logistic_validation_pairwise_log_loss:logistic.pairwise_log_loss,
           logistic_validation_pairwise_accuracy_pct:logistic.pairwise_accuracy_pct,
           training_pairwise_log_loss:tuned.final_pairwise_log_loss,
@@ -3886,7 +3984,9 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     logistic_baseline_config:{
       schema:'RADARX_FOLD_LOCAL_RAW_TEMPORAL_LOGISTIC_RANKING_REFERENCE_V1',
       ranker_initialization_method:
-        'FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_THEN_RETURN_PAIRWISE_FINE_TUNING_V1',
+        'FOLD_LOCAL_LOGISTIC_RAW_SCORE_PLUS_ZERO_INITIALIZED_TEMPORAL_RETURN_RESIDUAL_V1',
+      anchor_score_semantics:
+        'EXACT_FOLD_LOCAL_LOGISTIC_LOGIT_CLAMPED_BEFORE_ZERO_INITIALIZED_TEMPORAL_RESIDUAL',
       exact_feature_mapping_temporal_blocks:TCN_LSTM_STEPS,
       feature_schema_id:TCN_LSTM_ORDERED_RANKING_FEATURE_SCHEMA_ID,
       feature_count:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT,
@@ -3904,6 +4004,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     outer_validation_or_holdout_used:false,
     model_selection_partition_used:false,
     purge_horizon_ms:purgeHorizonMs,
+    validation_fraction:Number(validationFraction),
+    validation_group_count:validationGroupCount,
     fold_count:foldMetadata.length,
     folds:foldMetadata,
     tuning_max_resolved_at:Math.max(...foldMetadata.map(item=>item.tuning_max_resolved_at)),
@@ -3941,7 +4043,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     selected_parameter_count:selectedTuning.parameter_count,
     final_refit_epoch_selection_mode:'FIXED_EPOCHS_FROM_NESTED_PURGED_FOLD_EARLY_STOPPING',
     final_refit_ranker_initialization:
-      'FULL_TRAINING_PARTITION_TEMPORAL_LOGISTIC_WEIGHT_WARM_START',
+      'FULL_TRAINING_PARTITION_LOGISTIC_RAW_SCORE_PLUS_ZERO_INITIALIZED_TEMPORAL_RESIDUAL',
     final_refit_rows:ordered.length,
     final_refit_pairs:pairSupport.comparison_pairs
   };
@@ -3972,7 +4074,11 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       rankingRepresentation:'RAW_ORDERED_696_V1',
       orderedRankingHeadWeights:[...rankerModel.orderedRankingHeadWeights],
       orderedRankingFeatureMean:[...rankerModel.orderedRankingFeatureMean],
-      orderedRankingFeatureStd:[...rankerModel.orderedRankingFeatureStd]
+      orderedRankingFeatureStd:[...rankerModel.orderedRankingFeatureStd],
+      orderedRankingAnchorWeights:[...rankerModel.orderedRankingAnchorWeights],
+      orderedRankingAnchorFeatureMean:[...rankerModel.orderedRankingAnchorFeatureMean],
+      orderedRankingAnchorFeatureStd:[...rankerModel.orderedRankingAnchorFeatureStd],
+      orderedRankingAnchorBias:Number(rankerModel.orderedRankingAnchorBias)
     },
     training:{
       ...training,
@@ -4002,6 +4108,7 @@ export function trainTcnLstmHybrid(trainingRows, {
   rankingPairStrategy='RETURN_EXTREMES_V1',
   rankingRepresentation='LATENT_MULTI_SCALE_V2',
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001,
+  rankingValidationFraction=0.08,
   fitIndependentRankingHead=true,preFittedIndependentRankingHead=null,
   executionHeadRoundTripCostBps=30,executionHeadLearningRate=0.015,
   executionHeadEpochs=100,executionHeadL2=0.002
@@ -4053,6 +4160,8 @@ export function trainTcnLstmHybrid(trainingRows, {
     rankingHeadLearningRate>0.25||!Number.isInteger(rankingHeadEpochs)||
     rankingHeadEpochs<1||rankingHeadEpochs>200||
     !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1||
+    !finite(rankingValidationFraction)||rankingValidationFraction<0.08||
+      rankingValidationFraction>0.40||
     !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1','PROFITABILITY_TOPK_V2'].includes(rankingPairStrategy)||
     !TCN_LSTM_RANKING_REPRESENTATIONS.includes(rankingRepresentation)||
     typeof fitIndependentRankingHead!=='boolean')
@@ -4075,6 +4184,16 @@ export function trainTcnLstmHybrid(trainingRows, {
       !Array.isArray(state?.orderedRankingFeatureStd)||
       state.orderedRankingFeatureStd.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
       state.orderedRankingFeatureStd.some(value=>!finite(value)||value<=0)||
+      !Array.isArray(state?.orderedRankingAnchorWeights)||
+      state.orderedRankingAnchorWeights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      state.orderedRankingAnchorWeights.some(value=>!finite(value))||
+      !Array.isArray(state?.orderedRankingAnchorFeatureMean)||
+      state.orderedRankingAnchorFeatureMean.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      state.orderedRankingAnchorFeatureMean.some(value=>!finite(value))||
+      !Array.isArray(state?.orderedRankingAnchorFeatureStd)||
+      state.orderedRankingAnchorFeatureStd.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      state.orderedRankingAnchorFeatureStd.some(value=>!finite(value)||value<=0)||
+      !finite(state?.orderedRankingAnchorBias)||
       metadata?.schema!=='RADARX_TCN_LSTM_INDEPENDENT_ORDERED_696_RETURN_RANKER_V1'||
       metadata?.fitted!==true||
       metadata?.representation!=='RAW_ORDERED_696_V1'||
@@ -4088,12 +4207,14 @@ export function trainTcnLstmHybrid(trainingRows, {
         metadata?.temporal_block_count||
       metadata?.internal_training_validation?.selected_parameter_count!==
         metadata?.parameter_count||
+      metadata?.internal_training_validation?.validation_fraction!==rankingValidationFraction||
       metadata?.training_rows!==Number(prefit.training_rows)||
       metadata?.training_pairs!==Number(prefit.training_pairs)||
       metadata?.standardization?.fit_partition!=='TRAINING_PARTITION_ONLY'||
       metadata?.standardization?.fit_rows!==Number(prefit.training_rows)||
       metadata?.validation_or_holdout_used!==false||
       metadata?.classifier_parameters_updated!==false||
+      metadata?.initialization_preserves_logistic_pair_scores!==true||
       prefit?.pair_support?.pair_strategy!==rankingPairStrategy||
       prefit?.pair_support?.round_trip_cost_bps!==rankingRoundTripCostBps||
       prefit?.pair_support?.minimum_return_gap_pct!==rankingMinimumReturnGapPct||
@@ -4616,6 +4737,24 @@ export function predictTcnLstmHybridRankingLogit(sequence,profile){
 export function predictTcnLstmHybridRankingAnchorLogit(sequence, profile) {
   if (!profile?.model || !profile?.baseline_fit)
     throw new TypeError('TCN_LSTM_PROFILE_NOT_TRAINED');
+  const model=profile.model;
+  if(Array.isArray(model.orderedRankingAnchorWeights)){
+    const features=buildTcnLstmFlattenedFeatures(sequence);
+    const weights=model.orderedRankingAnchorWeights;
+    const means=model.orderedRankingAnchorFeatureMean;
+    const scales=model.orderedRankingAnchorFeatureStd;
+    if(weights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      !Array.isArray(means)||means.length!==weights.length||
+      !Array.isArray(scales)||scales.length!==weights.length||
+      weights.some(value=>!finite(value))||means.some(value=>!finite(value))||
+      scales.some(value=>!finite(value)||value<=0)||
+      !finite(model.orderedRankingAnchorBias))
+      throw new TypeError('TCN_LSTM_ORDERED_RANKING_LOGISTIC_ANCHOR_STATE_INVALID');
+    let score=Number(model.orderedRankingAnchorBias);
+    for(let index=0;index<features.length;index++)
+      score+=weights[index]*((features[index]-means[index])/scales[index]);
+    return clamp(score,-LOGIT_LIMIT,LOGIT_LIMIT);
+  }
   return predictTcnLstmLogisticLogit(sequence, profile.baseline_fit);
 }
 
@@ -4895,6 +5034,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   rankingPairStrategy='RETURN_EXTREMES_V1',
   rankingRepresentation='LATENT_MULTI_SCALE_V2',
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001,
+  rankingValidationFraction=0.08,
   externalLogisticExecutionContextProvider=null,
   requireExternalLogisticSelectionBaseline=false
 } = {}) {
@@ -4915,6 +5055,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     !finite(rankingHeadLearningRate)||rankingHeadLearningRate<=0||rankingHeadLearningRate>0.25||
     !Number.isInteger(rankingHeadEpochs)||rankingHeadEpochs<1||rankingHeadEpochs>200||
     !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1||
+    !finite(rankingValidationFraction)||rankingValidationFraction<0.08||
+      rankingValidationFraction>0.40||
     typeof externalLogisticExecutionContextProvider!=='function'&&
       externalLogisticExecutionContextProvider!==null||
     typeof requireExternalLogisticSelectionBaseline!=='boolean'||
@@ -4972,7 +5114,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       learningRate:rankingHeadLearningRate,
       epochs:rankingHeadEpochs,
       l2:rankingHeadL2,
-      patience:10
+      patience:10,
+      validationFraction:rankingValidationFraction
     })
     :null;
   let effectiveTrainingRowsForFit=modelTrainingRows.map(row=>{
@@ -5321,7 +5464,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       executionRows:null,
       rankingWeight:Number(config.rankingWeight??0),
       rankingHeadLearningRate:candidateRankingHeadLearningRate,
-      rankingHeadEpochs,rankingHeadL2,
+      rankingHeadEpochs,rankingHeadL2,rankingValidationFraction,
       fitIndependentRankingHead:preFittedIndependentRankingHead===null,
       preFittedIndependentRankingHead,
       rankingRoundTripCostBps:roundTripCostBps,

@@ -71,7 +71,7 @@ export function fitHurdlePositiveReturnCalibration(rawProbabilities, netReturns,
   let secondSlope = 0;
   let firstIntercept = 0;
   let secondIntercept = 0;
-  let bestLoss = Infinity;
+  let bestLoss = NaN;
   let best = { slope, intercept };
   let wait = 0;
   let completed = 0;
@@ -88,6 +88,10 @@ export function fitHurdlePositiveReturnCalibration(rawProbabilities, netReturns,
       slopePenalty * (m - 1) ** 2 + interceptPenalty * b * b;
   };
   const initial = objective(slope, intercept);
+  if(!finite(initial))
+    throw new TypeError('HURDLE_POSITIVE_RETURN_CALIBRATION_INITIAL_OBJECTIVE_NON_FINITE');
+  // Identity is the incumbent: calibration must improve raw probabilities.
+  bestLoss=initial;
   for (let step = 1; step <= iterations; step++) {
     let gradientSlope = 0;
     let gradientIntercept = 0;
@@ -138,6 +142,7 @@ export function fitHurdlePositiveReturnCalibration(rawProbabilities, netReturns,
     intercept: Number(best.intercept),
     initial_objective: Number(initial.toFixed(10)),
     final_objective: Number(bestLoss.toFixed(10)),
+    identity_selected:Math.abs(bestLoss-initial)<=1e-10,
     iterations_completed: completed,
     learning_rate: Number(learningRate),
     regularization: Number(regularization),
@@ -210,7 +215,7 @@ function fitConditionalMeanHead(rows, targets, {
   const secondMoment = Array(featureCount).fill(0);
   let biasFirstMoment = 0;
   let biasSecondMoment = 0;
-  let bestLoss = Infinity;
+  let bestLoss = NaN;
   let best = { weights: [...weights], bias };
   let wait = 0;
   let completedEpochs = 0;
@@ -230,6 +235,10 @@ function fitConditionalMeanHead(rows, targets, {
   };
 
   const initialLoss = loss();
+  if(!finite(initialLoss))
+    throw new TypeError('HURDLE_CONDITIONAL_MEAN_INITIAL_LOSS_NON_FINITE');
+  // Keep the constant class-mean predictor unless features strictly improve it.
+  bestLoss=initialLoss;
   for (let epoch = 1; epoch <= epochs; epoch++) {
     const gradient = Array(featureCount).fill(0);
     let biasGradient = 0;
@@ -293,6 +302,8 @@ function fitConditionalMeanHead(rows, targets, {
     huber_delta: Number(huberDelta),
     initial_huber_loss: Number(initialLoss.toFixed(8)),
     final_huber_loss: Number(bestLoss.toFixed(8)),
+    constant_mean_baseline_selected:best.weights.every(value=>value===0)&&
+      Math.abs(best.bias-targets.reduce((sum,value)=>sum+Number(value),0)/targets.length)<=1e-12,
     epochs_completed: completedEpochs,
     requested_epochs: epochs,
     learning_rate: Number(learningRate),
@@ -380,7 +391,7 @@ export function fitHurdleReturnHead(featureRows, netReturns, {
   const secondMoment = Array(featureCount).fill(0);
   let biasFirstMoment = 0;
   let biasSecondMoment = 0;
-  let bestLoss = Infinity;
+  let bestLoss = NaN;
   let best = { weights: [...weights], bias };
   let wait = 0;
   let completedEpochs = 0;
@@ -400,6 +411,10 @@ export function fitHurdleReturnHead(featureRows, netReturns, {
   };
 
   const initialLoss = loss();
+  if(!finite(initialLoss))
+    throw new TypeError('HURDLE_RETURN_HEAD_INITIAL_LOSS_NON_FINITE');
+  // Keep the empirical-prior classifier unless features strictly improve it.
+  bestLoss=initialLoss;
   for (let epoch = 1; epoch <= epochs; epoch++) {
     const gradient = Array(featureCount).fill(0);
     let biasGradient = 0;
@@ -483,6 +498,8 @@ export function fitHurdleReturnHead(featureRows, netReturns, {
     class_reweighting_used: false,
     initial_log_loss: Number(initialLoss.toFixed(8)),
     final_log_loss: Number(bestLoss.toFixed(8)),
+    empirical_prior_baseline_selected:best.weights.every(value=>value===0)&&
+      Math.abs(best.bias-Math.log(positiveCount/nonPositiveCount))<=1e-12,
     epochs_completed: completedEpochs,
     requested_epochs: epochs,
     learning_rate: Number(learningRate),

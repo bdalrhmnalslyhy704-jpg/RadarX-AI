@@ -122,6 +122,10 @@ function validateHead(head, names, name) {
     calibration.fitted===true&&
     finite(calibration.slope)&&calibration.slope>=0.05&&calibration.slope<=8&&
     finite(calibration.intercept)&&calibration.intercept>=-8&&calibration.intercept<=8&&
+    finite(calibration.initial_objective)&&calibration.initial_objective>=0&&
+    finite(calibration.final_objective)&&calibration.final_objective>=0&&
+    calibration.final_objective<=calibration.initial_objective+1e-9&&
+    typeof calibration.identity_selected==='boolean'&&
     calibration.fit_boundary===
       'PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK_ONLY'&&
     calibration.training_partition==='PURGED_INNER_TRAINING_EXECUTION_HEAD_TRAINING_BLOCK'&&
@@ -151,6 +155,9 @@ function validateHead(head, names, name) {
       head.feature_std.length !== count ||
       !head.feature_std.every(value => finite(value) && value > 0) ||
       !finite(head.bias) || head.conditional_mean_type !== 'FEATURE_CONDITIONAL_HUBER_REGRESSION_V1' ||
+      !finite(head.initial_log_loss)||!finite(head.final_log_loss)||
+      head.final_log_loss>head.initial_log_loss+1e-8||
+      typeof head.empirical_prior_baseline_selected!=='boolean'||
       head.validation_or_holdout_used !== false ||
       head.fit_boundary !== 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY' ||
       !head.positive_conditional_mean_model?.fitted ||
@@ -165,6 +172,9 @@ function validateHead(head, names, name) {
     if (model.weights?.length !== count || !model.weights.every(finite) ||
         !finite(model.bias) || !finite(model.training_target_min_pct) ||
         !finite(model.training_target_max_pct) ||
+        !finite(model.initial_huber_loss)||!finite(model.final_huber_loss)||
+        model.final_huber_loss>model.initial_huber_loss+1e-8||
+        typeof model.constant_mean_baseline_selected!=='boolean'||
         model.training_target_min_pct > model.training_target_max_pct ||
         (positive ? model.training_target_min_pct <= 0 : model.training_target_max_pct > 0)) {
       throw new TypeError('HURDLE_V2_CONDITIONAL_MEAN_INVALID:' + name + ':' + label);
@@ -427,7 +437,7 @@ export function createHurdleV2Artifact({
     throw new TypeError('HURDLE_V2_RANKER_FOLD_STABILITY_EVIDENCE_REQUIRED');
   if(orderedRankingDependency!==null&&(
     orderedRankingDependency?.artifact_schema!==
-      'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V1'||
+      'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V2'||
     !/^[a-f0-9]{64}$/.test(String(orderedRankingDependency?.artifact_content_hash??''))||
     !/^[a-f0-9]{64}$/.test(String(orderedRankingDependency?.artifact_manifest_hash??''))||
     orderedRankingDependency?.code_commit_sha!==String(codeCommitSha).toLowerCase()||
@@ -817,7 +827,7 @@ export function verifyHurdleV2Artifact(artifact) {
     const rankerDependency=artifact.upstream_ordered_ranker_dependency??null;
     if(rankerDependency!==null&&(
       rankerDependency?.artifact_schema!==
-        'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V1'||
+        'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V2'||
       !/^[a-f0-9]{64}$/.test(String(rankerDependency?.artifact_content_hash??''))||
       !/^[a-f0-9]{64}$/.test(String(rankerDependency?.artifact_manifest_hash??''))||
       rankerDependency?.code_commit_sha!==artifact.code_commit_sha||

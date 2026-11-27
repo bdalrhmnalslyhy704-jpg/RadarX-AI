@@ -408,6 +408,16 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'encoder and execution-head training rows must satisfy a strict forward-label purge');
   assert.match(temporal,/fitTcnLstmExecutionRegressionHeads\(\s*executionHeadRowsWithLogisticContext,executionHeadRowsWithLogisticContext,\s*item\.fit\.model,anchor/,
     'execution-head latent features must be fitted only after the dual inner gate on a later purged block');
+  assert.match(temporal,/const dataLoss=normalizedVectors\.reduce/,
+    'execution-head selection must score the same normalized Huber data objective used by the model');
+  assert.match(temporal,/return dataLoss\+0\.5\*l2\*penalty/,
+    'execution Huber checkpoint selection must include the L2 penalty present in its gradient');
+  assert.match(temporal,/bestLoss=initial/,
+    'the constant normalized target-mean predictor must remain the incumbent');
+  assert.match(temporal,/l2_penalty_in_objective:true/,
+    'execution-head diagnostics must disclose the regularized objective');
+  assert.match(temporal,/constant_mean_baseline_selected:/,
+    'execution-head training must report when its constant predictor remains selected');
   assert.match(temporal,/const stageOneQualified=evaluated\.filter/,
     'execution heads must be skipped for candidates that fail inner Brier or independent ranking');
   assert.match(temporal,/item\.brier_improvement>requiredImprovement/);
@@ -535,6 +545,8 @@ test('TCN-LSTM classifier Brier and independent ranking sweep stay within the se
     'shared return-ranking gradients must not contaminate this Brier generalization sweep');
   assert.match(trainer,/rankingPairsPerTimestamp:32/,
     'the independent return-ranker must use the configured stratified 32-pair budget per decision');
+  assert.match(trainer,/rankingValidationFraction:0\.15/,
+    'the inner-only residual ranker must use the explicitly versioned 15 percent purged validation window');
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.match(trainer,/minimumReturnWinRatePct:55/);
   assert.match(trainer,/rankingMinimumReturnGapPct:0\.05/);

@@ -10,7 +10,7 @@ import {
 } from './temporal-lstm-hybrid.mjs';
 
 export const ORDERED_TEMPORAL_RANKER_ARTIFACT_SCHEMA =
-  'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V1';
+  'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V2';
 
 const HEX_40=/^[a-f0-9]{40}$/;
 const HEX_64=/^[a-f0-9]{64}$/;
@@ -40,7 +40,7 @@ function compareTuningCandidates(a,b){
 }
 function manifestFrom(core,contentHash){
   return {
-    schema:'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_MANIFEST_V1',
+    schema:'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_MANIFEST_V2',
     artifact_schema:core.artifact_schema,
     artifact_content_hash:contentHash,
     code_commit_sha:core.code_commit_sha,
@@ -75,7 +75,7 @@ function finalize(core){
 export function verifyOrderedTemporalRankerArtifact(artifact){
   try{
     if(!artifact||artifact.artifact_schema!==ORDERED_TEMPORAL_RANKER_ARTIFACT_SCHEMA||
-      artifact.artifact_schema_version!==1)
+      artifact.artifact_schema_version!==2)
       return fail('ORDERED_RANKER_ARTIFACT_SCHEMA_INVALID');
     if(!HEX_40.test(String(artifact.code_commit_sha??''))||
       !HEX_40.test(String(artifact.dataset_source_commit_sha??''))||
@@ -98,7 +98,14 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       !Array.isArray(parameters?.feature_mean)||parameters.feature_mean.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
       parameters.feature_mean.some(value=>!finite(value))||
       !Array.isArray(parameters?.feature_std)||parameters.feature_std.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
-      parameters.feature_std.some(value=>!finite(value)||value<=0))
+      parameters.feature_std.some(value=>!finite(value)||value<=0)||
+      !Array.isArray(parameters?.anchor_weights)||parameters.anchor_weights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      parameters.anchor_weights.some(value=>!finite(value))||
+      !Array.isArray(parameters?.anchor_feature_mean)||parameters.anchor_feature_mean.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      parameters.anchor_feature_mean.some(value=>!finite(value))||
+      !Array.isArray(parameters?.anchor_feature_std)||parameters.anchor_feature_std.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      parameters.anchor_feature_std.some(value=>!finite(value)||value<=0)||
+      !finite(parameters?.anchor_bias))
       return fail('ORDERED_RANKER_PARAMETER_SHAPE_OR_VALUE_INVALID');
     const training=artifact.training_provenance;
     const contract=training?.downstream_feature_contract;
@@ -452,10 +459,23 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
   const weights=model.orderedRankingHeadWeights;
   const means=model.orderedRankingFeatureMean;
   const stds=model.orderedRankingFeatureStd;
+  const anchorWeights=model.orderedRankingAnchorWeights;
+  const anchorMeans=model.orderedRankingAnchorFeatureMean;
+  const anchorStds=model.orderedRankingAnchorFeatureStd;
+  const anchorBias=model.orderedRankingAnchorBias;
   const standardization=ranker.standardization;
   if(!Array.isArray(weights)||weights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+    weights.some(value=>!finite(value))||
     !Array.isArray(means)||means.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+    means.some(value=>!finite(value))||
     !Array.isArray(stds)||stds.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+    stds.some(value=>!finite(value)||value<=0)||
+    !Array.isArray(anchorWeights)||anchorWeights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+    anchorWeights.some(value=>!finite(value))||
+    !Array.isArray(anchorMeans)||anchorMeans.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+    anchorMeans.some(value=>!finite(value))||
+    !Array.isArray(anchorStds)||anchorStds.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+    anchorStds.some(value=>!finite(value)||value<=0)||!finite(anchorBias)||
     !Array.isArray(standardization?.feature_mean)||!Array.isArray(standardization?.feature_std)||
     canonical(means)!==canonical(standardization.feature_mean)||
     canonical(stds)!==canonical(standardization.feature_std))
@@ -487,9 +507,9 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
   const downstreamContract=ranker.downstream_feature_contract;
   const core={
     artifact_schema:ORDERED_TEMPORAL_RANKER_ARTIFACT_SCHEMA,
-    artifact_schema_version:1,
+    artifact_schema_version:2,
     model_family:'TCN_LSTM_INDEPENDENT_RAW_ORDERED_RETURN_RANKER',
-    model_version:'RAW_ORDERED_696_TEMPORAL_BLOCK_TIED_PAIRWISE_RANKER_V1',
+    model_version:'RAW_ORDERED_696_LOGISTIC_ANCHORED_PAIRWISE_RESIDUAL_RANKER_V2',
     code_commit_sha:String(required.sourceCommitSha).toLowerCase(),
     dataset_sha256:String(required.datasetSha256).toLowerCase(),
     input_file_sha256:String(required.inputFileSha256).toLowerCase(),
@@ -517,7 +537,11 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
     parameters:{
       weights:[...weights],
       feature_mean:[...means],
-      feature_std:[...stds]
+      feature_std:[...stds],
+      anchor_weights:[...anchorWeights],
+      anchor_feature_mean:[...anchorMeans],
+      anchor_feature_std:[...anchorStds],
+      anchor_bias:Number(anchorBias)
     },
     training_provenance:{
       fit_partition:'TRAINING_PARTITION_ONLY',
@@ -573,8 +597,13 @@ export function predictOrderedTemporalRankerArtifact(sequence,artifact){
   if(features.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
     features.some(value=>!Number.isFinite(value)))
     throw new TypeError('ORDERED_RANKER_INFERENCE_FEATURES_INVALID');
-  let score=0;
-  const {weights,feature_mean,feature_std}=artifact.parameters;
+  let anchorScore=Number(artifact.parameters.anchor_bias);
+  const {weights,feature_mean,feature_std,anchor_weights,anchor_feature_mean,
+    anchor_feature_std}=artifact.parameters;
+  for(let index=0;index<features.length;index++)
+    anchorScore+=anchor_weights[index]*
+      ((features[index]-anchor_feature_mean[index])/anchor_feature_std[index]);
+  let score=Math.max(-30,Math.min(30,anchorScore));
   for(let index=0;index<features.length;index++)
     score+=weights[index]*((features[index]-feature_mean[index])/feature_std[index]);
   return Math.max(-30,Math.min(30,score));

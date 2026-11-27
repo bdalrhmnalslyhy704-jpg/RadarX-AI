@@ -1420,6 +1420,7 @@ async function main(){
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
+          rankingValidationFraction:0.15,
           requireExternalLogisticSelectionBaseline:true,
           // Fit a separate purged expanding-window Logistic model on the
           // recurrent model-training block only. Its predictions are then

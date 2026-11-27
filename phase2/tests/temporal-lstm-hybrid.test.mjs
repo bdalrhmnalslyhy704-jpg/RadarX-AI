@@ -649,7 +649,7 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
     roundTripCostBps:30,minimumReturnGapPct:0.5,maxPairsPerTimestamp:16,
     pairStrategy:'PROFITABILITY_TOPK_V2',
     learningRate:0.03,learningRateGrid:[0.01,0.03],epochs:4,l2:0.001,patience:2,
-    l2Grid:[0.001,0.01],temporalBlockCounts:[1],validationFraction:0.08
+    l2Grid:[0.001,0.01],temporalBlockCounts:[1],validationFraction:0.15
   });
   assert.equal(fitted.pair_support.pair_strategy,'PROFITABILITY_TOPK_V2');
   assert.equal(fitted.training.pair_strategy,'PROFITABILITY_TOPK_V2');
@@ -658,19 +658,33 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
   assert.equal(fitted.training.internal_training_validation.pair_strategy,
     'PROFITABILITY_TOPK_V2');
   assert.equal(fitted.training.internal_training_validation.fold_count,3);
+  assert.equal(fitted.training.internal_training_validation.validation_fraction,0.15);
+  assert.equal(fitted.training.internal_training_validation.validation_group_count,15);
+  assert.ok(fitted.training.internal_training_validation.folds.every(fold=>
+    fold.validation_decision_group_count===15
+  ),'each purged fold must use exactly 15 chronological validation groups');
   const tuningGrid=fitted.training.internal_training_validation.candidate_grid;
   assert.equal(tuningGrid.length,4);
   assert.deepEqual([...new Set(tuningGrid.map(item=>item.learning_rate))].sort((a,b)=>a-b),
     [0.01,0.03]);
   assert.equal(fitted.training.initialization_method,
-    'PROJECTED_FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_V1');
+    'FOLD_LOCAL_LOGISTIC_ANCHORED_ZERO_RESIDUAL_HEAD_V1');
   assert.equal(fitted.training.initialization_source_rows,fitted.training.training_rows);
+  assert.equal(fitted.training.initialization_preserves_logistic_pair_scores,true);
   assert.equal(fitted.training.regularization_anchor_method,
-    'SAME_FOLD_LOGISTIC_WEIGHTS_RESIDUAL_PENALTY_V1');
+    'ZERO_RESIDUAL_CORRECTION_PENALTY_V1');
   assert.equal(fitted.training.internal_training_validation.logistic_baseline_config
     .ranker_initialization_method,
-    'FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_THEN_RETURN_PAIRWISE_FINE_TUNING_V1');
+    'FOLD_LOCAL_LOGISTIC_RAW_SCORE_PLUS_ZERO_INITIALIZED_TEMPORAL_RETURN_RESIDUAL_V1');
   assert.equal(fitted.training.validation_or_holdout_used,false);
+  assert.ok(tuningGrid.every(candidate=>
+    candidate.fold_results.every(fold=>fold.epoch_initial_matches_logistic_anchor===true&&
+      Math.abs(fold.epoch_initial_pairwise_log_loss-
+        fold.epoch_logistic_validation_pairwise_log_loss)<=1e-10&&
+      Math.abs(fold.epoch_initial_pairwise_accuracy_pct-
+        fold.epoch_logistic_validation_pairwise_accuracy_pct)<=1e-8
+    )
+  ),'zero residual at epoch start must reproduce Logistic on identical nested validation pairs');
 });
 
 test('pairwise return-ranking evaluation reports only selection-supplied ranking evidence',()=>{
@@ -1674,8 +1688,8 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
       [0.25,0.5,1,2].every(l2=>
         internal.l2_grid.includes(l2)&&
         internal.candidate_grid.some(candidate=>candidate.l2===l2))&&
-      internal?.candidate_grid?.length===80&&
-      [4,6,8,24].every(blockCount=>
+      internal?.candidate_grid?.length===140&&
+      [1,2,3,4,6,8,24].every(blockCount=>
         internal.candidate_grid.some(candidate=>candidate.temporal_block_count===blockCount))&&
       [0.003,0.006,0.01,0.02,0.03].every(rate=>
         internal.candidate_grid.some(candidate=>candidate.learning_rate===rate))&&
@@ -2422,6 +2436,10 @@ test('ordered 696-feature pairwise ranker fits training-only normalization and l
     delete copy.orderedRankingHeadWeights;
     delete copy.orderedRankingFeatureMean;
     delete copy.orderedRankingFeatureStd;
+    delete copy.orderedRankingAnchorWeights;
+    delete copy.orderedRankingAnchorFeatureMean;
+    delete copy.orderedRankingAnchorFeatureStd;
+    delete copy.orderedRankingAnchorBias;
     return copy;
   };
   assert.deepEqual(withoutRankFields(profile.model),withoutRankFields(classifierOnly.model),
@@ -2496,8 +2514,8 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
   const rankerGrid=ranker.training.internal_training_validation;
   const expectedL2Grid=[0.25,0.5,1,2];
   assert.deepEqual(rankerGrid.l2_grid,expectedL2Grid);
-  assert.equal(rankerGrid.candidate_grid.length,80);
-  for(const l2 of expectedL2Grid) for(const blockCount of [4,6,8,24])
+  assert.equal(rankerGrid.candidate_grid.length,140);
+  for(const l2 of expectedL2Grid) for(const blockCount of [1,2,3,4,6,8,24])
     assert.ok(rankerGrid.candidate_grid.some(candidate=>
       candidate.l2===l2&&candidate.temporal_block_count===blockCount),
       'every selected L2 value must cover each focused temporal block count');
@@ -2528,7 +2546,11 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
       rankingRepresentation:ranker.model_state.rankingRepresentation,
       orderedRankingHeadWeights:[...ranker.model_state.orderedRankingHeadWeights],
       orderedRankingFeatureMean:[...ranker.model_state.orderedRankingFeatureMean],
-      orderedRankingFeatureStd:[...ranker.model_state.orderedRankingFeatureStd]
+      orderedRankingFeatureStd:[...ranker.model_state.orderedRankingFeatureStd],
+      orderedRankingAnchorWeights:[...ranker.model_state.orderedRankingAnchorWeights],
+      orderedRankingAnchorFeatureMean:[...ranker.model_state.orderedRankingAnchorFeatureMean],
+      orderedRankingAnchorFeatureStd:[...ranker.model_state.orderedRankingAnchorFeatureStd],
+      orderedRankingAnchorBias:Number(ranker.model_state.orderedRankingAnchorBias)
     },
     training:{
       return_ranking:{
@@ -2634,6 +2656,14 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
     ranker.model_state.orderedRankingFeatureMean);
   assert.deepEqual(withFrozenRanker.model.orderedRankingFeatureStd,
     ranker.model_state.orderedRankingFeatureStd);
+  assert.deepEqual(withFrozenRanker.model.orderedRankingAnchorWeights,
+    ranker.model_state.orderedRankingAnchorWeights);
+  assert.deepEqual(withFrozenRanker.model.orderedRankingAnchorFeatureMean,
+    ranker.model_state.orderedRankingAnchorFeatureMean);
+  assert.deepEqual(withFrozenRanker.model.orderedRankingAnchorFeatureStd,
+    ranker.model_state.orderedRankingAnchorFeatureStd);
+  assert.equal(withFrozenRanker.model.orderedRankingAnchorBias,
+    ranker.model_state.orderedRankingAnchorBias);
 
   const withoutRankFields=model=>{
     const copy=structuredClone(model);
@@ -2644,6 +2674,10 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
     delete copy.orderedRankingHeadWeights;
     delete copy.orderedRankingFeatureMean;
     delete copy.orderedRankingFeatureStd;
+    delete copy.orderedRankingAnchorWeights;
+    delete copy.orderedRankingAnchorFeatureMean;
+    delete copy.orderedRankingAnchorFeatureStd;
+    delete copy.orderedRankingAnchorBias;
     return copy;
   };
   assert.deepEqual(withoutRankFields(withFrozenRanker.model),withoutRankFields(classifierOnly.model),

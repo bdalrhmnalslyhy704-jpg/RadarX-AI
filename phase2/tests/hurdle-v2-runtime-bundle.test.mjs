@@ -105,7 +105,7 @@ test('runtime bundle does not accept an unverified ordered ranker', () => {
 
 test('runtime bundle verifier fails closed on absent or altered dependencies', () => {
   assert.equal(HURDLE_V2_RUNTIME_BUNDLE_SCHEMA,
-    'RADARX_BUILD224_HURDLE_V2_COMPLETE_INFERENCE_RUNTIME_BUNDLE_V1');
+    'RADARX_BUILD224_HURDLE_V2_COMPLETE_INFERENCE_RUNTIME_BUNDLE_V2');
   assert.deepEqual(
     verifyHurdleV2RuntimeBundle({schema:'WRONG'}),
     {valid:false,reason:'RUNTIME_BUNDLE_SCHEMA_INVALID'}
