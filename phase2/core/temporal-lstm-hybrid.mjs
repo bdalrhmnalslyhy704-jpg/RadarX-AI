@@ -3322,7 +3322,7 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
 export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   roundTripCostBps=30,minimumReturnGapPct=0.50,maxPairsPerTimestamp=16,
   learningRate=0.03,epochs=40,l2=0.001,patience=10,
-  l2Grid=[0.001,0.01,0.05,0.10,0.25,0.5,1.0],
+  l2Grid=[0.0001,0.00025,0.0005,0.001,0.01,0.05,0.10,0.25,0.5,1.0],
   // Include intermediate temporal resolutions; selection remains inside the purged training partition.
   temporalBlockCounts=[1,2,3,4,6,8,12,24],
   validationFraction=0.08,purgeHorizonMs=4*60*60*1000
@@ -3756,6 +3756,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     purged_rows:internalPurgedRows,
     tuning_pairs:internalTuningPairs,
     validation_pairs:internalValidationPairs,
+    l2_grid:[...l2Grid],
     candidate_grid:tuningCandidates,
     selection_rule:'REQUIRE_STRICT_POSITIVE_LOGISTIC_MARGINS_FOR_PAIRWISE_ACCURACY_AND_LOG_LOSS_IN_EVERY_PURGED_TRAINING_FOLD',
     fold_stable_dual_metric_candidate_count:foldStableDualMetricCandidates.length,
