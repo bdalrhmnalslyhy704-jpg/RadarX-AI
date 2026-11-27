@@ -4,7 +4,9 @@ import {createHash} from 'node:crypto';
 import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {fitHurdleReturnHead,fitHurdlePositiveReturnCalibration,predictHurdleExpectedNetReturn} from '../core/hurdle-return-head.mjs';
+import {fitHurdleReturnHead,fitHurdlePositiveReturnCalibration,
+  fitHurdleConditionalMeanCalibration,predictHurdleExpectedNetReturn
+} from '../core/hurdle-return-head.mjs';
 import {
   HURDLE_V2_CONTEXT_SCHEMA,HURDLE_V2_OBJECTIVE,
   createHurdleV2Artifact,verifyHurdleV2Artifact,
@@ -107,6 +109,29 @@ before(async () => {
     disjoint_sample_identities:true,source_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
     validation_or_holdout_used:false
   };
+  const attachMeanCalibrations=(head,features)=>{
+    const predictions=features.map(row=>predictHurdleExpectedNetReturn(row,head));
+    const positiveIndexes=returns.map((value,index)=>value>0?index:-1)
+      .filter(index=>index>=0);
+    const nonPositiveIndexes=returns.map((value,index)=>value<=0?index:-1)
+      .filter(index=>index>=0);
+    head.positive_conditional_mean_model.conditional_mean_calibration={
+      ...fitHurdleConditionalMeanCalibration(
+        positiveIndexes.map(index=>predictions[index].positive_net_return_mean_pct),
+        positiveIndexes.map(index=>returns[index]),
+        {positiveClass:true,iterations:200,regularization:0.05}
+      ),...calibrationProvenance
+    };
+    head.non_positive_conditional_mean_model.conditional_mean_calibration={
+      ...fitHurdleConditionalMeanCalibration(
+        nonPositiveIndexes.map(index=>predictions[index].non_positive_net_return_mean_pct),
+        nonPositiveIndexes.map(index=>returns[index]),
+        {positiveClass:false,iterations:200,regularization:0.05}
+      ),...calibrationProvenance
+    };
+  };
+  attachMeanCalibrations(contextual,rows44);
+  attachMeanCalibrations(pooled,rows44.map(row=>row.slice(0,8)));
   contextual.probability_calibration={...calibrationProvenance};
   pooled.probability_calibration={...calibrationProvenance};
   const model = {
