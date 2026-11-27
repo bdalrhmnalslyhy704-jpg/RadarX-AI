@@ -99,6 +99,7 @@ const phase2=[
   'phase2/tests/temporal-neural-brain.test.mjs',
   'phase2/tests/neural-closure-contracts.test.mjs',
   'phase2/tests/temporal-lstm-hybrid.test.mjs',
+  'phase2/tests/hurdle-v2-runtime-bundle.test.mjs',
   'phase2/tests/daily-early-riser-census.test.mjs',
   'phase2/tests/adaptive-trader-engine.test.mjs',
   'phase2/tests/daily-early-riser-census.test.mjs',
