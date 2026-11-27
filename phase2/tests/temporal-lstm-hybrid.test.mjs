@@ -2367,7 +2367,14 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
     'TEMPORAL_BLOCK_TIED_'+chosenBlocks+'X29_V1');
   assert.equal(ranker.training.internal_training_validation.selected_temporal_block_count,
     chosenBlocks);
-  assert.ok(ranker.training.internal_training_validation.candidate_grid.length>=8);
+  const rankerGrid=ranker.training.internal_training_validation;
+  const expectedL2Grid=[0.0001,0.00025,0.0005,0.001,0.01,0.05,0.10,0.25,0.5,1.0];
+  assert.deepEqual(rankerGrid.l2_grid,expectedL2Grid);
+  assert.equal(rankerGrid.candidate_grid.length,80);
+  for(const l2 of expectedL2Grid) for(const blockCount of [1,2,3,4,6,8,12,24])
+    assert.ok(rankerGrid.candidate_grid.some(candidate=>
+      candidate.l2===l2&&candidate.temporal_block_count===blockCount),
+      'the complete low-to-high L2 grid must cover every temporal block count');
   for(let step=0;step<24;step++){
     const firstStep=Math.floor(step/chosenStepsPerBlock)*chosenStepsPerBlock;
     for(let channel=0;channel<29;channel++){
