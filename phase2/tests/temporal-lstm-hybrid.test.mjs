@@ -1514,6 +1514,17 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     item.ranking_head?.downstream_feature_contract?.training_and_execution_feature_identities_disjoint===true&&
     item.ranking_head?.downstream_feature_contract?.chronology_valid===true
   ),'every execution-head rank feature must be scored by a ranker fit on earlier disjoint training rows');
+  const refitDiagnostics=result.candidates.map(item=>({
+    name:item.name,
+    model_training_rows:result.model_training_rows,
+    final_refit_rows:item.ranking_head?.internal_training_validation?.final_refit_rows,
+    final_refit_pairs:item.ranking_head?.internal_training_validation?.final_refit_pairs,
+    ranker_training_rows:item.ranking_head?.training_rows,
+    ranker_training_pairs:item.ranking_head?.training_pairs,
+    final_refit_epoch_selection_mode:item.ranking_head?.internal_training_validation?.final_refit_epoch_selection_mode,
+    ranker_epoch_selection_mode:item.ranking_head?.epoch_selection_mode
+  }));
+  console.log('TCN_LSTM_RANKER_REFIT_DIAGNOSTICS',JSON.stringify(refitDiagnostics));
   assert.ok(result.candidates.every(item=>{
     const internal=item.ranking_head?.internal_training_validation;
     return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6'&&
