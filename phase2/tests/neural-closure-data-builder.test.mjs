@@ -10,7 +10,7 @@ import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs
 import {selectBinanceSpotUsdtUniverse,verifyProspectiveUniverseCapture,verifyProspectiveCohortRowCoverage} from '../core/neural-closure-universe.mjs';
 import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
 import {
-  NEURAL_CLOSURE_DATASET_SCHEMA,parseBinanceSpotKline,
+  NEURAL_CLOSURE_DATASET_SCHEMA,buildNeuralClosureMarketDataPolicy,parseBinanceSpotKline,
   createNeuralClosureDecisionSchedule,buildNeuralClosureFeatureSnapshot,
   buildNeuralClosureHistoricalLiquiditySnapshot,
   buildNeuralClosureEventRow,verifyNeuralClosureRawCoverage
@@ -18,6 +18,43 @@ import {
 import {validateFourHourRows,NEURAL_CLOSURE_HORIZON_MS} from '../core/neural-closure-contracts.mjs';
 
 const FIFTEEN=15*60_000,FIVE=5*60_000,MINUTE=60_000;
+
+test('market-data policy records the real legacy and all-universe cohort provenance',async()=>{
+  const legacy=buildNeuralClosureMarketDataPolicy({
+    prospectiveOnly:false,maxSymbols:60,minQuoteVolumeUsdt:900_000
+  });
+  assert.equal(legacy.candidate_universe_prefilter,
+    'CURRENT_BINANCE_SPOT_24H_TICKER_TOP_N_AT_COLLECTION_TIME');
+  assert.equal(legacy.candidate_universe_selection,
+    'TOP_N_BY_COLLECTION_TIME_24H_QUOTE_VOLUME');
+  assert.equal(legacy.current_24h_ticker_used_for_candidate_eligibility,true);
+  assert.equal(legacy.current_24h_ticker_used_for_ordering,true);
+  assert.equal(legacy.current_24h_ticker_volume_is_diagnostic_only,false);
+  assert.equal(legacy.candidate_universe_max_symbols,60);
+  assert.equal(legacy.minimum_24h_quote_volume_usdt,900_000);
+
+  const prospective=buildNeuralClosureMarketDataPolicy({
+    prospectiveOnly:true,maxSymbols:500,minQuoteVolumeUsdt:1_000_000
+  });
+  assert.equal(prospective.candidate_universe_prefilter,
+    'CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY');
+  assert.equal(prospective.candidate_universe_selection,
+    'ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V3');
+  assert.equal(prospective.current_24h_ticker_used_for_candidate_eligibility,false);
+  assert.equal(prospective.current_24h_ticker_used_for_ordering,false);
+  assert.equal(prospective.current_24h_ticker_volume_is_diagnostic_only,true);
+  assert.equal(prospective.candidate_universe_max_symbols,500);
+  assert.equal(prospective.minimum_24h_quote_volume_usdt,1_000_000);
+  assert.equal(prospective.cohort_collection_mode,'RETROSPECTIVE_OUT_OF_TIME_BACKFILL_ONLY');
+  assert.equal(prospective.survivorship_bias_warning,true);
+  assert.equal(prospective.historical_delisted_asset_coverage,false);
+
+  const collector=await readFile(new URL(
+    '../tools/build-neural-closure-dataset.mjs',import.meta.url
+  ),'utf8');
+  assert.match(collector,/policy:buildNeuralClosureMarketDataPolicy\(\{/,
+    'the serialized dataset policy must come from the actual collector mode');
+});
 const makeCandle=(openTime,intervalMs,{base=100,step=0,volume=1000,trades=100,taker=0.56}={})=>{
   const close=base+step;
   const high=close*1.002,low=close*0.998;
