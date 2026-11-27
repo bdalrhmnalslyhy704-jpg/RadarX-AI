@@ -1464,7 +1464,7 @@ test('paired outer PnL bootstrap gate requires a strictly positive matched-Logis
 });
 
 test('paired PnL promotion gate accepts actual outer-bootstrap output only when matched Logistic lower CI is positive',()=>{
-  const allRows=makeRows({days:60,rowsPerDay:80});
+  const allRows=makeRows({days:80,rowsPerDay:80});
   const validation=splitFourHourRows(allRows).validation
     .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
   const candidateScores=validation.map(row=>row.target===1?0.99:0.01);
