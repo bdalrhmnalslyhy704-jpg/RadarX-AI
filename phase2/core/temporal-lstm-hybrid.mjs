@@ -3186,6 +3186,7 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
   let bestLoss=initialValidationMetrics.pairwise_log_loss;
   let bestAccuracy=initialValidationMetrics.pairwise_accuracy_pct;
   let bestWeights=[...initialWeights],wait=0,completed=0,bestEpoch=0;
+  let validationCheckpointSelected=false;
   const firstMoment=Array(parameterCount).fill(0),secondMoment=Array(parameterCount).fill(0);
   const beta1=0.9,beta2=0.999,epsilon=1e-8;
   for(let epoch=1;epoch<=epochs;epoch++){
@@ -3240,6 +3241,7 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       if(checkpointBetter){
         bestAccuracy=currentAccuracy;bestLoss=currentLoss;
         bestWeights=[...initialWeights];wait=0;bestEpoch=epoch;
+        validationCheckpointSelected=true;
       }else wait++;
     }
     if(epochSelectionMode!=='FIXED_EPOCHS'&&wait>=patience)break;
@@ -3264,7 +3266,8 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     throw new TypeError('TCN_LSTM_ORDERED_RANKING_HEAD_FINAL_STATE_INVALID');
   return {
     schema:'RADARX_TCN_LSTM_INDEPENDENT_ORDERED_696_RETURN_RANKER_V1',
-    fitted:true,representation:'RAW_ORDERED_696_V1',
+    fitted:epochSelectionMode==='FIXED_EPOCHS'||validationCheckpointSelected,
+    representation:'RAW_ORDERED_696_V1',
     parameterization_id:parameterizationId,
     temporal_block_count:temporalBlockCount,
     steps_per_block:stepsPerBlock,
@@ -3283,7 +3286,10 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     training_rows:rows.length,training_pairs:pairs.length,
     learning_rate:learningRate,epochs_requested:epochs,epochs_completed:completed,
     l2,patience,early_stopped:completed<epochs,
-    best_epoch:bestEpoch||completed,
+    best_epoch:epochSelectionMode==='FIXED_EPOCHS'?completed:
+      (validationCheckpointSelected?bestEpoch:null),
+    validation_checkpoint_selected:epochSelectionMode==='FIXED_EPOCHS'
+      ?null:validationCheckpointSelected,
     epoch_selection_mode:epochSelectionMode,
     epoch_checkpoint_selection_policy:epochSelectionMode==='FIXED_EPOCHS'
       ?'FIXED_EPOCH_COUNT_NO_CHECKPOINT_SELECTION'
@@ -3539,10 +3545,15 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
           orderedRankingFeatureStd:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(1),
           rankingRepresentation:'RAW_ORDERED_696_V1'
         };
+        // If the nested epoch window yields no Pareto checkpoint, keep a
+        // deterministic fixed-budget diagnostic refit but mark the fold as
+        // unqualified. Never relabel the last attempted epoch as a selected best.
+        const refitEpochCount=epochSelection.validation_checkpoint_selected===true
+          ?epochSelection.best_epoch:epochs;
         const tuned=fitTcnLstmOrderedPairwiseRankingHead(
           fold.tuningRows,fold.tuningPairSupport.pairs,tuningModel,{
-            learningRate,epochs:epochSelection.best_epoch,l2:candidateL2,
-            patience:Math.max(1,epochSelection.best_epoch),
+            learningRate,epochs:refitEpochCount,l2:candidateL2,
+            patience:Math.max(1,refitEpochCount),
             temporalBlockCount,epochSelectionMode:'FIXED_EPOCHS'
           }
         );
@@ -3572,7 +3583,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         const logistic=foldLogisticBaselines[index];
         return {
           fold_index:fold.fold_index,
-          best_epoch:epochSelection.best_epoch,
+          best_epoch:refitEpochCount,
+          epoch_checkpoint_selected:epochSelection.validation_checkpoint_selected===true,
           best_validation_pairwise_log_loss:Number(externalMetrics.pairwise_log_loss.toFixed(8)),
           best_validation_pairwise_accuracy_pct:Number(externalMetrics.pairwise_accuracy_pct.toFixed(4)),
           epoch_selection_pairwise_log_loss:epochSelection.best_validation_pairwise_log_loss,
@@ -3655,6 +3667,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         training_pairs:totalTrainingPairs,
         validation_pairs:totalValidationPairs,
         fold_count:foldResults.length,
+        epoch_checkpoint_selected_count:foldResults.filter(item=>item.epoch_checkpoint_selected===true).length,
+        all_epoch_checkpoints_selected:foldResults.every(item=>item.epoch_checkpoint_selected===true),
         fold_results:foldResults
       });
     }
@@ -3668,6 +3682,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     a.best_validation_pairwise_log_loss-b.best_validation_pairwise_log_loss||
     a.parameter_count-b.parameter_count||b.l2-a.l2||a.best_epoch-b.best_epoch;
   const foldStableDualMetricCandidates=tuningCandidates.filter(item=>
+    item.all_epoch_checkpoints_selected===true&&
     item.minimum_fold_pairwise_accuracy_improvement_pct>0&&
     item.minimum_fold_pairwise_log_loss_improvement>0
   ).sort(candidateOrder);
@@ -3708,7 +3723,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   const internalPurgeGapMs=Math.min(...foldMetadata.map(item=>item.purge_gap_ms));
   training.internal_training_validation={
     schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6',
-    method:'THREE_FOLD_NESTED_PARETO_DUAL_METRIC_LOGISTIC_ANCHORED_VALIDATION_V2',
+    method:'THREE_FOLD_NESTED_PARETO_CHECKPOINT_REQUIRED_LOGISTIC_ANCHORED_VALIDATION_V3',
     epoch_checkpoint_selection_policy:
       'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1',
     epoch_selection_policy:'NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS',
