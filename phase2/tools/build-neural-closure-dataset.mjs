@@ -774,10 +774,11 @@ async function main(){
       counts:split.counts,
       class_support:classSupport
     },
-    policy:{
-      ...NEURAL_CLOSURE_MARKET_DATA_POLICY,
-      paper_trading:true,real_order_execution:false
-    },
+    policy:buildNeuralClosureMarketDataPolicy({
+      prospectiveOnly:false,
+      maxSymbols:args.maxSymbols,
+      minQuoteVolumeUsdt:args.minQuoteVolumeUsdt
+    }),
     models_expected:[...NEURAL_CLOSURE_MODEL_FAMILIES]
   };
   await writeJsonObjectWithArrayStreaming(outputPath,{...output,rows:validated},'rows');
