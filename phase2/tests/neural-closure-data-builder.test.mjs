@@ -829,7 +829,7 @@ test('raw archive safely encodes Unicode Binance symbols and guardian verifies o
     });
     const expectedFile='~'+Buffer.from(symbol,'utf8').toString('hex')+'.1m.json.gz';
     assert.equal(result.file,expectedFile);
-    assert.match(result.file,/^[a-z0-9~]+\\.1m\\.json\\.gz$/);
+    assert.match(result.file,/^[a-z0-9~]+\.1m\.json\.gz$/);
     const compressed=await readFile(join(directory,result.file));
     const parsed=JSON.parse(gunzipSync(compressed).toString('utf8'));
     assert.equal(parsed.symbol,symbol);
