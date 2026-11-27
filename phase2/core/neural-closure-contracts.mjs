@@ -2875,6 +2875,104 @@ export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
   };
 }
 
+
+/**
+ * Strict statistical promotion check for an outer-validation paired PnL
+ * moving-block bootstrap. This consumes frozen evidence only: it never fits,
+ * selects, or changes thresholds, models, or execution policies.
+ */
+export function qualifyPairedOuterExecutionPnlBootstrap(bootstrap,{
+  candidatePolicy='LOGIT_CONTEXT_AUGMENTED',
+  matchedLogisticPolicy='LOGISTIC_MATCHED_CONTEXT',
+  topK=1,
+  roundTripCostBps=30,
+  minimumRepetitions=250,
+  minimumValidFraction=0.95
+}={}){
+  const fail=reason=>({
+    schema:'RADARX_PAIRED_OUTER_EXECUTION_PNL_BOOTSTRAP_PROMOTION_GATE_V1',
+    status:'NOT_QUALIFIED',passed:false,reason,
+    candidate_policy:candidatePolicy,
+    matched_logistic_policy:matchedLogisticPolicy,
+    top_k_per_timestamp:topK,
+    required_round_trip_cost_bps:roundTripCostBps,
+    holdout_rows_or_scores_used:false,
+    changes_model_or_policy:false
+  });
+  if(!bootstrap||bootstrap.schema!=='RADARX_OUTER_VALIDATION_MOVING_BLOCK_BOOTSTRAP_V1'||
+    bootstrap.status!=='AVAILABLE'||
+    bootstrap.evaluation_partition!=='OUTER_VALIDATION_ONLY'||
+    bootstrap.holdout_rows_or_scores_used!==false||
+    !Number.isInteger(topK)||topK<1||
+    !finite(roundTripCostBps)||roundTripCostBps!==30||
+    !Number.isInteger(minimumRepetitions)||minimumRepetitions<250||
+    !finite(minimumValidFraction)||minimumValidFraction<0.95||minimumValidFraction>1)
+    return fail('OUTER_PAIRED_PNL_BOOTSTRAP_SOURCE_OR_CONFIGURATION_INVALID');
+
+  const sampling=bootstrap.sampling;
+  const execution=bootstrap.execution;
+  const isolation=bootstrap.isolation;
+  if(sampling?.method!=='MOVING_BLOCK_BOOTSTRAP_WITHOUT_REPLACEMENT_WITHIN_BLOCKS'||
+    sampling?.resampling!=='CONTIGUOUS_UTC_DAY_BLOCKS_SAMPLED_WITH_REPLACEMENT'||
+    !Number.isInteger(sampling?.block_length_days)||sampling.block_length_days<3||
+    sampling?.inter_block_gap_ms<86_400_000||
+    sampling?.four_hour_event_overlap_between_resampled_blocks!==false||
+    sampling?.pairing!=='SAME_RESAMPLED_DAY_BLOCKS_FOR_ALL_MODELS_AND_POLICIES'||
+    !Number.isInteger(sampling?.repetitions)||sampling.repetitions<minimumRepetitions||
+    execution?.round_trip_cost_bps!==roundTripCostBps||
+    !Array.isArray(execution?.top_k_grid)||!execution.top_k_grid.includes(topK)||
+    execution?.policy_score_source!=='FROZEN_OUTER_VALIDATION_RANK_SCORES'||
+    execution?.matched_comparator_trade_counts_by_decision_bucket!==true||
+    execution?.selective_policies_use_inner_selection_thresholds_only!==true||
+    isolation?.parameters_refitted!==false||isolation?.thresholds_selected!==false||
+    isolation?.top_k_selected!==false||isolation?.lambda_refitted!==false||
+    isolation?.calibration_selected!==false||isolation?.holdout_rows_or_scores_used!==false)
+    return fail('OUTER_PAIRED_PNL_BOOTSTRAP_DESIGN_INVALID');
+
+  const configs=execution.policy_configurations;
+  const candidateConfig=configs?.[candidatePolicy];
+  const anchorConfig=configs?.[matchedLogisticPolicy];
+  if(!candidateConfig||candidateConfig.require_positive_base_score!==true||
+    !finite(candidateConfig.minimum_score)||!anchorConfig||
+    anchorConfig.match_trade_counts_with!==candidatePolicy)
+    return fail('OUTER_PAIRED_PNL_BOOTSTRAP_POLICIES_NOT_MATCHED');
+
+  const pairName=candidatePolicy+'_MINUS_'+matchedLogisticPolicy;
+  const pnl=execution.paired_strategy_differences?.[String(topK)]?.[pairName]?.net_pnl_pct;
+  if(pnl?.status!=='AVAILABLE'||
+    !Number.isInteger(pnl?.requested_repetitions)||
+    pnl.requested_repetitions!==sampling.repetitions||
+    !Number.isInteger(pnl?.valid_repetitions)||
+    pnl.valid_repetitions<Math.ceil(pnl.requested_repetitions*minimumValidFraction)||
+    !finite(pnl?.mean)||!finite(pnl?.median)||
+    !finite(pnl?.lower_95)||!finite(pnl?.upper_95)||
+    pnl.lower_95>pnl.upper_95||pnl.lower_95<=0||
+    !finite(pnl?.probability_above_zero)||pnl.probability_above_zero<0.975)
+    return fail('OUTER_PAIRED_NET_PNL_CONFIDENCE_INTERVAL_NOT_STRICTLY_POSITIVE');
+
+  return {
+    schema:'RADARX_PAIRED_OUTER_EXECUTION_PNL_BOOTSTRAP_PROMOTION_GATE_V1',
+    status:'PASSED',passed:true,
+    candidate_policy:candidatePolicy,
+    matched_logistic_policy:matchedLogisticPolicy,
+    top_k_per_timestamp:topK,
+    round_trip_cost_bps:roundTripCostBps,
+    block_length_days:sampling.block_length_days,
+    requested_repetitions:pnl.requested_repetitions,
+    valid_repetitions:pnl.valid_repetitions,
+    candidate_minus_logistic_net_pnl_pct:{
+      mean:pnl.mean,median:pnl.median,
+      lower_95:pnl.lower_95,upper_95:pnl.upper_95,
+      probability_above_zero:pnl.probability_above_zero
+    },
+    strict_positive_lower_95_bound:true,
+    matched_trade_counts_by_decision_bucket:true,
+    thresholds_frozen_on_inner_selection:true,
+    holdout_rows_or_scores_used:false,
+    changes_model_or_policy:false
+  };
+}
+
 /** Rank raw auxiliary logits within each simultaneous closed 15m bucket. */
 export function topKRankingSignals(rows,scores,topK) {
   if(!Array.isArray(rows)||!Array.isArray(scores)||rows.length!==scores.length||
