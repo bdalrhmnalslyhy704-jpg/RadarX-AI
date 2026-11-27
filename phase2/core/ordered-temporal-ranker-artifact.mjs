@@ -589,14 +589,17 @@ export function predictOrderedTemporalRankerArtifact(sequence,artifact){
   if(features.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
     features.some(value=>!Number.isFinite(value)))
     throw new TypeError('ORDERED_RANKER_INFERENCE_FEATURES_INVALID');
-  let score=Number(artifact.parameters.anchor_bias);
+  let anchorScore=Number(artifact.parameters.anchor_bias);
   const {weights,feature_mean,feature_std,anchor_weights,anchor_feature_mean,
     anchor_feature_std}=artifact.parameters;
-  for(let index=0;index<features.length;index++){
-    score+=anchor_weights[index]*
+  for(let index=0;index<features.length;index++)
+    anchorScore+=anchor_weights[index]*
       ((features[index]-anchor_feature_mean[index])/anchor_feature_std[index]);
+  // The frozen Logistic logit is clamped before the return-ranking residual,
+  // matching fold training and the runtime inference profile.
+  let score=Math.max(-30,Math.min(30,anchorScore));
+  for(let index=0;index<features.length;index++)
     score+=weights[index]*((features[index]-feature_mean[index])/feature_std[index]);
-  }
   return Math.max(-30,Math.min(30,score));
 }
 
