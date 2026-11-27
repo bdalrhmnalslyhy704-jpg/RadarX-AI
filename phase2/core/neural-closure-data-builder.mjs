@@ -529,3 +529,39 @@ export const NEURAL_CLOSURE_MARKET_DATA_POLICY=Object.freeze({
   no_synthetic_data:true,no_order_book_or_agg_trade_imputation:true,
   paper_trading:true,real_order_execution:false
 });
+
+/**
+ * Return the exact collection-universe provenance for the selected cohort mode.
+ * The legacy historical collector uses the collection-time 24h ticker for
+ * top-N filtering; the locked out-of-time backfill enumerates the exchange-info
+ * Spot USDT universe and applies liquidity only from each decision's 96 closed
+ * 15m candles. Keep this metadata aligned with the actual collector behavior.
+ */
+export function buildNeuralClosureMarketDataPolicy({
+  prospectiveOnly=false,maxSymbols=100,minQuoteVolumeUsdt=750_000
+}={}){
+  if(typeof prospectiveOnly!=='boolean'||
+    !Number.isInteger(maxSymbols)||maxSymbols<10||
+    maxSymbols>(prospectiveOnly?500:100)||
+    !finite(minQuoteVolumeUsdt)||Number(minQuoteVolumeUsdt)<750_000)
+    throw new TypeError('NEURAL_CLOSURE_MARKET_DATA_POLICY_ARGUMENTS_INVALID');
+  const prospective=prospectiveOnly===true;
+  return {
+    ...NEURAL_CLOSURE_MARKET_DATA_POLICY,
+    minimum_24h_quote_volume_usdt:Number(minQuoteVolumeUsdt),
+    candidate_universe_prefilter:prospective
+      ?'CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY'
+      :'CURRENT_BINANCE_SPOT_24H_TICKER_TOP_N_AT_COLLECTION_TIME',
+    candidate_universe_selection:prospective
+      ?'ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V3'
+      :'TOP_N_BY_COLLECTION_TIME_24H_QUOTE_VOLUME',
+    candidate_universe_max_symbols:maxSymbols,
+    current_24h_ticker_used_for_candidate_eligibility:!prospective,
+    current_24h_ticker_used_for_ordering:!prospective,
+    current_24h_ticker_volume_is_diagnostic_only:prospective,
+    cohort_collection_mode:prospective
+      ?'RETROSPECTIVE_OUT_OF_TIME_BACKFILL_ONLY'
+      :'LEGACY_HISTORICAL_FIXED_DAY_COHORT'
+  };
+}
+
