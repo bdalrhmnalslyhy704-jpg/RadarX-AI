@@ -1622,6 +1622,34 @@ export function tcnLstmPairwiseMarginRankingLoss(highLogit,lowLogit,rankingMargi
     accuracy_contribution:margin>0?1:margin===0?0.5:0
   };
 }
+
+/**
+ * Smooth margin-shifted RankNet loss. Unlike the hard hinge objective, it
+ * keeps a bounded gradient after the required margin is crossed, avoiding
+ * abrupt zero-gradient regions while preserving the same ranking direction.
+ * The reported evaluation metric remains canonical pairwise logistic log-loss.
+ */
+export function tcnLstmPairwiseSoftplusMarginRankingLoss(
+  highLogit,lowLogit,rankingMargin=0.25
+) {
+  if(!finite(highLogit)||!finite(lowLogit)||
+    Math.abs(highLogit)>LOGIT_LIMIT||Math.abs(lowLogit)>LOGIT_LIMIT||
+    !finite(rankingMargin)||rankingMargin<=0||rankingMargin>5)
+    throw new TypeError('TCN_LSTM_PAIRWISE_SOFTPLUS_MARGIN_ARGUMENT_INVALID');
+  const margin=Number(highLogit)-Number(lowLogit);
+  const violation=Number(rankingMargin)-margin;
+  const error=violation>=0
+    ?1/(1+Math.exp(-violation))
+    :Math.exp(violation)/(1+Math.exp(violation));
+  return {
+    margin,required_margin:Number(rankingMargin),
+    loss:stableSoftplus(violation),
+    high_logit_gradient:-error,
+    low_logit_gradient:error,
+    correct:margin>0,tied:margin===0,
+    accuracy_contribution:margin>0?1:margin===0?0.5:0
+  };
+}
 /**
  * Epoch checkpoints must improve at least one ranking metric without
  * regressing the other. This Pareto rule matches the independent dual-metric
@@ -3154,7 +3182,7 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     !finite(l2)||l2<0||l2>1||
     !Number.isInteger(patience)||patience<1||patience>50||
     !validTemporalBlockCounts.includes(temporalBlockCount)||
-    !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1'].includes(trainingObjective)||
+    !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1','PAIRWISE_SOFTPLUS_MARGIN_V1'].includes(trainingObjective)||
     !finite(rankingMargin)||rankingMargin<=0||rankingMargin>5||
     !['VALIDATION_CHECKPOINT','FIXED_EPOCHS'].includes(epochSelectionMode)||
     epochSelectionMode==='FIXED_EPOCHS'&&validationRows!==null)
@@ -3293,7 +3321,9 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       const lowLogit=score(pair.low_index,initialWeights);
       const item=trainingObjective==='PAIRWISE_MARGIN_HINGE_V1'
         ?tcnLstmPairwiseMarginRankingLoss(highLogit,lowLogit,rankingMargin)
-        :tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit);
+        :trainingObjective==='PAIRWISE_SOFTPLUS_MARGIN_V1'
+          ?tcnLstmPairwiseSoftplusMarginRankingLoss(highLogit,lowLogit,rankingMargin)
+          :tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit);
       const high=vectors[pair.high_index],low=vectors[pair.low_index];
       for(let block=0;block<temporalBlockCount;block++)
         for(let channel=0;channel<channels;channel++){
@@ -3439,7 +3469,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     temporalBlockCounts.some(value=>!validTemporalBlockCounts.includes(value))||
     new Set(temporalBlockCounts).size!==temporalBlockCounts.length||
     !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1','PROFITABILITY_TOPK_V2'].includes(pairStrategy)||
-    !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1'].includes(trainingObjective)||
+    !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1','PAIRWISE_SOFTPLUS_MARGIN_V1'].includes(trainingObjective)||
     !finite(rankingMargin)||rankingMargin<=0||rankingMargin>5||
     !finite(validationFraction)||validationFraction<0.08||validationFraction>0.40||
     !finite(purgeHorizonMs)||purgeHorizonMs<0)
@@ -3503,6 +3533,13 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       purged_rows:purgedRows.length,
       tuning_pairs:tuningPairSupport.comparison_pairs,
       validation_pairs:validationPairSupport.comparison_pairs,
+      pair_strategy:pairStrategy,
+      tuning_decision_group_count:tuningPairSupport.decision_group_count,
+      tuning_positive_vs_non_positive_pairs:tuningPairSupport.positive_vs_non_positive_pairs,
+      tuning_positive_vs_positive_pairs:tuningPairSupport.positive_vs_positive_pairs??0,
+      validation_decision_group_count:validationPairSupport.decision_group_count,
+      validation_positive_vs_non_positive_pairs:validationPairSupport.positive_vs_non_positive_pairs,
+      validation_positive_vs_positive_pairs:validationPairSupport.positive_vs_positive_pairs??0,
       tuning_max_resolved_at:tuningMaxResolvedAt,
       tuning_max_at:tuningMaxAt,
       validation_min_at:validationMinAt,
@@ -3572,8 +3609,14 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       epochValidationRows,epochValidationPairSupport,
       epoch_training_rows:epochTrainingRows.length,
       epoch_training_pairs:epochTrainingPairSupport.comparison_pairs,
+      epoch_training_decision_group_count:epochTrainingPairSupport.decision_group_count,
+      epoch_training_positive_vs_non_positive_pairs:epochTrainingPairSupport.positive_vs_non_positive_pairs,
+      epoch_training_positive_vs_positive_pairs:epochTrainingPairSupport.positive_vs_positive_pairs??0,
       epoch_validation_rows:epochValidationRows.length,
       epoch_validation_pairs:epochValidationPairSupport.comparison_pairs,
+      epoch_validation_decision_group_count:epochValidationPairSupport.decision_group_count,
+      epoch_validation_positive_vs_non_positive_pairs:epochValidationPairSupport.positive_vs_non_positive_pairs,
+      epoch_validation_positive_vs_positive_pairs:epochValidationPairSupport.positive_vs_positive_pairs??0,
       epoch_purged_rows:epochPurgedRows,
       epoch_unused_rows:epochUnusedRows,
       epoch_training_max_at:epochTrainingMaxAt,
@@ -4003,7 +4046,7 @@ export function trainTcnLstmHybrid(trainingRows, {
     rankingHeadLearningRate>0.25||!Number.isInteger(rankingHeadEpochs)||
     rankingHeadEpochs<1||rankingHeadEpochs>200||
     !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1||
-    !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1'].includes(rankingHeadTrainingObjective)||
+    !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1','PAIRWISE_SOFTPLUS_MARGIN_V1'].includes(rankingHeadTrainingObjective)||
     !finite(rankingHeadMargin)||rankingHeadMargin<=0||rankingHeadMargin>5||
     !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1','PROFITABILITY_TOPK_V2'].includes(rankingPairStrategy)||
     !TCN_LSTM_RANKING_REPRESENTATIONS.includes(rankingRepresentation)||
@@ -4872,7 +4915,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     !finite(rankingHeadLearningRate)||rankingHeadLearningRate<=0||rankingHeadLearningRate>0.25||
     !Number.isInteger(rankingHeadEpochs)||rankingHeadEpochs<1||rankingHeadEpochs>200||
     !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1||
-    !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1'].includes(rankingHeadTrainingObjective)||
+    !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1','PAIRWISE_SOFTPLUS_MARGIN_V1'].includes(rankingHeadTrainingObjective)||
     !finite(rankingHeadMargin)||rankingHeadMargin<=0||rankingHeadMargin>5||
     typeof externalLogisticExecutionContextProvider!=='function'&&
       externalLogisticExecutionContextProvider!==null||

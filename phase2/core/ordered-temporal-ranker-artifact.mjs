@@ -130,6 +130,32 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
             Math.abs(parameters.feature_std[current]-parameters.feature_std[first])<=1e-12;
         })
       );
+    const foldPairBreakdownValid=training?.pair_strategy!=='PROFITABILITY_TOPK_V2'||
+      Array.isArray(tuningFolds)&&tuningFolds.every(fold=>
+        fold?.pair_strategy==='PROFITABILITY_TOPK_V2'&&
+        Number.isInteger(fold?.tuning_decision_group_count)&&fold.tuning_decision_group_count>0&&
+        Number.isInteger(fold?.tuning_positive_vs_non_positive_pairs)&&
+        Number.isInteger(fold?.tuning_positive_vs_positive_pairs)&&
+        fold.tuning_positive_vs_non_positive_pairs+fold.tuning_positive_vs_positive_pairs===
+          fold.tuning_pairs&&
+        Number.isInteger(fold?.validation_decision_group_count)&&fold.validation_decision_group_count>0&&
+        Number.isInteger(fold?.validation_positive_vs_non_positive_pairs)&&
+        Number.isInteger(fold?.validation_positive_vs_positive_pairs)&&
+        fold.validation_positive_vs_non_positive_pairs+fold.validation_positive_vs_positive_pairs===
+          fold.validation_pairs&&
+        Number.isInteger(fold?.epoch_training_decision_group_count)&&
+        fold.epoch_training_decision_group_count>0&&
+        Number.isInteger(fold?.epoch_training_positive_vs_non_positive_pairs)&&
+        Number.isInteger(fold?.epoch_training_positive_vs_positive_pairs)&&
+        fold.epoch_training_positive_vs_non_positive_pairs+
+          fold.epoch_training_positive_vs_positive_pairs===fold.epoch_training_pairs&&
+        Number.isInteger(fold?.epoch_validation_decision_group_count)&&
+        fold.epoch_validation_decision_group_count>0&&
+        Number.isInteger(fold?.epoch_validation_positive_vs_non_positive_pairs)&&
+        Number.isInteger(fold?.epoch_validation_positive_vs_positive_pairs)&&
+        fold.epoch_validation_positive_vs_non_positive_pairs+
+          fold.epoch_validation_positive_vs_positive_pairs===fold.epoch_validation_pairs
+      );
     const foldContractValid=Array.isArray(tuningFolds)&&
       (isThreeFoldV6?foldCount===3:isLegacyTwoFoldV5&&foldCount===2)&&
       tuningFolds.length===foldCount&&
@@ -311,7 +337,7 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       training?.standardizer_fit_rows!==training.training_rows||
       !Number.isInteger(training?.training_pairs)||training.training_pairs<10||
       !trainingConfig||!finite(trainingConfig.learning_rate)||trainingConfig.learning_rate<=0||
-      !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1'].includes(trainingObjective)||
+      !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1','PAIRWISE_SOFTPLUS_MARGIN_V1'].includes(trainingObjective)||
       !finite(rankingMargin)||rankingMargin<=0||rankingMargin>5||
       !finite(trainingConfig.l2)||trainingConfig.l2<0||trainingConfig.l2>1||
       !Number.isInteger(trainingConfig.epochs_requested)||trainingConfig.epochs_requested<1||
@@ -357,7 +383,7 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
         :'TWO_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION')||
       tuning?.outer_validation_or_holdout_used!==false||
       tuning?.model_selection_partition_used!==false||
-      trainingObjective==='PAIRWISE_MARGIN_HINGE_V1'&&
+      ['PAIRWISE_MARGIN_HINGE_V1','PAIRWISE_SOFTPLUS_MARGIN_V1'].includes(trainingObjective)&&
         (tuning?.training_objective!==trainingObjective||tuning?.ranking_margin!==rankingMargin)||
       tuning?.chronology_valid!==true||
       isThreeFoldV6&&(tuning?.selection_rule!=='REQUIRE_STRICT_POSITIVE_LOGISTIC_MARGINS_FOR_PAIRWISE_ACCURACY_AND_LOG_LOSS_IN_EVERY_PURGED_TRAINING_FOLD'||
@@ -366,7 +392,7 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
         tuning?.robustness_status!==(robustTuningCandidates.length>0?'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY':'ABSTAIN_NO_FOLD_STABLE_DUAL_SUPERIORITY')||
         tuning?.selected_candidate_qualified!==(robustTuningCandidates.length>0))||
       !finite(tuning?.purge_horizon_ms)||tuning.purge_horizon_ms<4*60*60*1000||
-      !foldContractValid||!foldTotalsValid||!candidateGridValid||
+      !foldContractValid||!foldPairBreakdownValid||!foldTotalsValid||!candidateGridValid||
       !Number.isInteger(tuning?.tuning_rows)||tuning.tuning_rows<20||
       !Number.isInteger(tuning?.validation_rows)||tuning.validation_rows<20||
       !Number.isInteger(tuning?.purged_rows)||tuning.purged_rows<0||

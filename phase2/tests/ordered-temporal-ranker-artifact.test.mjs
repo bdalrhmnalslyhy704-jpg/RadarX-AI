@@ -72,6 +72,8 @@ function makeProfile(overrides={}){
     final_pairwise_log_loss:0.62,
     learning_rate:0.03,
     l2:0.05,
+    training_objective:'PAIRWISE_SOFTPLUS_MARGIN_V1',
+    ranking_margin:0.25,
     epochs_requested:8,
     epochs_completed:8,
     best_epoch:8,
@@ -85,6 +87,8 @@ function makeProfile(overrides={}){
     internal_training_validation:{
       schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V5',
       method:'TWO_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1',
+      training_objective:'PAIRWISE_SOFTPLUS_MARGIN_V1',
+      ranking_margin:0.25,
       epoch_selection_policy:'NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS',
       logistic_baseline_config:{
         schema:'RADARX_FOLD_LOCAL_RAW_TEMPORAL_LOGISTIC_RANKING_REFERENCE_V1',
@@ -271,6 +275,9 @@ test('ordered raw 696 ranker exports a fully checksummed training-only artifact'
   assert.equal(artifact.training_provenance.fit_partition,'TRAINING_PARTITION_ONLY');
   assert.equal(artifact.training_provenance.validation_or_holdout_used,false);
   assert.equal(artifact.training_provenance.ranker_training_config.l2,0.05);
+  assert.equal(artifact.training_provenance.ranker_training_config.training_objective,
+    'PAIRWISE_SOFTPLUS_MARGIN_V1');
+  assert.equal(artifact.training_provenance.ranker_training_config.ranking_margin,0.25);
   assert.equal(artifact.training_provenance.ranker_training_config.epochs_requested,8);
   assert.equal(artifact.training_provenance.ranker_training_config.epoch_selection_mode,'FIXED_EPOCHS');
   assert.equal(artifact.training_provenance.ranker_training_config.parameter_count,116);
