@@ -3141,6 +3141,10 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       !Array.isArray(initialLogisticModel?.fit?.weights)||
       initialLogisticModel.fit.weights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
       initialLogisticModel.fit.weights.some(value=>!finite(value))||
+      !finite(initialLogisticModel?.fit?.bias)||
+      !Array.isArray(initialLogisticModel?.standardizer?.means)||
+      initialLogisticModel.standardizer.means.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      initialLogisticModel.standardizer.means.some(value=>!finite(value))||
       !Array.isArray(initialLogisticModel?.standardizer?.scales)||
       initialLogisticModel.standardizer.scales.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
       initialLogisticModel.standardizer.scales.some(value=>!finite(value)||value<=0)||
@@ -3231,40 +3235,29 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     ?[...model.orderedRankingHeadWeights]:Array(featureCount).fill(0);
   if(initialFullWeights.length!==featureCount||initialFullWeights.some(value=>!finite(value)))
     throw new TypeError('TCN_LSTM_ORDERED_RANKING_INITIAL_WEIGHTS_INVALID');
-  // A tied parameter is the sum of its corresponding expanded coefficients.
-  // When a same-fold Logistic model is supplied, project its raw-feature
-  // coefficients into each temporal block's standardized pooled coordinate.
-  // This gives the pairwise ranker a strong, leakage-safe starting point:
-  // 24 blocks reproduce Logistic exactly; coarser blocks receive a least-squares
-  // coefficient projection before pairwise fine-tuning.
+  // Preserve the complete fold-local Logistic score as an immutable anchor.
+  // The ordered temporal head starts at zero residual for every parameterization,
+  // so no temporal pooling/projection can distort the incumbent score before
+  // learning begins. Training then adds a regularized pairwise return residual.
   const initialWeights=Array(parameterCount).fill(0);
   let initializationMethod='ZERO_OR_EXPLICIT_RANKER_WEIGHTS_V1';
+  const logisticAnchor=initialLogisticModel===null?null:{
+    weights:[...initialLogisticModel.fit.weights],
+    means:[...initialLogisticModel.standardizer.means],
+    scales:[...initialLogisticModel.standardizer.scales],
+    bias:Number(initialLogisticModel.fit.bias)
+  };
   if(initialLogisticModel!==null){
-    const logisticWeights=initialLogisticModel.fit.weights;
-    const logisticScales=initialLogisticModel.standardizer.scales;
-    for(let block=0;block<temporalBlockCount;block++)
-      for(let channel=0;channel<channels;channel++){
-        let rawCoefficientSum=0;
-        const firstStep=block*stepsPerBlock;
-        for(let offset=0;offset<stepsPerBlock;offset++){
-          const feature=(firstStep+offset)*channels+channel;
-          rawCoefficientSum+=logisticWeights[feature]/logisticScales[feature];
-        }
-        initialWeights[block*channels+channel]=
-          groupMoments[block*channels+channel].std*rawCoefficientSum;
-      }
-    initializationMethod=temporalBlockCount===steps
-      ?'EXACT_FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_696_V1'
-      :'PROJECTED_FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_V1';
+    initializationMethod='FOLD_LOCAL_LOGISTIC_ANCHORED_ZERO_RESIDUAL_HEAD_V1';
   }else{
+    // Preserve the legacy initializer for standalone rank-head experiments.
     for(let block=0;block<temporalBlockCount;block++)
       for(let channel=0;channel<channels;channel++)
         for(let offset=0;offset<stepsPerBlock;offset++)
           initialWeights[block*channels+channel]+=
             initialFullWeights[(block*stepsPerBlock+offset)*channels+channel];
   }
-  // Regularize the pairwise update as a correction to the Logistic anchor,
-  // rather than shrinking an already qualified baseline toward zero.
+  // L2 penalizes only the learned residual correction, never the Logistic anchor.
   const regularizationAnchorWeights=[...initialWeights];
 
   const pooledValue=(vector,block,channel)=>{
@@ -3274,21 +3267,30 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       value+=vector[(firstStep+offset)*channels+channel]/stepsPerBlock;
     return value;
   };
-  const score=(index,currentWeights,featureVectors=vectors)=>{
-    const vector=featureVectors[index];
-    let value=0;
-    for(let block=0;block<temporalBlockCount;block++)
-      for(let channel=0;channel<channels;channel++)
-        value+=currentWeights[block*channels+channel]*
-          pooledValue(vector,block,channel);
+  const anchorScore=(index,rawFeatureVectors=rawVectors)=>{
+    if(logisticAnchor===null)return 0;
+    const vector=rawFeatureVectors[index];
+    let value=logisticAnchor.bias;
+    for(let feature=0;feature<featureCount;feature++)
+      value+=((vector[feature]-logisticAnchor.means[feature])/
+        logisticAnchor.scales[feature])*logisticAnchor.weights[feature];
     return clamp(value,-LOGIT_LIMIT,LOGIT_LIMIT);
   };
-  const evaluate=(currentWeights,pairRows=pairs,featureVectors=vectors)=>{
+  const score=(index,currentWeights,featureVectors=vectors,rawFeatureVectors=rawVectors)=>{
+    const vector=featureVectors[index];
+    let residual=0;
+    for(let block=0;block<temporalBlockCount;block++)
+      for(let channel=0;channel<channels;channel++)
+        residual+=currentWeights[block*channels+channel]*
+          pooledValue(vector,block,channel);
+    return clamp(anchorScore(index,rawFeatureVectors)+residual,-LOGIT_LIMIT,LOGIT_LIMIT);
+  };
+  const evaluate=(currentWeights,pairRows=pairs,featureVectors=vectors,rawFeatureVectors=rawVectors)=>{
     let loss=0,correct=0;
     for(const pair of pairRows){
       const metric=tcnLstmPairwiseLogitRankingLoss(
-        score(pair.high_index,currentWeights,featureVectors),
-        score(pair.low_index,currentWeights,featureVectors)
+        score(pair.high_index,currentWeights,featureVectors,rawFeatureVectors),
+        score(pair.low_index,currentWeights,featureVectors,rawFeatureVectors)
       );
       loss+=metric.loss;
       correct+=metric.accuracy_contribution;
@@ -3297,7 +3299,8 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
   };
   const initialTrainingMetrics=evaluate(initialWeights);
   const initialValidationMetrics=validationPairs
-    ?evaluate(initialWeights,validationPairs,validationVectors):initialTrainingMetrics;
+    ?evaluate(initialWeights,validationPairs,validationVectors,validationRawVectors)
+    :initialTrainingMetrics;
   let bestLoss=initialValidationMetrics.pairwise_log_loss;
   let bestAccuracy=initialValidationMetrics.pairwise_accuracy_pct;
   let bestWeights=[...initialWeights],wait=0,completed=0,bestEpoch=0;
@@ -3336,7 +3339,7 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     }
     const trainingMetrics=evaluate(initialWeights);
     const validationMetrics=validationPairs
-      ?evaluate(initialWeights,validationPairs,validationVectors):trainingMetrics;
+      ?evaluate(initialWeights,validationPairs,validationVectors,validationRawVectors):trainingMetrics;
     if(!finite(trainingMetrics.pairwise_log_loss)||!finite(trainingMetrics.pairwise_accuracy_pct)||
       !finite(validationMetrics.pairwise_log_loss)||!finite(validationMetrics.pairwise_accuracy_pct)||
       initialWeights.some(value=>!finite(value)))
@@ -3373,9 +3376,16 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
   model.orderedRankingHeadWeights=expandedWeights;
   model.orderedRankingFeatureMean=means;
   model.orderedRankingFeatureStd=stds;
+  if(logisticAnchor!==null){
+    model.orderedRankingAnchorWeights=[...logisticAnchor.weights];
+    model.orderedRankingAnchorFeatureMean=[...logisticAnchor.means];
+    model.orderedRankingAnchorFeatureStd=[...logisticAnchor.scales];
+    model.orderedRankingAnchorBias=logisticAnchor.bias;
+  }
   model.rankingRepresentation='RAW_ORDERED_696_V1';
   const finalTrainingMetrics=evaluate(bestWeights);
-  const finalValidationMetrics=validationPairs?evaluate(bestWeights,validationPairs,validationVectors):null;
+  const finalValidationMetrics=validationPairs
+    ?evaluate(bestWeights,validationPairs,validationVectors,validationRawVectors):null;
   if(!finite(finalTrainingMetrics.pairwise_log_loss)||!finite(finalTrainingMetrics.pairwise_accuracy_pct)||
     finalValidationMetrics!==null&&(!finite(finalValidationMetrics.pairwise_log_loss)||
       !finite(finalValidationMetrics.pairwise_accuracy_pct))||
@@ -3400,13 +3410,14 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       validation_or_holdout_used:false
     },
     baseline:initialLogisticModel!==null
-      ?'FOLD_LOCAL_TEMPORAL_LOGISTIC_WEIGHT_WARM_START_THEN_RETURN_PAIRWISE_FINE_TUNING'
+      ?'FOLD_LOCAL_LOGISTIC_RAW_SCORE_PLUS_ORDERED_PAIRWISE_RETURN_RESIDUAL_V1'
       :'NONE_RAW_ORDERED_FEATURE_PAIRWISE_HEAD_INDEPENDENT_OF_CLASSIFIER_AND_LOGISTIC_LOGITS',
     initialization_method:initializationMethod,
     regularization_anchor_method:initialLogisticModel!==null
-      ?'SAME_FOLD_LOGISTIC_WEIGHTS_RESIDUAL_PENALTY_V1':'ZERO_WEIGHT_ORIGINAL_L2_V1',
+      ?'ZERO_RESIDUAL_CORRECTION_PENALTY_V1':'ZERO_WEIGHT_ORIGINAL_L2_V1',
     initialization_exact_at_full_temporal_resolution:
       initialLogisticModel!==null&&temporalBlockCount===steps,
+    initialization_preserves_logistic_pair_scores:initialLogisticModel!==null,
     initialization_source_rows:initialLogisticModel?.fit?.training_rows??0,
     training_rows:rows.length,training_pairs:pairs.length,
     learning_rate:learningRate,epochs_requested:epochs,epochs_completed:completed,
@@ -3426,6 +3437,10 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
         :'TRAINING_PAIRWISE_PARETO_DUAL_METRIC_NON_REGRESSION',
     initial_pairwise_log_loss:Number(initialTrainingMetrics.pairwise_log_loss.toFixed(8)),
     initial_pairwise_accuracy_pct:Number(initialTrainingMetrics.pairwise_accuracy_pct.toFixed(4)),
+    initial_validation_pairwise_log_loss:validationPairs===null?null:
+      Number(initialValidationMetrics.pairwise_log_loss.toFixed(8)),
+    initial_validation_pairwise_accuracy_pct:validationPairs===null?null:
+      Number(initialValidationMetrics.pairwise_accuracy_pct.toFixed(4)),
     final_pairwise_log_loss:Number(finalTrainingMetrics.pairwise_log_loss.toFixed(8)),
     final_pairwise_accuracy_pct:Number(finalTrainingMetrics.pairwise_accuracy_pct.toFixed(4)),
     best_validation_pairwise_log_loss:finalValidationMetrics===null?null:Number(finalValidationMetrics.pairwise_log_loss.toFixed(8)),
