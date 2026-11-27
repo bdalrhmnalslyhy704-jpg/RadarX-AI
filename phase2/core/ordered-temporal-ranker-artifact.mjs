@@ -10,7 +10,7 @@ import {
 } from './temporal-lstm-hybrid.mjs';
 
 export const ORDERED_TEMPORAL_RANKER_ARTIFACT_SCHEMA =
-  'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V1';
+  'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V2';
 
 const HEX_40=/^[a-f0-9]{40}$/;
 const HEX_64=/^[a-f0-9]{64}$/;
@@ -39,7 +39,7 @@ function compareTuningCandidates(a,b){
 }
 function manifestFrom(core,contentHash){
   return {
-    schema:'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_MANIFEST_V1',
+    schema:'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_MANIFEST_V2',
     artifact_schema:core.artifact_schema,
     artifact_content_hash:contentHash,
     code_commit_sha:core.code_commit_sha,
@@ -74,7 +74,7 @@ function finalize(core){
 export function verifyOrderedTemporalRankerArtifact(artifact){
   try{
     if(!artifact||artifact.artifact_schema!==ORDERED_TEMPORAL_RANKER_ARTIFACT_SCHEMA||
-      artifact.artifact_schema_version!==1)
+      artifact.artifact_schema_version!==2)
       return fail('ORDERED_RANKER_ARTIFACT_SCHEMA_INVALID');
     if(!HEX_40.test(String(artifact.code_commit_sha??''))||
       !HEX_40.test(String(artifact.dataset_source_commit_sha??''))||
@@ -499,7 +499,7 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
   const downstreamContract=ranker.downstream_feature_contract;
   const core={
     artifact_schema:ORDERED_TEMPORAL_RANKER_ARTIFACT_SCHEMA,
-    artifact_schema_version:1,
+    artifact_schema_version:2,
     model_family:'TCN_LSTM_INDEPENDENT_RAW_ORDERED_RETURN_RANKER',
     model_version:'RAW_ORDERED_696_LOGISTIC_ANCHORED_PAIRWISE_RESIDUAL_RANKER_V2',
     code_commit_sha:String(required.sourceCommitSha).toLowerCase(),
