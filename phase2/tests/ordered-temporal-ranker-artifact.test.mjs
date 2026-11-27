@@ -324,6 +324,21 @@ test('artifact inference reproduces the exact raw ordered linear rank score',()=
   assert.equal(predictOrderedTemporalRankerArtifact(sequence,artifact),expected);
 });
 
+test('zero temporal residual reproduces the pinned Logistic anchor exactly',()=>{
+  const profile=makeProfile();
+  profile.model.orderedRankingHeadWeights=Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0);
+  const artifact=createOrderedTemporalRankerArtifact({profile,provenance});
+  const sequence=Array.from({length:24},(_,step)=>
+    Array.from({length:29},(_,channel)=>Math.sin((step+2)*(channel+1)*0.021)));
+  const features=buildTcnLstmFlattenedFeatures(sequence);
+  let expected=anchorBias;
+  for(let index=0;index<features.length;index++)
+    expected+=anchorWeights[index]*
+      ((features[index]-anchorMeans[index])/anchorStds[index]);
+  expected=Math.max(-30,Math.min(30,expected));
+  assert.equal(predictOrderedTemporalRankerArtifact(sequence,artifact),expected);
+});
+
 test('verifier rejects tampered parameters and an invalid OOS chronology contract',()=>{
   const artifact=createOrderedTemporalRankerArtifact({profile:makeProfile(),provenance});
   const changed=structuredClone(artifact);
