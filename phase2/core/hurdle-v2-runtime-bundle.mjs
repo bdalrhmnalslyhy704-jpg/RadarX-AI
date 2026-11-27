@@ -143,18 +143,18 @@ export function createHurdleV2RuntimeBundle({
       tcn_lstm_profile:{
         component:'TCN_LSTM_MODEL_AND_INFERENCE_PROFILE',
         inline_path:'inference_profile',
-        content_sha256:hash(profile)
+        content_sha256:hash(portableProfile)
       },
       logistic_anchor:{
         component:'FROZEN_TCN_LOGISTIC_ANCHOR_58',
         inline_path:'inference_profile.baseline_fit',
-        content_sha256:hash(profile.baseline_fit)
+        content_sha256:hash(portableProfile.baseline_fit)
       },
       temporal_logistic_cv:{
         component:'PURGED_FULL_SEQUENCE_TEMPORAL_LOGISTIC_CV',
         inline_path:'inference_profile.execution_logistic_context_model',
-        metadata:logisticMetadata,
-        content_sha256:hash(temporalLogistic)
+        metadata:portableProfile.execution_logistic_context_metadata,
+        content_sha256:hash(portableProfile.execution_logistic_context_model)
       },
       ordered_ranker:{
         component:'INDEPENDENT_RAW_ORDERED_696_RETURN_RANKER',
