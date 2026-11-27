@@ -1169,6 +1169,9 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
       for(let index=0;index<TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT;index++)
         rankingAnchorScore+=anchorWeights[index]*
           ((orderedFeatures[index]-anchorMeans[index])/anchorStds[index]);
+      // Match predictTemporalLogisticRawLogit: clamp the incumbent first,
+      // then add the learned residual and clamp the combined ranking score.
+      rankingAnchorScore=clamp(rankingAnchorScore,-LOGIT_LIMIT,LOGIT_LIMIT);
     }
     rankingScore=clamp(rankingAnchorScore+rankingScore,-LOGIT_LIMIT,LOGIT_LIMIT);
   }else if(rankingRepresentation!=='LATENT_MULTI_SCALE_V2'){
