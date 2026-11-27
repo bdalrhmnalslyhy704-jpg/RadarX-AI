@@ -93,7 +93,10 @@ export function createHurdleV2RuntimeBundle({
     temporalLogistic?.training_partition_only!==true||
     !temporalLogistic?.standardizer||!temporalLogistic?.fit)
     throw new TypeError('HURDLE_V2_RUNTIME_TEMPORAL_LOGISTIC_DEPENDENCY_INVALID');
-  if(!profile.baseline_fit?.standardizer||!profile.baseline_fit?.fit)
+  if(!Array.isArray(profile.baseline_fit?.weights)||
+    profile.baseline_fit.weights.length!==58||
+    profile.baseline_fit.weights.some(value=>!finite(value))||
+    !finite(profile.baseline_fit.bias))
     throw new TypeError('HURDLE_V2_RUNTIME_LOGISTIC_ANCHOR_DEPENDENCY_INVALID');
   const rankerCheck=verifyOrderedTemporalRankerArtifact(rankerArtifact);
   if(!rankerCheck.valid)
@@ -124,6 +127,7 @@ export function createHurdleV2RuntimeBundle({
     probeSequence.some(row=>!Array.isArray(row)||row.length!==29||
       row.some(value=>!finite(value))))
     throw new TypeError('HURDLE_V2_RUNTIME_PROBE_SEQUENCE_INVALID');
+  const portableProfile=JSON.parse(JSON.stringify(profile));
   const core={
     schema:HURDLE_V2_RUNTIME_BUNDLE_SCHEMA,
     schema_version:1,
@@ -169,7 +173,7 @@ export function createHurdleV2RuntimeBundle({
         pooled_feature_schema_id:hurdleArtifact.input_contract.pooled.feature_schema_id
       }
     },
-    inference_profile:profile,
+    inference_profile:portableProfile,
     probe:{sequence:probeSequence}
   };
   const artifactContentHash=hash(core);
