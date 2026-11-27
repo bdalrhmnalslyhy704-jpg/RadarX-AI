@@ -602,15 +602,29 @@ export function predictHurdleExpectedNetReturn(features, model) {
   const featureCount = features?.length;
   const positiveMeanModel = model?.positive_conditional_mean_model;
   const nonPositiveMeanModel = model?.non_positive_conditional_mean_model;
-  const validMeanModel = (item, positive) =>
-    item?.schema === CONDITIONAL_MEAN_SCHEMA && item?.fitted === true &&
-    Array.isArray(item.weights) && item.weights.length === featureCount &&
-    item.weights.every(finite) && finite(item.bias) &&
-    finite(item.training_target_min_pct) && finite(item.training_target_max_pct) &&
-    item.training_target_min_pct <= item.training_target_max_pct &&
-    (positive
-      ? item.training_target_min_pct > 0
-      : item.training_target_max_pct <= 0);
+  const validMeanModel = (item, positive) => {
+    const calibration=item?.conditional_mean_calibration??null;
+    const calibrationValid=calibration===null||(
+      calibration?.schema==='RADARX_HURDLE_CLASS_CONDITIONAL_MEAN_AFFINE_CALIBRATOR_V1'&&
+      calibration?.fitted===true&&
+      calibration?.class_condition===(positive
+        ?'POSITIVE_NET_RETURN':'NON_POSITIVE_NET_RETURN')&&
+      finite(calibration?.slope)&&calibration.slope>=0.05&&calibration.slope<=8&&
+      finite(calibration?.intercept)&&calibration.intercept>=-8&&calibration.intercept<=8&&
+      Number.isInteger(calibration?.samples)&&calibration.samples>=2&&
+      calibration?.fit_boundary===
+        'PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK_ONLY'&&
+      calibration?.validation_or_holdout_used===false
+    );
+    return item?.schema===CONDITIONAL_MEAN_SCHEMA&&item?.fitted===true&&
+      Array.isArray(item.weights)&&item.weights.length===featureCount&&
+      item.weights.every(finite)&&finite(item.bias)&&
+      finite(item.training_target_min_pct)&&finite(item.training_target_max_pct)&&
+      item.training_target_min_pct<=item.training_target_max_pct&&
+      (positive
+        ?item.training_target_min_pct>0
+        :item.training_target_max_pct<=0)&&calibrationValid;
+  };
   if (!Array.isArray(features) || !features.length || features.some(value => !finite(value)) ||
       model?.schema !== HURDLE_RETURN_HEAD_SCHEMA || model?.fitted !== true ||
       !Array.isArray(model.feature_mean) || !Array.isArray(model.feature_std) ||
@@ -649,6 +663,12 @@ export function predictHurdleExpectedNetReturn(features, model) {
     expected_net_return_pct: Number(expected),
     positive_net_return_mean_pct: Number(positiveMean),
     non_positive_net_return_mean_pct: Number(nonPositiveMean),
+    conditional_mean_calibration_applied:Boolean(
+      positiveMeanModel.conditional_mean_calibration?.fitted===true&&
+      nonPositiveMeanModel.conditional_mean_calibration?.fitted===true
+    ),
+    conditional_mean_calibration_schema:
+      positiveMeanModel.conditional_mean_calibration?.schema??null,
     positive_net_return_class_mean_pct:
       Number(model.positive_class_mean_net_return_pct),
     non_positive_net_return_class_mean_pct:
