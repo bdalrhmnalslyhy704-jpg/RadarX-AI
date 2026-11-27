@@ -704,6 +704,8 @@ async function main(){
       },
       policy:{
         ...NEURAL_CLOSURE_MARKET_DATA_POLICY,
+        candidate_universe_prefilter:
+          'CURRENT_BINANCE_SPOT_USDT_CRYPTO_PAIRS_EXCLUDING_KNOWN_BSTOCK_TOKENIZED_SECURITIES_WITHOUT_TOP_N_TRUNCATION_V2',
         paper_trading:true,real_order_execution:false
       },
       training_allowed:false,
