@@ -1408,7 +1408,7 @@ async function main(){
           minimumReturnTrades:20,
           minimumReturnWinRatePct:55,
           rankingScoreWeight:0.01,
-          rankingMinimumReturnGapPct:0.50,
+          rankingMinimumReturnGapPct:0.05,
           rankingPairStrategy:'PROFITABILITY_TOPK_V2',
           rankingRepresentation:'RAW_ORDERED_696_V1',
           // Preserve the ordered 24x29 history in the independent rank sidecar.
