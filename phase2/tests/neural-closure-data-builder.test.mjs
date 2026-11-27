@@ -67,10 +67,10 @@ test('candidate prefilter includes every currently eligible Spot USDT pair above
       priceChangePercent:'0'});
   }
   const result=selectBinanceSpotUsdtUniverse({symbols},tickers,{
-    minimumQuoteVolume:750_000,maxSymbols:200,includeAllEligible:true
+    minimumQuoteVolume:750_000,maxSymbols:300,includeAllEligible:true
   });
-  assert.equal(result.eligible.length,126);
-  assert.equal(result.selected.length,126);
+  assert.equal(result.eligible.length,212);
+  assert.equal(result.selected.length,212);
   assert.equal(result.selected.length,result.eligible.length);
   assert.equal(result.selected.some(item=>item.symbol==='BTCUSDT'),true);
   assert.equal(result.selected.some(item=>item.symbol==='LOWUSDT'),false);
@@ -86,7 +86,7 @@ test('candidate prefilter includes every currently eligible Spot USDT pair above
     'BINANCE_BSTOCK_TOKENIZED_SECURITIES_V3_2026_11_27');
   assert.throws(()=>selectBinanceSpotUsdtUniverse({symbols},tickers,{
     minimumQuoteVolume:750_000,maxSymbols:100,includeAllEligible:true
-  }),/ELIGIBLE_UNIVERSE_EXCEEDS_CONFIGURED_MAX_SYMBOLS:126:100/);
+  }),/ELIGIBLE_UNIVERSE_EXCEEDS_CONFIGURED_MAX_SYMBOLS:212:100/);
   const legacy=selectBinanceSpotUsdtUniverse({symbols},tickers,{
     minimumQuoteVolume:750_000,maxSymbols:100,includeAllEligible:false
   });
