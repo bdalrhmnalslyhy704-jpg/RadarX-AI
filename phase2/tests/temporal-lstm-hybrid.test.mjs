@@ -592,7 +592,7 @@ test('profitability Top-K rank pairs also order profitable candidates against ea
   assert.ok(built.pairs.every(pair=>{
     const high=rows[pair.high_index].realized_return_pct-0.30;
     const low=rows[pair.low_index].realized_return_pct-0.30;
-    return high>low&&high-low>=0.5&&
+    return high>low&&high-low>=options.minimumReturnGapPct&&
       (pair.pair_type==='POSITIVE_VS_NON_POSITIVE'
         ?high>0&&low<=0
         :pair.pair_type==='POSITIVE_VS_POSITIVE'&&high>0&&low>0);
