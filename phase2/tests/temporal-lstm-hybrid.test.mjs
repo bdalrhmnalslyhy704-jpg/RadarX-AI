@@ -1280,14 +1280,15 @@ test('ordered ranker selection fails closed unless the selected V6 candidate bea
     best_validation_pairwise_accuracy_pct:66+index,
     logistic_validation_pairwise_accuracy_pct:64+index,
     best_validation_pairwise_log_loss:0.60-index*0.005,
-    logistic_validation_pairwise_log_loss:0.62-index*0.005
+    logistic_validation_pairwise_log_loss:0.62-index*0.005,
+    epoch_checkpoint_selected:true
   }));
   const rankHead={
     schema:'RADARX_TCN_LSTM_INDEPENDENT_ORDERED_696_RETURN_RANKER_V1',
     representation:'RAW_ORDERED_696_V1',
     internal_training_validation:{
       schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6',
-      method:'THREE_FOLD_NESTED_PARETO_DUAL_METRIC_LOGISTIC_ANCHORED_VALIDATION_V2',
+      method:'THREE_FOLD_NESTED_PARETO_CHECKPOINT_REQUIRED_LOGISTIC_ANCHORED_VALIDATION_V3',
       epoch_checkpoint_selection_policy:'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1',
       fold_count:3,
       selected_candidate_qualified:true,
@@ -1302,7 +1303,8 @@ test('ordered ranker selection fails closed unless the selected V6 candidate bea
       candidate_grid:[{
         temporal_block_count:2,l2:0.05,best_epoch:11,
         parameterization_id:'TEMPORAL_BLOCK_TIED_2X29_V1',
-        parameter_count:58,fold_results:foldResults
+        parameter_count:58,epoch_checkpoint_selected_count:3,
+        all_epoch_checkpoints_selected:true,fold_results:foldResults
       }]
     }
   };
@@ -1321,6 +1323,16 @@ test('ordered ranker selection fails closed unless the selected V6 candidate bea
     'ACCURACY_FIRST_THEN_LOG_LOSS';
   assert.equal(hasFoldStableOrderedRankerQualification(missingParetoPolicy,'RAW_ORDERED_696_V1'),false,
     'the runtime qualification gate must reject an undeclared checkpoint policy');
+
+  const noParetoCheckpoint=structuredClone(rankHead);
+  noParetoCheckpoint.internal_training_validation.candidate_grid[0]
+    .all_epoch_checkpoints_selected=false;
+  noParetoCheckpoint.internal_training_validation.candidate_grid[0]
+    .epoch_checkpoint_selected_count=2;
+  noParetoCheckpoint.internal_training_validation.candidate_grid[0]
+    .fold_results[1].epoch_checkpoint_selected=false;
+  assert.equal(hasFoldStableOrderedRankerQualification(noParetoCheckpoint,'RAW_ORDERED_696_V1'),false,
+    'all three nested folds must select a genuine Pareto checkpoint before ranker qualification');
 
   const accuracyRegression=structuredClone(rankHead);
   accuracyRegression.internal_training_validation.candidate_grid[0]
@@ -1505,7 +1517,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.ok(result.candidates.every(item=>{
     const internal=item.ranking_head?.internal_training_validation;
     return internal?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6'&&
-      internal?.method==='THREE_FOLD_NESTED_PARETO_DUAL_METRIC_LOGISTIC_ANCHORED_VALIDATION_V2'&&
+      internal?.method==='THREE_FOLD_NESTED_PARETO_CHECKPOINT_REQUIRED_LOGISTIC_ANCHORED_VALIDATION_V3'&&
       internal?.epoch_checkpoint_selection_policy===
         'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1'&&
       internal?.epoch_selection_policy===
@@ -2434,9 +2446,20 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
   const v6Tuning=v6Artifact.training_provenance.internal_training_validation;
   assert.equal(v6Tuning.fold_count,3);
   assert.equal(v6Tuning.method,
-    'THREE_FOLD_NESTED_PARETO_DUAL_METRIC_LOGISTIC_ANCHORED_VALIDATION_V2');
+    'THREE_FOLD_NESTED_PARETO_CHECKPOINT_REQUIRED_LOGISTIC_ANCHORED_VALIDATION_V3');
   assert.equal(v6Tuning.epoch_checkpoint_selection_policy,
-    'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1');
+    'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1');  for(const candidate of v6Tuning.candidate_grid){
+    const selectedCount=candidate.fold_results.filter(fold=>
+      fold.epoch_checkpoint_selected===true).length;
+    assert.equal(candidate.epoch_checkpoint_selected_count,selectedCount);
+    assert.equal(candidate.all_epoch_checkpoints_selected,selectedCount===v6Tuning.fold_count);
+  }
+  if(v6Tuning.selected_candidate_qualified){
+    assert.equal(v6Tuning.candidate_grid.find(candidate=>
+      candidate.temporal_block_count===v6Tuning.selected_temporal_block_count&&
+      candidate.l2===v6Tuning.selected_l2)?.all_epoch_checkpoints_selected,true);
+  }
+
   assert.equal(v6Tuning.schema,
     'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6');
   assert.equal(v6Tuning.selected_candidate_qualified,
