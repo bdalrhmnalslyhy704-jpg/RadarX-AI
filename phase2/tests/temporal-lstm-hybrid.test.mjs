@@ -2431,6 +2431,10 @@ test('ordered 696-feature pairwise ranker fits training-only normalization and l
     delete copy.orderedRankingHeadWeights;
     delete copy.orderedRankingFeatureMean;
     delete copy.orderedRankingFeatureStd;
+    delete copy.orderedRankingAnchorWeights;
+    delete copy.orderedRankingAnchorFeatureMean;
+    delete copy.orderedRankingAnchorFeatureStd;
+    delete copy.orderedRankingAnchorBias;
     return copy;
   };
   assert.deepEqual(withoutRankFields(profile.model),withoutRankFields(classifierOnly.model),
@@ -2537,7 +2541,11 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
       rankingRepresentation:ranker.model_state.rankingRepresentation,
       orderedRankingHeadWeights:[...ranker.model_state.orderedRankingHeadWeights],
       orderedRankingFeatureMean:[...ranker.model_state.orderedRankingFeatureMean],
-      orderedRankingFeatureStd:[...ranker.model_state.orderedRankingFeatureStd]
+      orderedRankingFeatureStd:[...ranker.model_state.orderedRankingFeatureStd],
+      orderedRankingAnchorWeights:[...ranker.model_state.orderedRankingAnchorWeights],
+      orderedRankingAnchorFeatureMean:[...ranker.model_state.orderedRankingAnchorFeatureMean],
+      orderedRankingAnchorFeatureStd:[...ranker.model_state.orderedRankingAnchorFeatureStd],
+      orderedRankingAnchorBias:Number(ranker.model_state.orderedRankingAnchorBias)
     },
     training:{
       return_ranking:{
@@ -2643,6 +2651,14 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
     ranker.model_state.orderedRankingFeatureMean);
   assert.deepEqual(withFrozenRanker.model.orderedRankingFeatureStd,
     ranker.model_state.orderedRankingFeatureStd);
+  assert.deepEqual(withFrozenRanker.model.orderedRankingAnchorWeights,
+    ranker.model_state.orderedRankingAnchorWeights);
+  assert.deepEqual(withFrozenRanker.model.orderedRankingAnchorFeatureMean,
+    ranker.model_state.orderedRankingAnchorFeatureMean);
+  assert.deepEqual(withFrozenRanker.model.orderedRankingAnchorFeatureStd,
+    ranker.model_state.orderedRankingAnchorFeatureStd);
+  assert.equal(withFrozenRanker.model.orderedRankingAnchorBias,
+    ranker.model_state.orderedRankingAnchorBias);
 
   const withoutRankFields=model=>{
     const copy=structuredClone(model);
@@ -2653,6 +2669,10 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
     delete copy.orderedRankingHeadWeights;
     delete copy.orderedRankingFeatureMean;
     delete copy.orderedRankingFeatureStd;
+    delete copy.orderedRankingAnchorWeights;
+    delete copy.orderedRankingAnchorFeatureMean;
+    delete copy.orderedRankingAnchorFeatureStd;
+    delete copy.orderedRankingAnchorBias;
     return copy;
   };
   assert.deepEqual(withoutRankFields(withFrozenRanker.model),withoutRankFields(classifierOnly.model),
