@@ -1116,6 +1116,7 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
     (value-rankingMeans[index])/rankingStds[index]
   );
   let rankingScore=0;
+  let rankingAnchorScore=0;
   for(let index=0;index<TCN_LSTM_RANKING_FEATURE_COUNT;index++)
     rankingScore+=rankingWeights[index]*normalizedRankingFeatures[index];
   rankingScore=clamp(rankingScore,-LOGIT_LIMIT,LOGIT_LIMIT);
@@ -1144,7 +1145,30 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
     rankingScore=0;
     for(let index=0;index<TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT;index++)
       rankingScore+=orderedWeights[index]*rankingScoreFeatures[index];
-    rankingScore=clamp(rankingScore,-LOGIT_LIMIT,LOGIT_LIMIT);
+    const anchorWeights=model.orderedRankingAnchorWeights;
+    const anchorMeans=model.orderedRankingAnchorFeatureMean;
+    const anchorStds=model.orderedRankingAnchorFeatureStd;
+    const hasAnchor=anchorWeights!==undefined||anchorMeans!==undefined||
+      anchorStds!==undefined||model.orderedRankingAnchorBias!==undefined;
+    if(hasAnchor){
+      if(!Array.isArray(anchorWeights)||
+        anchorWeights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+        anchorWeights.some(value=>!finite(value))||
+        !Array.isArray(anchorMeans)||
+        anchorMeans.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+        anchorMeans.some(value=>!finite(value))||
+        !Array.isArray(anchorStds)||
+        anchorStds.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+        anchorStds.some(value=>!finite(value)||value<=0)||
+        !finite(model.orderedRankingAnchorBias))
+        throw new TypeError('TCN_LSTM_ORDERED_RANKING_LOGISTIC_ANCHOR_STATE_INVALID');
+      rankingAnchorScore=Number(model.orderedRankingAnchorBias);
+      for(let index=0;index<TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT;index++)
+        rankingAnchorScore+=anchorWeights[index]*
+          ((orderedFeatures[index]-anchorMeans[index])/anchorStds[index]);
+      rankingAnchorScore=clamp(rankingAnchorScore,-LOGIT_LIMIT,LOGIT_LIMIT);
+    }
+    rankingScore=clamp(rankingAnchorScore+rankingScore,-LOGIT_LIMIT,LOGIT_LIMIT);
   }else if(rankingRepresentation!=='LATENT_MULTI_SCALE_V2'){
     throw new TypeError('TCN_LSTM_RANKING_REPRESENTATION_INVALID');
   }
@@ -1154,6 +1178,8 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
   const rankingLogit = rankingScore;
   return {
     probability, logit, ranking_score: rankingScore, ranking_logit: rankingLogit,
+    ranking_anchor_score:rankingRepresentation==='RAW_ORDERED_696_V1'
+      ?(finite(model.orderedRankingAnchorBias)?rankingAnchorScore:null):null,
     ranking_representation:rankingRepresentation,
     ranking_score_feature_count:rankingScoreFeatures.length,
     residual_logit: residualLogit,
@@ -4677,6 +4703,24 @@ export function predictTcnLstmHybridRankingLogit(sequence,profile){
 export function predictTcnLstmHybridRankingAnchorLogit(sequence, profile) {
   if (!profile?.model || !profile?.baseline_fit)
     throw new TypeError('TCN_LSTM_PROFILE_NOT_TRAINED');
+  const model=profile.model;
+  if(Array.isArray(model.orderedRankingAnchorWeights)){
+    const features=buildTcnLstmFlattenedFeatures(sequence);
+    const weights=model.orderedRankingAnchorWeights;
+    const means=model.orderedRankingAnchorFeatureMean;
+    const scales=model.orderedRankingAnchorFeatureStd;
+    if(weights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      !Array.isArray(means)||means.length!==weights.length||
+      !Array.isArray(scales)||scales.length!==weights.length||
+      weights.some(value=>!finite(value))||means.some(value=>!finite(value))||
+      scales.some(value=>!finite(value)||value<=0)||
+      !finite(model.orderedRankingAnchorBias))
+      throw new TypeError('TCN_LSTM_ORDERED_RANKING_LOGISTIC_ANCHOR_STATE_INVALID');
+    let score=Number(model.orderedRankingAnchorBias);
+    for(let index=0;index<features.length;index++)
+      score+=weights[index]*((features[index]-means[index])/scales[index]);
+    return clamp(score,-LOGIT_LIMIT,LOGIT_LIMIT);
+  }
   return predictTcnLstmLogisticLogit(sequence, profile.baseline_fit);
 }
 
