@@ -666,7 +666,7 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
     'ZERO_RESIDUAL_CORRECTION_PENALTY_V1');
   assert.equal(fitted.training.internal_training_validation.logistic_baseline_config
     .ranker_initialization_method,
-    'FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_THEN_RETURN_PAIRWISE_FINE_TUNING_V1');
+    'FOLD_LOCAL_LOGISTIC_RAW_SCORE_PLUS_ZERO_INITIALIZED_TEMPORAL_RETURN_RESIDUAL_V1');
   assert.equal(fitted.training.validation_or_holdout_used,false);
   assert.ok(fitted.training.internal_training_validation.candidate_grid.every(candidate=>
     candidate.fold_results.every(fold=>fold.epoch_initial_matches_logistic_anchor===true&&
