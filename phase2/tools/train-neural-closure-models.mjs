@@ -1550,7 +1550,15 @@ async function main(){
           selectedFit?.model?.executionHurdleReturnHeads?.LOGIT_CONTEXT_AUGMENTED?.fitted===true&&
           selectedFit?.model?.executionHurdleReturnHeads?.POOLED_ONLY?.fitted===true&&
           selectedFit?.model?.executionHurdleReturnHeads?.LOGIT_CONTEXT_AUGMENTED?.probability_calibration?.fitted===true&&
-          selectedFit?.model?.executionHurdleReturnHeads?.POOLED_ONLY?.probability_calibration?.fitted===true;
+          selectedFit?.model?.executionHurdleReturnHeads?.POOLED_ONLY?.probability_calibration?.fitted===true&&
+          selectedFit?.model?.executionHurdleReturnHeads?.LOGIT_CONTEXT_AUGMENTED
+            ?.positive_conditional_mean_model?.conditional_mean_calibration?.fitted===true&&
+          selectedFit?.model?.executionHurdleReturnHeads?.LOGIT_CONTEXT_AUGMENTED
+            ?.non_positive_conditional_mean_model?.conditional_mean_calibration?.fitted===true&&
+          selectedFit?.model?.executionHurdleReturnHeads?.POOLED_ONLY
+            ?.positive_conditional_mean_model?.conditional_mean_calibration?.fitted===true&&
+          selectedFit?.model?.executionHurdleReturnHeads?.POOLED_ONLY
+            ?.non_positive_conditional_mean_model?.conditional_mean_calibration?.fitted===true;
         if(hurdleHeadsAvailable){
           const hurdleArtifact=createHurdleV2Artifact({
             fit:selectedFit,selection,
