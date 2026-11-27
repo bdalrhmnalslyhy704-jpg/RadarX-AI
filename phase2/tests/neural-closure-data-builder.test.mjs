@@ -54,6 +54,11 @@ test('market-data policy records the real legacy and all-universe cohort provena
   ),'utf8');
   assert.equal((collector.match(/policy:buildNeuralClosureMarketDataPolicy\(/g)||[]).length,2,
     'both legacy and locked cohort outputs must serialize the policy for their actual collection mode');
+  const workflow=await readFile(new URL(
+    '../../.github/workflows/neural-closure-prospective-cohort.yml',import.meta.url
+  ),'utf8');
+  assert.match(workflow,/MARKET_DATA_POLICY_UNIVERSE_PROVENANCE_MISMATCH/,
+    'the locked cohort gate must compare serialized policy metadata with captured universe provenance');
 });
 const makeCandle=(openTime,intervalMs,{base=100,step=0,volume=1000,trades=100,taker=0.56}={})=>{
   const close=base+step;
