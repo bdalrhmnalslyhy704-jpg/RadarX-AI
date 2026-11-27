@@ -109,6 +109,29 @@ before(async () => {
     disjoint_sample_identities:true,source_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
     validation_or_holdout_used:false
   };
+  const meanCalibrationProvenance={
+    training_partition:calibrationProvenance.training_partition,
+    calibration_partition:calibrationProvenance.calibration_partition,
+    training_rows:calibrationProvenance.training_rows,
+    training_positive_rows:calibrationProvenance.training_positive_rows,
+    training_non_positive_rows:calibrationProvenance.training_non_positive_rows,
+    training_max_at:calibrationProvenance.training_max_at,
+    training_max_resolved_at:calibrationProvenance.training_max_resolved_at,
+    calibration_rows:calibrationProvenance.calibration_rows,
+    calibration_positive_rows:calibrationProvenance.calibration_positive_rows,
+    calibration_non_positive_rows:calibrationProvenance.calibration_non_positive_rows,
+    calibration_min_at:calibrationProvenance.calibration_min_at,
+    purged_rows:calibrationProvenance.purged_rows,
+    purged_groups:calibrationProvenance.purged_groups,
+    horizon_ms:calibrationProvenance.horizon_ms,
+    resolved_label_gap_ms:calibrationProvenance.resolved_label_gap_ms,
+    training_decision_time_gap_ms:calibrationProvenance.training_decision_time_gap_ms,
+    chronology_valid:calibrationProvenance.chronology_valid,
+    complete_decision_groups:calibrationProvenance.complete_decision_groups,
+    disjoint_sample_identities:calibrationProvenance.disjoint_sample_identities,
+    source_partition:calibrationProvenance.source_partition,
+    validation_or_holdout_used:false
+  };
   const attachMeanCalibrations=(head,features)=>{
     const predictions=features.map(row=>predictHurdleExpectedNetReturn(row,head));
     const positiveIndexes=returns.map((value,index)=>value>0?index:-1)
@@ -120,14 +143,14 @@ before(async () => {
         positiveIndexes.map(index=>predictions[index].positive_net_return_mean_pct),
         positiveIndexes.map(index=>returns[index]),
         {positiveClass:true,iterations:200,regularization:0.05}
-      ),...calibrationProvenance
+      ),...meanCalibrationProvenance
     };
     head.non_positive_conditional_mean_model.conditional_mean_calibration={
       ...fitHurdleConditionalMeanCalibration(
         nonPositiveIndexes.map(index=>predictions[index].non_positive_net_return_mean_pct),
         nonPositiveIndexes.map(index=>returns[index]),
         {positiveClass:false,iterations:200,regularization:0.05}
-      ),...calibrationProvenance
+      ),...meanCalibrationProvenance
     };
   };
   attachMeanCalibrations(contextual,rows44);
