@@ -52,8 +52,8 @@ test('market-data policy records the real legacy and all-universe cohort provena
   const collector=await readFile(new URL(
     '../tools/build-neural-closure-dataset.mjs',import.meta.url
   ),'utf8');
-  assert.match(collector,/policy:buildNeuralClosureMarketDataPolicy\(\{/,
-    'the serialized dataset policy must come from the actual collector mode');
+  assert.equal((collector.match(/policy:buildNeuralClosureMarketDataPolicy\(/g)||[]).length,2,
+    'both legacy and locked cohort outputs must serialize the policy for their actual collection mode');
 });
 const makeCandle=(openTime,intervalMs,{base=100,step=0,volume=1000,trades=100,taker=0.56}={})=>{
   const close=base+step;
