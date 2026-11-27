@@ -357,6 +357,8 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
         :'TWO_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION')||
       tuning?.outer_validation_or_holdout_used!==false||
       tuning?.model_selection_partition_used!==false||
+      trainingObjective==='PAIRWISE_MARGIN_HINGE_V1'&&
+        (tuning?.training_objective!==trainingObjective||tuning?.ranking_margin!==rankingMargin)||
       tuning?.chronology_valid!==true||
       isThreeFoldV6&&(tuning?.selection_rule!=='REQUIRE_STRICT_POSITIVE_LOGISTIC_MARGINS_FOR_PAIRWISE_ACCURACY_AND_LOG_LOSS_IN_EVERY_PURGED_TRAINING_FOLD'||
         tuning?.fold_stable_dual_metric_candidate_count!==robustTuningCandidates.length||
