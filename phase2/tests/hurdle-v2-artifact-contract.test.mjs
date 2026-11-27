@@ -292,6 +292,16 @@ test('01. deterministic fixture actually trains both Hurdle heads', () => {
   assert.equal(fixture.fit.model.executionHurdleReturnHeads.POOLED_ONLY.fitted, true);
   for(const key of ['LOGIT_CONTEXT_AUGMENTED','POOLED_ONLY']){
     const head=fixture.fit.model.executionHurdleReturnHeads[key];
+    assert.ok(head.final_log_loss<=head.initial_log_loss+1e-8,
+      'the learned positive-return probability head cannot be worse than the empirical-prior-only classifier');
+    assert.equal(typeof head.empirical_prior_baseline_selected,'boolean');
+    for(const classMean of [
+      head.positive_conditional_mean_model,head.non_positive_conditional_mean_model
+    ]){
+      assert.ok(classMean.final_huber_loss<=classMean.initial_huber_loss+1e-8,
+        'each conditional mean head cannot be worse than its constant class-mean predictor');
+      assert.equal(typeof classMean.constant_mean_baseline_selected,'boolean');
+    }
     assert.equal(head.positive_conditional_mean_model
       .conditional_mean_calibration.fitted,true);
     assert.equal(head.non_positive_conditional_mean_model
@@ -470,6 +480,45 @@ test('05e. class-conditional mean calibrator enforces outcome class and returns 
   assert.equal(insufficient.validation_or_holdout_used,false);
 });
 
+test('05a. probability calibration keeps the identity map when it cannot improve the prior',()=>{
+  const identity=fitHurdlePositiveReturnCalibration(
+    Array(8).fill(0.5),[1,1,1,1,-1,-1,-1,-1],
+    {minimumSamples:8,minimumPositive:4,minimumNegative:4,iterations:60}
+  );
+  assert.equal(identity.fitted,true);
+  assert.equal(identity.slope,1);
+  assert.equal(identity.intercept,0);
+  assert.equal(identity.identity_selected,true);
+  assert.ok(identity.final_objective<=identity.initial_objective+1e-10);
+
+  const informative=fitHurdlePositiveReturnCalibration(
+    Array(96).fill(0.65),Array.from({length:96},(_,i)=>i%3===0?1:-1),
+    {minimumSamples:30,minimumPositive:8,minimumNegative:8,iterations:800}
+  );
+  assert.equal(informative.fitted,true);
+  assert.equal(typeof informative.identity_selected,'boolean');
+  assert.ok(informative.final_objective<=informative.initial_objective+1e-9,
+    'Platt calibration cannot replace raw probabilities with a worse fit');
+});
+
+test('05aa. Hurdle heads preserve empirical-prior and constant-mean baselines when features have no information',()=>{
+  const rows=Array.from({length:24},()=>Array(4).fill(0));
+  const returns=Array.from({length:24},(_,i)=>i<12?1.25+i*0.01:-0.9+(i-12)*0.01);
+  const head=fitHurdleReturnHead(rows,returns,{
+    learningRate:0.1,epochs:60,l2:0.05,minimumClassRows:8
+  });
+  assert.equal(head.empirical_prior_baseline_selected,true);
+  assert.ok(head.final_log_loss<=head.initial_log_loss+1e-10);
+  assert.ok(head.weights.every(value=>value===0));
+  for(const classMean of [
+    head.positive_conditional_mean_model,head.non_positive_conditional_mean_model
+  ]){
+    assert.equal(classMean.constant_mean_baseline_selected,true);
+    assert.ok(classMean.final_huber_loss<=classMean.initial_huber_loss+1e-10);
+    assert.ok(classMean.weights.every(value=>value===0));
+  }
+});
+
 test('05c. artifact verifier rejects either missing class-conditional mean calibrator',()=>{
   for(const [key,field] of [
     ['LOGIT_CONTEXT_AUGMENTED','positive_conditional_mean_model'],
@@ -484,6 +533,23 @@ test('05c. artifact verifier rejects either missing class-conditional mean calib
     assert.equal(result.valid,false);
     assert.match(result.reason,/HURDLE_V2_CONDITIONAL_MEAN_CALIBRATION_INVALID/);
   }
+});
+
+test('05ab. Hurdle artifact verifier rejects a calibration or mean head worse than its base predictor',()=>{
+  const worseProbabilityCalibration=structuredClone(artifact);
+  const probabilityHead=worseProbabilityCalibration.contextual_head_parameters;
+  probabilityHead.probability_calibration.final_objective=
+    probabilityHead.probability_calibration.initial_objective+0.25;
+  const invalidProbability=verifyHurdleV2Artifact(resealArtifact(worseProbabilityCalibration));
+  assert.equal(invalidProbability.valid,false);
+  assert.match(invalidProbability.reason,/HURDLE_V2_HEAD_INVALID:contextual/);
+
+  const worseMeanHead=structuredClone(artifact);
+  const conditional=worseMeanHead.contextual_head_parameters.positive_conditional_mean_model;
+  conditional.final_huber_loss=conditional.initial_huber_loss+0.25;
+  const invalidMean=verifyHurdleV2Artifact(resealArtifact(worseMeanHead));
+  assert.equal(invalidMean.valid,false);
+  assert.match(invalidMean.reason,/HURDLE_V2_CONDITIONAL_MEAN_INVALID:contextual:positive/);
 });
 
 test('05d. conditional mean calibration is applied at inference but remains inside training class bounds',()=>{

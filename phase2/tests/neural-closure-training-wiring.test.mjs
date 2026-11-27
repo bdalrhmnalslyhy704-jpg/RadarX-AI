@@ -408,6 +408,16 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'encoder and execution-head training rows must satisfy a strict forward-label purge');
   assert.match(temporal,/fitTcnLstmExecutionRegressionHeads\(\s*executionHeadRowsWithLogisticContext,executionHeadRowsWithLogisticContext,\s*item\.fit\.model,anchor/,
     'execution-head latent features must be fitted only after the dual inner gate on a later purged block');
+  assert.match(temporal,/const dataLoss=normalizedVectors\.reduce/,
+    'execution-head selection must score the same normalized Huber data objective used by the model');
+  assert.match(temporal,/return dataLoss\+0\.5\*l2\*penalty/,
+    'execution Huber model selection must include the L2 penalty present in its gradient');
+  assert.match(temporal,/bestLoss=initial/,
+    'the constant normalized target-mean predictor must remain the incumbent');
+  assert.match(temporal,/l2_penalty_in_objective:true/,
+    'the exported execution-head diagnostics must disclose the regularized objective');
+  assert.match(temporal,/constant_mean_baseline_selected:/,
+    'execution-head training must state when its constant baseline remains selected');
   assert.match(temporal,/const stageOneQualified=evaluated\.filter/,
     'execution heads must be skipped for candidates that fail inner Brier or independent ranking');
   assert.match(temporal,/item\.brier_improvement>requiredImprovement/);
