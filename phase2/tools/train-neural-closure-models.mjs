@@ -1408,13 +1408,13 @@ async function main(){
           minimumReturnTrades:20,
           minimumReturnWinRatePct:55,
           rankingScoreWeight:0.01,
-          rankingMinimumReturnGapPct:0.50,
-          rankingPairStrategy:'PROFITABILITY_BOUNDARY_V1',
+          rankingMinimumReturnGapPct:0.05,
+          rankingPairStrategy:'PROFITABILITY_TOPK_V2',
           rankingRepresentation:'RAW_ORDERED_696_V1',
-          // Preserve the entire ordered 24x29 history in the independent rank sidecar.
-          // Its scaler and weights fit only the earlier purged training rows.
-          // Net-profitability pair labels, 30 bps cost and 0.50pp gap remain fixed.
-          // The temporal classifier remains pure Brier and is not updated by this ranker.
+          // Preserve the ordered 24x29 history in the independent rank sidecar.
+          // Train positive-vs-non-positive separation and ordering among profitable
+          // Top-1 candidates, using only the earlier purged training rows.
+          // Keep the 30 bps cost, 0.50pp pair-gap floor and pure-Brier classifier fixed.
           rankingPairsPerTimestamp:16,
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,

@@ -1643,7 +1643,7 @@ export function buildTcnLstmReturnRankingPairs(trainingRows,rankingRows,{
   if(!finite(roundTripCostBps)||roundTripCostBps<0||roundTripCostBps>300||
     !finite(minimumReturnGapPct)||minimumReturnGapPct<0||
     !Number.isInteger(maxPairsPerTimestamp)||maxPairsPerTimestamp<1||maxPairsPerTimestamp>32||
-    !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1'].includes(pairStrategy))
+    !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1','PROFITABILITY_TOPK_V2'].includes(pairStrategy))
     throw new TypeError('TCN_LSTM_RANKING_CONFIGURATION_INVALID');
   const evidenceById=new Map();
   for(const row of rankingRows){
@@ -1680,10 +1680,65 @@ export function buildTcnLstmReturnRankingPairs(trainingRows,rankingRows,{
     if(positive.length===items.length)allPositiveGroups++;
     if(positive.length&&nonPositive.length)mixedDecisionGroups++;
 
+    if(pairStrategy==='PROFITABILITY_TOPK_V2'){
+      // Top-K training has two distinct ranking duties:
+      // (1) profitable opportunities must outrank non-profitable candidates;
+      // (2) among profitable opportunities, the higher net return must rank first.
+      // The pair budget is stratified so neither duty silently consumes the full cohort.
+      const boundaryCandidates=[];
+      for(const better of positive)for(const worse of nonPositive){
+        const gap=better.net_return_pct-worse.net_return_pct;
+        if(gap>=minimumReturnGapPct)
+          boundaryCandidates.push({high_index:better.index,low_index:worse.index,
+            high_id:better.id,low_id:worse.id,return_gap_pct:Number(gap.toFixed(8)),
+            decision_at:Number(at),pair_type:'POSITIVE_VS_NON_POSITIVE'});
+      }
+      const rankedPositive=[...positive].sort((a,b)=>
+        b.net_return_pct-a.net_return_pct||a.id.localeCompare(b.id));
+      const profitableOrderCandidates=[];
+      for(let high=0;high<rankedPositive.length;high++)
+        for(let low=high+1;low<rankedPositive.length;low++){
+          const better=rankedPositive[high],worse=rankedPositive[low];
+          const gap=better.net_return_pct-worse.net_return_pct;
+          if(gap>=minimumReturnGapPct)
+            profitableOrderCandidates.push({high_index:better.index,low_index:worse.index,
+              high_id:better.id,low_id:worse.id,return_gap_pct:Number(gap.toFixed(8)),
+              decision_at:Number(at),pair_type:'POSITIVE_VS_POSITIVE'});
+        }
+      const orderCandidates=(a,b)=>b.return_gap_pct-a.return_gap_pct||
+        a.high_id.localeCompare(b.high_id)||a.low_id.localeCompare(b.low_id);
+      boundaryCandidates.sort(orderCandidates);
+      profitableOrderCandidates.sort(orderCandidates);
+      const spreadSample=(candidates,limit)=>{
+        const count=Math.min(limit,candidates.length);
+        return Array.from({length:count},(_,index)=>
+          candidates[Math.floor((index+0.5)*candidates.length/count)]);
+      };
+      const boundaryBudget=Math.ceil(maxPairsPerTimestamp/2);
+      const profitableOrderBudget=Math.floor(maxPairsPerTimestamp/2);
+      const selectedBoundary=spreadSample(boundaryCandidates,boundaryBudget);
+      const selectedProfitableOrder=spreadSample(
+        profitableOrderCandidates,profitableOrderBudget
+      );
+      const selectedKeys=new Set([...selectedBoundary,...selectedProfitableOrder].map(pair=>
+        pair.high_id+'\\u0000'+pair.low_id
+      ));
+      let remaining=maxPairsPerTimestamp-selectedBoundary.length-selectedProfitableOrder.length;
+      if(remaining>0){
+        const refill=[...boundaryCandidates,...profitableOrderCandidates]
+          .filter(pair=>!selectedKeys.has(pair.high_id+'\\u0000'+pair.low_id))
+          .sort(orderCandidates);
+        for(const pair of refill.slice(0,remaining)){
+          if(pair.pair_type==='POSITIVE_VS_NON_POSITIVE')selectedBoundary.push(pair);
+          else selectedProfitableOrder.push(pair);
+        }
+      }
+      pairs.push(...selectedBoundary,...selectedProfitableOrder);
+      continue;
+    }
+
     if(pairStrategy==='PROFITABILITY_BOUNDARY_V1'){
-      // Train only on the economic decision boundary: a positive net-return
-      // opportunity must outrank a non-positive one in the same 15m cohort.
-      // Groups with no positive net-return opportunity contribute no rank pair.
+      // Legacy boundary-only policy retained for exact historical reproduction.
       const candidates=[];
       for(const better of positive)for(const worse of nonPositive){
         const gap=better.net_return_pct-worse.net_return_pct;
@@ -1722,7 +1777,9 @@ export function buildTcnLstmReturnRankingPairs(trainingRows,rankingRows,{
   return {
     schema:pairStrategy==='PROFITABILITY_BOUNDARY_V1'
       ?'RADARX_TCN_LSTM_PROFITABILITY_BOUNDARY_RANK_PAIRS_V1'
-      :'RADARX_TCN_LSTM_TRAINING_RETURN_RANK_PAIRS_V1',
+      :pairStrategy==='PROFITABILITY_TOPK_V2'
+        ?'RADARX_TCN_LSTM_PROFITABILITY_TOPK_RANK_PAIRS_V2'
+        :'RADARX_TCN_LSTM_TRAINING_RETURN_RANK_PAIRS_V1',
     pair_strategy:pairStrategy,
     source_partition:'TRAINING_PARTITION_ONLY',
     round_trip_cost_bps:Number(roundTripCostBps),
@@ -1735,7 +1792,11 @@ export function buildTcnLstmReturnRankingPairs(trainingRows,rankingRows,{
     all_positive_groups:allPositiveGroups,
     comparison_pairs:pairs.length,
     positive_vs_non_positive_pairs:pairStrategy==='PROFITABILITY_BOUNDARY_V1'
-      ?pairs.length:null,
+      ?pairs.length
+      :pairStrategy==='PROFITABILITY_TOPK_V2'
+        ?pairs.filter(pair=>pair.pair_type==='POSITIVE_VS_NON_POSITIVE').length:null,
+    positive_vs_positive_pairs:pairStrategy==='PROFITABILITY_TOPK_V2'
+      ?pairs.filter(pair=>pair.pair_type==='POSITIVE_VS_POSITIVE').length:0,
     pairs
   };
 }
@@ -1753,8 +1814,10 @@ export function summarizeTcnLstmPairwiseReturnRanking(rows,probabilities,{
   try{built=buildTcnLstmReturnRankingPairs(rows,rows,{
     roundTripCostBps,minimumReturnGapPct,maxPairsPerTimestamp,pairStrategy
   });}catch(error){return unavailable(String(error?.message||error));}
-  if(!built.comparison_pairs)return unavailable(pairStrategy==='PROFITABILITY_BOUNDARY_V1'
-    ?'NO_PROFITABILITY_BOUNDARY_PAIRS':'NO_MATURED_WITHIN_TIMESTAMP_RETURN_PAIRS');
+  if(!built.comparison_pairs)return unavailable(
+    pairStrategy==='PROFITABILITY_BOUNDARY_V1'?'NO_PROFITABILITY_BOUNDARY_PAIRS':
+    pairStrategy==='PROFITABILITY_TOPK_V2'?'NO_PROFITABILITY_TOPK_PAIRS':
+    'NO_MATURED_WITHIN_TIMESTAMP_RETURN_PAIRS');
   let loss=0,correct=0;
   for(const pair of built.pairs){
     const item=tcnLstmPairwiseReturnRankingLoss(
@@ -1763,17 +1826,22 @@ export function summarizeTcnLstmPairwiseReturnRanking(rows,probabilities,{
   }
   return {schema:pairStrategy==='PROFITABILITY_BOUNDARY_V1'
       ?'RADARX_TCN_LSTM_PROFITABILITY_BOUNDARY_RANKING_METRICS_V1'
-      :'RADARX_TCN_LSTM_PAIRWISE_RANKING_METRICS_V1',
+      :pairStrategy==='PROFITABILITY_TOPK_V2'
+        ?'RADARX_TCN_LSTM_PROFITABILITY_TOPK_RANKING_METRICS_V2'
+        :'RADARX_TCN_LSTM_PAIRWISE_RANKING_METRICS_V1',
     status:'AVAILABLE',sample_count:rows.length,decision_group_count:built.decision_group_count,
     comparison_pairs:built.comparison_pairs,pairwise_log_loss:Number((loss/built.comparison_pairs).toFixed(8)),
     pairwise_accuracy_pct:Number((100*correct/built.comparison_pairs).toFixed(4)),
     pair_strategy:pairStrategy,
     positive_vs_non_positive_pairs:built.positive_vs_non_positive_pairs,
+    positive_vs_positive_pairs:built.positive_vs_positive_pairs??0,
     positive_opportunity_groups:built.positive_opportunity_groups,
     mixed_decision_groups:built.mixed_decision_groups,
     source:pairStrategy==='PROFITABILITY_BOUNDARY_V1'
       ?'POSITIVE_NET_RETURN_VS_NON_POSITIVE_WITHIN_SIMULTANEOUS_DECISION_TIMESTAMP'
-      :'REALIZED_RETURN_WITHIN_SIMULTANEOUS_DECISION_TIMESTAMP',
+      :pairStrategy==='PROFITABILITY_TOPK_V2'
+        ?'POSITIVE_VS_NON_POSITIVE_AND_WITHIN_POSITIVE_NET_RETURN_ORDER_WITHIN_SIMULTANEOUS_DECISION_TIMESTAMP'
+        :'REALIZED_RETURN_WITHIN_SIMULTANEOUS_DECISION_TIMESTAMP',
     diagnostic_only:true,holdout_values_used:false};
 }
 /** Rank realized-return pairs directly from uncompressed forward logits. */
@@ -1791,8 +1859,10 @@ export function summarizeTcnLstmPairwiseLogitRanking(rows,logits,{
   try{built=buildTcnLstmReturnRankingPairs(rows,rows,{
     roundTripCostBps,minimumReturnGapPct,maxPairsPerTimestamp,pairStrategy
   });}catch(error){return unavailable(String(error?.message||error));}
-  if(!built.comparison_pairs)return unavailable(pairStrategy==='PROFITABILITY_BOUNDARY_V1'
-    ?'NO_PROFITABILITY_BOUNDARY_PAIRS':'NO_MATURED_WITHIN_TIMESTAMP_RETURN_PAIRS');
+  if(!built.comparison_pairs)return unavailable(
+    pairStrategy==='PROFITABILITY_BOUNDARY_V1'?'NO_PROFITABILITY_BOUNDARY_PAIRS':
+    pairStrategy==='PROFITABILITY_TOPK_V2'?'NO_PROFITABILITY_TOPK_PAIRS':
+    'NO_MATURED_WITHIN_TIMESTAMP_RETURN_PAIRS');
   let loss=0,correct=0;
   for(const pair of built.pairs){
     const item=tcnLstmPairwiseLogitRankingLoss(logits[pair.high_index],logits[pair.low_index]);
@@ -1800,17 +1870,22 @@ export function summarizeTcnLstmPairwiseLogitRanking(rows,logits,{
   }
   return {schema:pairStrategy==='PROFITABILITY_BOUNDARY_V1'
       ?'RADARX_TCN_LSTM_PROFITABILITY_BOUNDARY_LOGIT_METRICS_V1'
-      :'RADARX_TCN_LSTM_PAIRWISE_LOGIT_RANKING_METRICS_V1',
+      :pairStrategy==='PROFITABILITY_TOPK_V2'
+        ?'RADARX_TCN_LSTM_PROFITABILITY_TOPK_LOGIT_METRICS_V2'
+        :'RADARX_TCN_LSTM_PAIRWISE_LOGIT_RANKING_METRICS_V1',
     status:'AVAILABLE',sample_count:rows.length,decision_group_count:built.decision_group_count,
     comparison_pairs:built.comparison_pairs,pairwise_log_loss:Number((loss/built.comparison_pairs).toFixed(8)),
     pairwise_accuracy_pct:Number((100*correct/built.comparison_pairs).toFixed(4)),
     pair_strategy:pairStrategy,
     positive_vs_non_positive_pairs:built.positive_vs_non_positive_pairs,
+    positive_vs_positive_pairs:built.positive_vs_positive_pairs??0,
     positive_opportunity_groups:built.positive_opportunity_groups,
     mixed_decision_groups:built.mixed_decision_groups,
     source:pairStrategy==='PROFITABILITY_BOUNDARY_V1'
       ?'POSITIVE_NET_RETURN_VS_NON_POSITIVE_WITHIN_SIMULTANEOUS_DECISION_TIMESTAMP'
-      :'REALIZED_RETURN_WITHIN_SIMULTANEOUS_DECISION_TIMESTAMP',
+      :pairStrategy==='PROFITABILITY_TOPK_V2'
+        ?'POSITIVE_VS_NON_POSITIVE_AND_WITHIN_POSITIVE_NET_RETURN_ORDER_WITHIN_SIMULTANEOUS_DECISION_TIMESTAMP'
+        :'REALIZED_RETURN_WITHIN_SIMULTANEOUS_DECISION_TIMESTAMP',
     score_domain:'RAW_MODEL_LOGITS_NO_PROBABILITY_CLIPPING',
     diagnostic_only:true,holdout_values_used:false};
 }
@@ -3321,6 +3396,7 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
  */
 export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   roundTripCostBps=30,minimumReturnGapPct=0.50,maxPairsPerTimestamp=16,
+  pairStrategy='PROFITABILITY_BOUNDARY_V1',
   learningRate=0.03,epochs=40,l2=0.001,patience=10,
   l2Grid=[0.0001,0.00025,0.0005,0.001,0.01,0.05,0.10,0.25,0.5,1.0],
   // Include intermediate temporal resolutions; selection remains inside the purged training partition.
@@ -3336,6 +3412,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     !Array.isArray(temporalBlockCounts)||!temporalBlockCounts.length||
     temporalBlockCounts.some(value=>!validTemporalBlockCounts.includes(value))||
     new Set(temporalBlockCounts).size!==temporalBlockCounts.length||
+    !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1','PROFITABILITY_TOPK_V2'].includes(pairStrategy)||
     !finite(validationFraction)||validationFraction<0.08||validationFraction>0.40||
     !finite(purgeHorizonMs)||purgeHorizonMs<0)
     throw new TypeError('TCN_LSTM_ORDERED_RANKER_TUNING_CONFIGURATION_INVALID');
@@ -3347,7 +3424,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     String(a.id??'').localeCompare(String(b.id??'')));
   const pairSupport=buildTcnLstmReturnRankingPairs(ordered,ordered,{
     roundTripCostBps,minimumReturnGapPct,maxPairsPerTimestamp,
-    pairStrategy:'PROFITABILITY_BOUNDARY_V1'
+    pairStrategy
   });
   if(pairSupport.comparison_pairs<10)
     throw new TypeError('TCN_LSTM_ORDERED_RANKER_TRAINING_PAIR_SUPPORT_TOO_SMALL');
@@ -3374,12 +3451,12 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       bucketAt(row)<=validationStartAfter);
     const tuningPairSupport=buildTcnLstmReturnRankingPairs(tuningRows,tuningRows,{
       roundTripCostBps,minimumReturnGapPct,maxPairsPerTimestamp,
-      pairStrategy:'PROFITABILITY_BOUNDARY_V1'
+      pairStrategy
     });
     const validationPairSupport=validationRows.length>=20
       ?buildTcnLstmReturnRankingPairs(validationRows,validationRows,{
         roundTripCostBps,minimumReturnGapPct,maxPairsPerTimestamp,
-        pairStrategy:'PROFITABILITY_BOUNDARY_V1'
+        pairStrategy
       }):{comparison_pairs:0,pairs:[]};
     if(tuningRows.length<20||tuningPairSupport.comparison_pairs<10||
       validationRows.length<20||validationPairSupport.comparison_pairs<10||
@@ -3433,13 +3510,13 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     const epochTrainingPairSupport=buildTcnLstmReturnRankingPairs(
       epochTrainingRows,epochTrainingRows,{
         roundTripCostBps,minimumReturnGapPct,maxPairsPerTimestamp,
-        pairStrategy:'PROFITABILITY_BOUNDARY_V1'
+        pairStrategy
       }
     );
     const epochValidationPairSupport=epochValidationRows.length>=20
       ?buildTcnLstmReturnRankingPairs(epochValidationRows,epochValidationRows,{
         roundTripCostBps,minimumReturnGapPct,maxPairsPerTimestamp,
-        pairStrategy:'PROFITABILITY_BOUNDARY_V1'
+        pairStrategy
       }):{comparison_pairs:0,pairs:[]};
     if(epochTrainingRows.length<20||epochTrainingPairSupport.comparison_pairs<10||
       epochValidationRows.length<20||epochValidationPairSupport.comparison_pairs<10||
@@ -3739,6 +3816,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       outer_validation_or_holdout_used:false
     },
     source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY',
+    pair_strategy:pairStrategy,
     fit_partition:'EXPANDING_EARLIER_SUBSETS_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
     validation_partition:'THREE_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
     outer_validation_or_holdout_used:false,
@@ -3783,6 +3861,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     final_refit_pairs:pairSupport.comparison_pairs
   };
   training.internal_training_validation.temporal_block_count=selectedTuning.temporal_block_count;
+  training.pair_strategy=pairStrategy;
   return {
     schema:'RADARX_TCN_LSTM_PRE_EXECUTION_ORDERED_RANKER_FIT_V1',
     fitted:true,
@@ -3796,6 +3875,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       source_partition:pairSupport.source_partition,
       decision_group_count:pairSupport.decision_group_count,
       comparison_pairs:pairSupport.comparison_pairs,
+      positive_vs_non_positive_pairs:pairSupport.positive_vs_non_positive_pairs,
+      positive_vs_positive_pairs:pairSupport.positive_vs_positive_pairs??0,
       positive_opportunity_groups:pairSupport.positive_opportunity_groups,
       mixed_decision_groups:pairSupport.mixed_decision_groups,
       round_trip_cost_bps:pairSupport.round_trip_cost_bps,
@@ -3887,7 +3968,7 @@ export function trainTcnLstmHybrid(trainingRows, {
     rankingHeadLearningRate>0.25||!Number.isInteger(rankingHeadEpochs)||
     rankingHeadEpochs<1||rankingHeadEpochs>200||
     !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1||
-    !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1'].includes(rankingPairStrategy)||
+    !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1','PROFITABILITY_TOPK_V2'].includes(rankingPairStrategy)||
     !TCN_LSTM_RANKING_REPRESENTATIONS.includes(rankingRepresentation)||
     typeof fitIndependentRankingHead!=='boolean')
     throw new TypeError('TCN_LSTM_RANKING_HEAD_CONFIGURATION_INVALID');
@@ -4744,7 +4825,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     !finite(rankingScoreWeight)||rankingScoreWeight<0||rankingScoreWeight>1||
     !finite(rankingMinimumReturnGapPct)||rankingMinimumReturnGapPct<0||
     !Number.isInteger(rankingPairsPerTimestamp)||rankingPairsPerTimestamp<1||rankingPairsPerTimestamp>32||
-    !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1'].includes(rankingPairStrategy)||
+    !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1','PROFITABILITY_TOPK_V2'].includes(rankingPairStrategy)||
     !TCN_LSTM_RANKING_REPRESENTATIONS.includes(rankingRepresentation)||
     !finite(rankingHeadLearningRate)||rankingHeadLearningRate<=0||rankingHeadLearningRate>0.25||
     !Number.isInteger(rankingHeadEpochs)||rankingHeadEpochs<1||rankingHeadEpochs>200||
@@ -4802,6 +4883,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       roundTripCostBps,
       minimumReturnGapPct:rankingMinimumReturnGapPct,
       maxPairsPerTimestamp:rankingPairsPerTimestamp,
+      pairStrategy:rankingPairStrategy,
       learningRate:rankingHeadLearningRate,
       epochs:rankingHeadEpochs,
       l2:rankingHeadL2,
