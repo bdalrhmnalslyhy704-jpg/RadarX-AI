@@ -3768,19 +3768,23 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
           const anchorWeights=tuningModel.orderedRankingAnchorWeights;
           const anchorMeans=tuningModel.orderedRankingAnchorFeatureMean;
           const anchorStds=tuningModel.orderedRankingAnchorFeatureStd;
-          let score=Number(tuningModel.orderedRankingAnchorBias);
+          let anchorScore=Number(tuningModel.orderedRankingAnchorBias);
           if(!Array.isArray(anchorWeights)||anchorWeights.length!==vector.length||
             !Array.isArray(anchorMeans)||anchorMeans.length!==vector.length||
             !Array.isArray(anchorStds)||anchorStds.length!==vector.length||
-            !finite(score))
+            !finite(anchorScore))
             throw new TypeError('TCN_LSTM_ORDERED_RANKER_LOGISTIC_ANCHOR_STATE_INVALID');
-          for(let feature=0;feature<vector.length;feature++){
-            const normalized=(vector[feature]-anchorMeans[feature])/anchorStds[feature];
-            score+=anchorWeights[feature]*normalized;
+          for(let feature=0;feature<vector.length;feature++)
+            anchorScore+=anchorWeights[feature]*
+              ((vector[feature]-anchorMeans[feature])/anchorStds[feature]);
+          if(!finite(anchorScore))
+            throw new TypeError('TCN_LSTM_ORDERED_RANKER_LOGISTIC_ANCHOR_NON_FINITE');
+          // Logistic inference clamps its raw score before the residual is added.
+          let score=clamp(anchorScore,-LOGIT_LIMIT,LOGIT_LIMIT);
+          for(let feature=0;feature<vector.length;feature++)
             score+=tuningModel.orderedRankingHeadWeights[feature]*
               ((vector[feature]-tuningModel.orderedRankingFeatureMean[feature])/
                 tuningModel.orderedRankingFeatureStd[feature]);
-          }
           if(!finite(score))throw new TypeError('TCN_LSTM_ORDERED_RANKER_OUTER_FOLD_SCORE_NON_FINITE');
           return clamp(score,-LOGIT_LIMIT,LOGIT_LIMIT);
         });
