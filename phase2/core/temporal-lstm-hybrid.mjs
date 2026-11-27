@@ -4666,13 +4666,17 @@ export function hasFoldStableOrderedRankerQualification(rankHead, rankingReprese
   const isThreeFoldV6=tuning?.schema===
     'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6';
   const currentParetoPolicy=tuning?.method===
+    'THREE_FOLD_NESTED_PARETO_CHECKPOINT_REQUIRED_LOGISTIC_ANCHORED_VALIDATION_V3'&&
+    tuning?.epoch_checkpoint_selection_policy===
+      'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1';
+  const previousParetoPolicy=tuning?.method===
     'THREE_FOLD_NESTED_PARETO_DUAL_METRIC_LOGISTIC_ANCHORED_VALIDATION_V2'&&
     tuning?.epoch_checkpoint_selection_policy===
       'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1';
   const legacyAccuracyFirstPolicy=tuning?.method===
     'THREE_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_DUAL_METRIC_VALIDATION_V1'&&
     tuning?.epoch_checkpoint_selection_policy===undefined;
-  if (!isThreeFoldV6 || !(currentParetoPolicy||legacyAccuracyFirstPolicy) ||
+  if (!isThreeFoldV6 || !(currentParetoPolicy||previousParetoPolicy||legacyAccuracyFirstPolicy) ||
       tuning.fold_count !== 3 ||
       tuning.selected_candidate_qualified !== true ||
       tuning.fold_stable_dual_metric_superiority !== true ||
@@ -4691,6 +4695,11 @@ export function hasFoldStableOrderedRankerQualification(rankHead, rankingReprese
   if (!Array.isArray(selected?.fold_results) || selected.fold_results.length !== 3) {
     return false;
   }
+  if(currentParetoPolicy&&(
+    selected.all_epoch_checkpoints_selected!==true||
+    selected.epoch_checkpoint_selected_count!==3||
+    selected.fold_results.some(fold=>fold?.epoch_checkpoint_selected!==true)
+  )) return false;
 
   return selected.fold_results.every((fold, index) =>
     fold?.fold_index === index + 1 &&
