@@ -1670,18 +1670,21 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
         internal.folds[index+1].tuning_max_at>=fold.validation_max_at)&&
       internal?.validation_rows>=40&&internal?.purged_rows>=0&&
       internal?.purge_gap_ms>=4*60*60*1000&&
-      internal?.l2_grid?.length===10&&
-      [0.0001,0.00025,0.0005,0.001,0.01,0.05,0.10,0.25,0.5,1.0].every(l2=>
+      internal?.l2_grid?.length===4&&
+      [0.25,0.5,1,2].every(l2=>
         internal.l2_grid.includes(l2)&&
         internal.candidate_grid.some(candidate=>candidate.l2===l2))&&
       internal?.candidate_grid?.length===80&&
-      [1,2,3,4,6,8,12,24].every(blockCount=>
+      [4,6,8,24].every(blockCount=>
         internal.candidate_grid.some(candidate=>candidate.temporal_block_count===blockCount))&&
+      [0.003,0.006,0.01,0.02,0.03].every(rate=>
+        internal.candidate_grid.some(candidate=>candidate.learning_rate===rate))&&
       internal.candidate_grid.every(candidate=>
         candidate.parameter_count===candidate.temporal_block_count*29&&
         candidate.steps_per_block===24/candidate.temporal_block_count&&
         candidate.fold_count===3&&candidate.fold_results?.length===3&&
-        Number.isFinite(candidate.minimum_fold_pairwise_log_loss_improvement))&&
+        Number.isFinite(candidate.minimum_fold_pairwise_log_loss_improvement)&&
+        Number.isFinite(candidate.learning_rate)&&candidate.learning_rate>0)&&
       Number.isFinite(internal?.selected_validation_pairwise_log_loss)&&
       Number.isFinite(internal?.selected_validation_pairwise_accuracy_pct)&&
       Number.isFinite(internal?.selected_minimum_fold_pairwise_accuracy_pct)&&
