@@ -3816,6 +3816,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       outer_validation_or_holdout_used:false
     },
     source_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY',
+    pair_strategy:pairStrategy,
     fit_partition:'EXPANDING_EARLIER_SUBSETS_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
     validation_partition:'THREE_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION',
     outer_validation_or_holdout_used:false,
@@ -3860,6 +3861,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     final_refit_pairs:pairSupport.comparison_pairs
   };
   training.internal_training_validation.temporal_block_count=selectedTuning.temporal_block_count;
+  training.pair_strategy=pairStrategy;
   return {
     schema:'RADARX_TCN_LSTM_PRE_EXECUTION_ORDERED_RANKER_FIT_V1',
     fitted:true,
@@ -3873,6 +3875,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
       source_partition:pairSupport.source_partition,
       decision_group_count:pairSupport.decision_group_count,
       comparison_pairs:pairSupport.comparison_pairs,
+      positive_vs_non_positive_pairs:pairSupport.positive_vs_non_positive_pairs,
+      positive_vs_positive_pairs:pairSupport.positive_vs_positive_pairs??0,
       positive_opportunity_groups:pairSupport.positive_opportunity_groups,
       mixed_decision_groups:pairSupport.mixed_decision_groups,
       round_trip_cost_bps:pairSupport.round_trip_cost_bps,
