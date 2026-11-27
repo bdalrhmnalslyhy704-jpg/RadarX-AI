@@ -31,7 +31,7 @@ Frozen legacy research references:
 
 | Component | SHA-256 / identity |
 |---|---|
-| Hurdle V2 artifact content | `9f7e08c75d388588603a4c216983b36fffa8d2245850a70ca83c2206` |
+| Hurdle V2 artifact content | `9f7e08c75d388588603e3847c63a4c216983b36fffa8d2245850a70ca83c2206` |
 | Hurdle V2 artifact manifest | `9fed9fee8e0eb832fb3c4d40900a782f3f53a637e263eb5d5c1093cc6da3231` |
 | Ordered ranker artifact content | `0e846029aec3e4467d4d791b3a27689d32288ad8dd6b6fe6a4991d6a0dc9101a` |
 | Ordered ranker artifact manifest | `7befe375c252f3bcb21c6fc84fbb7072ab7d9811ba3fa1fc2a1721d59b7260c2` |
