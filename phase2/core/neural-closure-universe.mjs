@@ -12,8 +12,44 @@ const STABLE_BASE_ASSETS=new Set([
 // comments identify the listing batch. This excludes tokenized securities from
 // the crypto-only signal cohort. Refresh this list before collection whenever
 // Binance adds a new bStocks Spot pair.
+// Canonical current Binance Spot bStocks base-asset universe. Every entry below
+// is backed by an official Binance Spot/Convert listing announcement; the date
+// comments identify the listing batch. This excludes tokenized securities from
+// the crypto-only signal cohort. Refresh this list before collection whenever
+// Binance adds a new bStocks Spot pair.
 const BINANCE_BSTOCK_BASE_ASSETS=new Set([
-  // 2026-06-11\n  'CRCLB', 'MUB', 'NVDAB', 'SNDKB', 'TSLAB',\n  // 2026-06-12\n  'SPCXB',\n  // 2026-06-23\n  'AMDB', 'EWYB', 'INTCB', 'MSTRB',\n  // 2026-06-30\n  'LITEB', 'METAB', 'MSFTB', 'PLTRB', 'QQQB',\n  // 2026-07-07\n  'CBRSB', 'COINB', 'DRAMB', 'GLWB', 'GOOGLB', 'NBISB', 'QCOMB', 'SOXLB', 'SPYB', 'WDCB',\n  // 2026-07-15\n  'AAOIB', 'ARMB', 'AVGOB', 'BABAB', 'HOODB', 'IBMB', 'MRVLB', 'NOKB', 'RKLBB', 'TSMB',\n  // 2026-07-22\n  'AXTIB', 'CRWVB', 'INTWB', 'KORUB', 'MUUB', 'MVLLB', 'ORCLB', 'QNTB', 'SNXXB', 'TQQQB',\n  // 2026-08-05\n  'ALABB', 'ASMLB', 'ASTSB', 'BMNRB', 'COHRB', 'CRDOB', 'IRENB', 'NFLXB', 'SMCIB', 'USARB',\n  // 2026-08-12\n  'GMEB',\n  // 2026-09-02\n  'CRWDB', 'MRNAB', 'SQQQB', 'STXB',\n  // 2026-10-07\n  'JPMB', 'LLYB', 'SECZB', 'USDEB',\n  // 2026-10-14\n  'BBB', 'MDBB', 'PENGB', 'UVXYB',\n  // 2026-10-28\n  'APPB', 'BSPB', 'GEVB', 'SKDDB', 'SKUUB',\n  // 2026-11-18\n  'EWJB', 'EWTB', 'EWZB', 'EWZSB', 'IWMB', 'MELIB', 'NUB',\n  // 2026-11-19\n  'ANTB',\n  // 2026-11-25\n  'ARTYB', 'FRHCB', 'IBITB', 'IGVB', 'SOXXB'
+  // 2026-06-11
+  'CRCLB', 'MUB', 'NVDAB', 'SNDKB', 'TSLAB',
+  // 2026-06-12
+  'SPCXB',
+  // 2026-06-23
+  'AMDB', 'EWYB', 'INTCB', 'MSTRB',
+  // 2026-06-30
+  'LITEB', 'METAB', 'MSFTB', 'PLTRB', 'QQQB',
+  // 2026-07-07
+  'CBRSB', 'COINB', 'DRAMB', 'GLWB', 'GOOGLB', 'NBISB', 'QCOMB', 'SOXLB', 'SPYB', 'WDCB',
+  // 2026-07-15
+  'AAOIB', 'ARMB', 'AVGOB', 'BABAB', 'HOODB', 'IBMB', 'MRVLB', 'NOKB', 'RKLBB', 'TSMB',
+  // 2026-07-22
+  'AXTIB', 'CRWVB', 'INTWB', 'KORUB', 'MUUB', 'MVLLB', 'ORCLB', 'QNTB', 'SNXXB', 'TQQQB',
+  // 2026-08-05
+  'ALABB', 'ASMLB', 'ASTSB', 'BMNRB', 'COHRB', 'CRDOB', 'IRENB', 'NFLXB', 'SMCIB', 'USARB',
+  // 2026-08-12
+  'GMEB',
+  // 2026-09-02
+  'CRWDB', 'MRNAB', 'SQQQB', 'STXB',
+  // 2026-10-07
+  'JPMB', 'LLYB', 'SECZB', 'USDEB',
+  // 2026-10-14
+  'BBB', 'MDBB', 'PENGB', 'UVXYB',
+  // 2026-10-28
+  'APPB', 'BSPB', 'GEVB', 'SKDDB', 'SKUUB',
+  // 2026-11-18
+  'EWJB', 'EWTB', 'EWZB', 'EWZSB', 'IWMB', 'MELIB', 'NUB',
+  // 2026-11-19
+  'ANTB',
+  // 2026-11-25
+  'ARTYB', 'FRHCB', 'IBITB', 'IGVB', 'SOXXB'
 ]);
 const finite=value=>value!==null&&value!==undefined&&value!==''&&
   typeof value!=='boolean'&&Number.isFinite(Number(value));
@@ -45,7 +81,7 @@ export function selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
       symbol:String(item.symbol),base_asset:String(item.baseAsset),
       quote_asset:String(item.quoteAsset),
       exclusion_reason:'TOKENIZED_SECURITY_BSTOCK_NOT_CRYPTO_SPOT_ASSET',
-      exclusion_policy:'BINANCE_BSTOCK_TOKENIZED_SECURITIES_V1'
+      exclusion_policy:'BINANCE_BSTOCK_TOKENIZED_SECURITIES_V3_2026_11_27'
     }))
     .sort((a,b)=>a.symbol.localeCompare(b.symbol));
   const allowed=exchangeInfo.symbols.filter(item=>
