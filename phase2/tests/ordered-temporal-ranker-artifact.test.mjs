@@ -436,7 +436,7 @@ test('Top-K artifact preserves per-fold pair-type metric provenance',()=>{
   const verification=verifyOrderedTemporalRankerArtifact(artifact);
   assert.equal(verification.valid,true);
   assert.equal(artifact.training_provenance.ranker_training_config.validation_fraction,0.15);
-  assert.equal(artifact.training_provenance.ranker_training_config.validation_group_count,2);
+  assert.equal(artifact.training_provenance.ranker_training_config.validation_group_count,5);
   const folds=artifact.training_provenance.internal_training_validation.folds;
   assert.equal(folds[0].validation_positive_vs_non_positive_pairs,8);
   const result=artifact.training_provenance.internal_training_validation.candidate_grid[0].fold_results[0];
