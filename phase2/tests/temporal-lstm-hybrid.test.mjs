@@ -38,6 +38,7 @@ import {
   summarizeTcnLstmSelectionReturns,
   tcnLstmPairwiseReturnRankingLoss,
   tcnLstmPairwiseLogitRankingLoss,
+  tcnLstmPairwiseMarginRankingLoss,
   buildTcnLstmReturnRankingPairs,
   summarizeTcnLstmPairwiseReturnRanking,
   summarizeTcnLstmPairwiseLogitRanking,
@@ -481,6 +482,28 @@ test('TCN-LSTM pairwise logit loss preserves ranking margins beyond probability 
   assert.ok(reversed.loss>pair.loss);
 });
 
+test('margin-hinge ranking loss applies a fixed separation margin and stops gradients beyond it',()=>{
+  const violated=tcnLstmPairwiseMarginRankingLoss(0.10,0,0.25);
+  assert.equal(violated.margin,0.10);
+  assert.equal(violated.required_margin,0.25);
+  assert.ok(Math.abs(violated.loss-0.15)<1e-12);
+  assert.equal(violated.high_logit_gradient,-1);
+  assert.equal(violated.low_logit_gradient,1);
+  assert.equal(violated.correct,true);
+
+  const reversed=tcnLstmPairwiseMarginRankingLoss(-0.10,0,0.25);
+  assert.ok(Math.abs(reversed.loss-0.35)<1e-12);
+  assert.equal(reversed.correct,false);
+
+  const satisfied=tcnLstmPairwiseMarginRankingLoss(0.40,0,0.25);
+  assert.equal(satisfied.loss,0);
+  assert.equal(satisfied.high_logit_gradient,0);
+  assert.equal(satisfied.low_logit_gradient,0);
+  assert.equal(satisfied.correct,true);
+
+  assert.throws(()=>tcnLstmPairwiseMarginRankingLoss(0,0,0),/ARGUMENT_INVALID/);
+});
+
 test('training return-ranking pairs use net realized returns and group near-simultaneous 15m decisions',()=>{
   const rows=makeRankedRows(0,10,'rank-pairs').map((row,index)=>({
     ...row,at:row.at+(index%4)*0.25
@@ -613,6 +636,7 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
   const fitted=fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     roundTripCostBps:30,minimumReturnGapPct:0.5,maxPairsPerTimestamp:16,
     pairStrategy:'PROFITABILITY_TOPK_V2',
+    trainingObjective:'PAIRWISE_MARGIN_HINGE_V1',rankingMargin:0.25,
     learningRate:0.03,epochs:4,l2:0.001,patience:2,
     l2Grid:[0.001,0.01],temporalBlockCounts:[1],validationFraction:0.08
   });
@@ -623,6 +647,11 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
   assert.equal(fitted.training.internal_training_validation.pair_strategy,
     'PROFITABILITY_TOPK_V2');
   assert.equal(fitted.training.internal_training_validation.fold_count,3);
+  assert.equal(fitted.training.training_objective,'PAIRWISE_MARGIN_HINGE_V1');
+  assert.equal(fitted.training.ranking_margin,0.25);
+  assert.equal(fitted.training.internal_training_validation.training_objective,
+    'PAIRWISE_MARGIN_HINGE_V1');
+  assert.equal(fitted.training.internal_training_validation.ranking_margin,0.25);
   assert.equal(fitted.training.validation_or_holdout_used,false);
 });
 
