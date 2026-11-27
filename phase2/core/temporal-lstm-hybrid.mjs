@@ -2275,14 +2275,22 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
       throw new TypeError('TCN_LSTM_EXECUTION_HEAD_STANDARDIZATION_NON_FINITE:'+targetKey+':'+featureKey);
     let weights=Array(featureCount).fill(0),bias=0;
     const m=Array(featureCount).fill(0),v=Array(featureCount).fill(0);
-    let mb=0,vb=0,bestLoss=Infinity,best={weights:[...weights],bias},wait=0,done=0;
+    let mb=0,vb=0,bestLoss=NaN,best={weights:[...weights],bias},wait=0,done=0;
     const predict=(item,w,b)=>b+item.features.reduce((sum,x,i)=>sum+x*w[i],0);
-    const loss=()=>normalizedVectors.reduce((sum,item)=>{
-      const error=predict(item,weights,bias)-item.target;
-      return sum+(Math.abs(error)<=huberDelta
-        ?0.5*error*error:huberDelta*(Math.abs(error)-0.5*huberDelta));
-    },0)/normalizedVectors.length;
+    const loss=()=>{
+      const dataLoss=normalizedVectors.reduce((sum,item)=>{
+        const error=predict(item,weights,bias)-item.target;
+        return sum+(Math.abs(error)<=huberDelta
+          ?0.5*error*error:huberDelta*(Math.abs(error)-0.5*huberDelta));
+      },0)/normalizedVectors.length;
+      const penalty=weights.reduce((sum,value)=>sum+value*value,0);
+      return dataLoss+0.5*l2*penalty;
+    };
     const initial=loss();
+    if(!finite(initial))
+      throw new TypeError('TCN_LSTM_EXECUTION_HEAD_INITIAL_LOSS_NON_FINITE:'+targetKey+':'+featureKey);
+    // Keep the constant sample-mean predictor and score the same L2 objective as the gradient.
+    bestLoss=initial;
     for(let epoch=1;epoch<=epochs;epoch++){
       const gw=Array(featureCount).fill(0);let gb=0;
       for(const item of normalizedVectors){
@@ -2319,6 +2327,9 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
       zero_variance_feature_count:featureMoments.filter(item=>item.constant).length,
       initial_huber_loss:Number(initial.toFixed(8)),
       final_huber_loss:Number(bestLoss.toFixed(8)),
+      constant_mean_baseline_selected:best.weights.every(value=>value===0)&&
+        Math.abs(best.bias)<=1e-12,
+      l2_penalty_in_objective:true,
       epochs_completed:done,feature_count:featureCount
     };
   };

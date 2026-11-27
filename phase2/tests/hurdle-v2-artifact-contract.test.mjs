@@ -243,6 +243,41 @@ test('01. deterministic fixture actually trains both Hurdle heads', () => {
   assert.equal(fixture.fit.model.executionHurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED.fitted, true);
   assert.equal(fixture.fit.model.executionHurdleReturnHeads.POOLED_ONLY.fitted, true);
 });
+test('01a. Hurdle optimizers never retain a fit worse than their prior or constant baseline',()=>{
+  for(const key of ['LOGIT_CONTEXT_AUGMENTED','POOLED_ONLY']){
+    const head=fixture.fit.model.executionHurdleReturnHeads[key];
+    assert.ok(head.final_log_loss<=head.initial_log_loss+1e-8);
+    assert.equal(typeof head.empirical_prior_baseline_selected,'boolean');
+    for(const meanHead of [head.positive_conditional_mean_model,head.non_positive_conditional_mean_model]){
+      assert.ok(meanHead.final_huber_loss<=meanHead.initial_huber_loss+1e-8);
+      assert.equal(typeof meanHead.constant_mean_baseline_selected,'boolean');
+    }
+  }
+});
+test('01b. Platt calibration preserves identity when scores have no information',()=>{
+  const identity=fitHurdlePositiveReturnCalibration(
+    Array(8).fill(0.5),[1,1,1,1,-1,-1,-1,-1],
+    {minimumSamples:8,minimumPositive:4,minimumNegative:4,iterations:60}
+  );
+  assert.equal(identity.fitted,true);
+  assert.equal(identity.slope,1);
+  assert.equal(identity.intercept,0);
+  assert.equal(identity.identity_selected,true);
+  assert.ok(identity.final_objective<=identity.initial_objective+1e-10);
+});
+test('01c. constant features preserve the empirical prior and conditional class means',()=>{
+  const rows=Array.from({length:24},()=>Array(4).fill(0));
+  const returns=Array.from({length:24},(_,i)=>i<12?1.25+i*0.01:-0.9+(i-12)*0.01);
+  const head=fitHurdleReturnHead(rows,returns,{
+    learningRate:0.1,epochs:60,l2:0.05,minimumClassRows:8
+  });
+  assert.equal(head.empirical_prior_baseline_selected,true);
+  assert.ok(head.weights.every(value=>value===0));
+  for(const meanHead of [head.positive_conditional_mean_model,head.non_positive_conditional_mean_model]){
+    assert.equal(meanHead.constant_mean_baseline_selected,true);
+    assert.ok(meanHead.weights.every(value=>value===0));
+  }
+});
 test('02. contextual and pooled head parameters are learned, non-zero and finite', () => {
   for (const key of ['LOGIT_CONTEXT_AUGMENTED','POOLED_ONLY']) {
     const head = fixture.fit.model.executionHurdleReturnHeads[key];
@@ -312,6 +347,22 @@ test('03b. Hurdle rejects an upstream ordered-ranker dependency with mismatched 
   const changed=JSON.parse(JSON.stringify(artifact));
   changed.upstream_ordered_ranker_dependency.artifact_content_hash='7'.repeat(64);
   assert.equal(verifyHurdleV2Artifact(changed).reason,'CONTENT_HASH_MISMATCH');
+});
+test('03f. Hurdle artifact rejects baseline-regressed calibration and mean-head objectives',()=>{
+  const worseProbabilityCalibration=structuredClone(artifact);
+  const probabilityHead=worseProbabilityCalibration.contextual_head_parameters;
+  probabilityHead.probability_calibration.final_objective=
+    probabilityHead.probability_calibration.initial_objective+0.25;
+  const invalidProbability=verifyHurdleV2Artifact(resealArtifact(worseProbabilityCalibration));
+  assert.equal(invalidProbability.valid,false);
+  assert.match(invalidProbability.reason,/HURDLE_V2_HEAD_INVALID:contextual/);
+
+  const worseMeanHead=structuredClone(artifact);
+  const conditional=worseMeanHead.contextual_head_parameters.positive_conditional_mean_model;
+  conditional.final_huber_loss=conditional.initial_huber_loss+0.25;
+  const invalidMean=verifyHurdleV2Artifact(resealArtifact(worseMeanHead));
+  assert.equal(invalidMean.valid,false);
+  assert.match(invalidMean.reason,/HURDLE_V2_CONDITIONAL_MEAN_INVALID:contextual:positive/);
 });
 test('04. artifact records complete code, dataset, target, split and cost provenance', () => {
   assert.equal(artifact.code_commit_sha, fixture.codeCommitSha);
