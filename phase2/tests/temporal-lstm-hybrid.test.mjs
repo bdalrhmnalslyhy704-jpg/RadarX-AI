@@ -2514,8 +2514,8 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
   const rankerGrid=ranker.training.internal_training_validation;
   const expectedL2Grid=[0.25,0.5,1,2];
   assert.deepEqual(rankerGrid.l2_grid,expectedL2Grid);
-  assert.equal(rankerGrid.candidate_grid.length,80);
-  for(const l2 of expectedL2Grid) for(const blockCount of [4,6,8,24])
+  assert.equal(rankerGrid.candidate_grid.length,140);
+  for(const l2 of expectedL2Grid) for(const blockCount of [1,2,3,4,6,8,24])
     assert.ok(rankerGrid.candidate_grid.some(candidate=>
       candidate.l2===l2&&candidate.temporal_block_count===blockCount),
       'every selected L2 value must cover each focused temporal block count');
