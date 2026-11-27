@@ -2424,6 +2424,10 @@ test('ordered 696-feature pairwise ranker fits training-only normalization and l
     delete copy.orderedRankingHeadWeights;
     delete copy.orderedRankingFeatureMean;
     delete copy.orderedRankingFeatureStd;
+    delete copy.orderedRankingAnchorWeights;
+    delete copy.orderedRankingAnchorFeatureMean;
+    delete copy.orderedRankingAnchorFeatureStd;
+    delete copy.orderedRankingAnchorBias;
     return copy;
   };
   assert.deepEqual(withoutRankFields(profile.model),withoutRankFields(classifierOnly.model),
@@ -2647,6 +2651,10 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
     delete copy.orderedRankingHeadWeights;
     delete copy.orderedRankingFeatureMean;
     delete copy.orderedRankingFeatureStd;
+    delete copy.orderedRankingAnchorWeights;
+    delete copy.orderedRankingAnchorFeatureMean;
+    delete copy.orderedRankingAnchorFeatureStd;
+    delete copy.orderedRankingAnchorBias;
     return copy;
   };
   assert.deepEqual(withoutRankFields(withFrozenRanker.model),withoutRankFields(classifierOnly.model),
@@ -2671,9 +2679,17 @@ test('independent return ranker fits only the earlier model-training partition a
   });
   const withoutRankFields=model=>{
     const copy=structuredClone(model);
+    delete copy.rankingRepresentation;
     delete copy.rankingHeadWeights;
     delete copy.rankingFeatureMean;
     delete copy.rankingFeatureStd;
+    delete copy.orderedRankingHeadWeights;
+    delete copy.orderedRankingFeatureMean;
+    delete copy.orderedRankingFeatureStd;
+    delete copy.orderedRankingAnchorWeights;
+    delete copy.orderedRankingAnchorFeatureMean;
+    delete copy.orderedRankingAnchorFeatureStd;
+    delete copy.orderedRankingAnchorBias;
     return copy;
   };
   const ranker=profile.training.return_ranking.ranking_head;
