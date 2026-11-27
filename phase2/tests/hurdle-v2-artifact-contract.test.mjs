@@ -444,6 +444,20 @@ test('05e. class-conditional mean calibrator enforces outcome class and returns 
   assert.equal(nonPositive.class_condition,'NON_POSITIVE_NET_RETURN');
   assert.ok(Number.isFinite(positive.slope)&&Number.isFinite(positive.intercept));
   assert.ok(Number.isFinite(nonPositive.slope)&&Number.isFinite(nonPositive.intercept));
+  for(const calibration of [positive,nonPositive]){
+    assert.equal(typeof calibration.identity_selected,'boolean');
+    assert.ok(calibration.final_objective<=calibration.initial_objective+1e-9,
+      'affine calibration must not be worse than the identity baseline');
+  }
+  const identity=fitHurdleConditionalMeanCalibration(
+    [1,2,3,4,5,6,7,8],[1,2,3,4,5,6,7,8],
+    {positiveClass:true,minimumSamples:8,iterations:120}
+  );
+  assert.equal(identity.fitted,true);
+  assert.equal(identity.slope,1);
+  assert.equal(identity.intercept,0);
+  assert.equal(identity.identity_selected,true);
+  assert.ok(identity.final_objective<=identity.initial_objective+1e-9);
   assert.throws(()=>fitHurdleConditionalMeanCalibration(
     [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8],
     [1,1,1,1,-1,1,1,1],
