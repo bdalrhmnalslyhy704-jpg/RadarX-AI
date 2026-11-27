@@ -140,6 +140,8 @@ function validateConditionalMeanCalibration(calibration,positive,probabilityCali
     calibration?.round_trip_cost_already_applied!==true||
     !finite(calibration?.initial_objective)||calibration.initial_objective<0||
     !finite(calibration?.final_objective)||calibration.final_objective<0||
+    calibration.final_objective>calibration.initial_objective+1e-9||
+    typeof calibration?.identity_selected!=='boolean'||
     !finite(calibration?.learning_rate)||calibration.learning_rate<=0||
     !finite(calibration?.regularization)||calibration.regularization<0||
     !finite(calibration?.huber_delta)||calibration.huber_delta<=0||
