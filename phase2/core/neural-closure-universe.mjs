@@ -7,23 +7,13 @@ const STABLE_BASE_ASSETS=new Set([
 // list is anchored to Binance's 2026-08-28 bStocks Spot bot-pair announcement.
 // Keep these instruments out of the crypto-only pre-move cohort; corporate
 // actions and exchange suspensions can break continuous kline chronology.
+// Canonical current Binance Spot bStocks base-asset universe. Every entry below
+// is backed by an official Binance Spot/Convert listing announcement; the date
+// comments identify the listing batch. This excludes tokenized securities from
+// the crypto-only signal cohort. Refresh this list before collection whenever
+// Binance adds a new bStocks Spot pair.
 const BINANCE_BSTOCK_BASE_ASSETS=new Set([
-  'AAOIB','AAPLB','ALABB','AMATB','AMDB','AMZNB','ARMB','ASMLB','ASTSB',
-  'AVGOB','AXTIB','BABAB','BEB','BMNRB','CBRSB','COHRB','COINB','CRCLB',
-  'CRDOB','CRWVB','DELLB','DJTB','DRAMB','EWYB','FLNCB','GLWB','GMEB',
-  'GOOGLB','GSB','HOODB','IBMB','INTCB','INTWB','IRENB','KORUB','LITEB',
-  'METAB','MRVLB','MSFTB','MSTRB','MUB','MUUB','MVLLB','NBISB','NFLXB',
-  'NOKB','NVDAB','ORCLB','PLTRB','PYPLB','QCOMB','QNTB','QQQB','RKLBB',
-  'SKHYB','SMCIB','SMHB','SNDKB','SOXLB','SOXSB','SPCXB','SPYB','TQQQB',
-  'TSLAB','TSMB','USARB','WDCB',
-  // Subsequent Binance bStocks Spot additions through 2026-11-25.
-  'CRWDB','MRNAB','SQQQB','STXB',
-  'BBB','MDBB','PENGB','UVXYB',
-  'BOTB','BRKBB','KSTRB','TMFB','VSTB',
-  'ADBEB','FWDIB','HPEB','PDDB','SHAZB','WENB','ZMB',
-  'EWJB','EWTB','EWZB','EWZSB','IWMB','MELIB','NUB','ANTB',
-  'ARTYB','FRHCB','IBITB','IGVB','SOXXB',
-  'APPB','BSPB','GEVB','SKDDB','SKUUB'
+  // 2026-06-11\n  'CRCLB', 'MUB', 'NVDAB', 'SNDKB', 'TSLAB',\n  // 2026-06-12\n  'SPCXB',\n  // 2026-06-23\n  'AMDB', 'EWYB', 'INTCB', 'MSTRB',\n  // 2026-06-30\n  'LITEB', 'METAB', 'MSFTB', 'PLTRB', 'QQQB',\n  // 2026-07-07\n  'CBRSB', 'COINB', 'DRAMB', 'GLWB', 'GOOGLB', 'NBISB', 'QCOMB', 'SOXLB', 'SPYB', 'WDCB',\n  // 2026-07-15\n  'AAOIB', 'ARMB', 'AVGOB', 'BABAB', 'HOODB', 'IBMB', 'MRVLB', 'NOKB', 'RKLBB', 'TSMB',\n  // 2026-07-22\n  'AXTIB', 'CRWVB', 'INTWB', 'KORUB', 'MUUB', 'MVLLB', 'ORCLB', 'QNTB', 'SNXXB', 'TQQQB',\n  // 2026-08-05\n  'ALABB', 'ASMLB', 'ASTSB', 'BMNRB', 'COHRB', 'CRDOB', 'IRENB', 'NFLXB', 'SMCIB', 'USARB',\n  // 2026-08-12\n  'GMEB',\n  // 2026-09-02\n  'CRWDB', 'MRNAB', 'SQQQB', 'STXB',\n  // 2026-10-07\n  'JPMB', 'LLYB', 'SECZB', 'USDEB',\n  // 2026-10-14\n  'BBB', 'MDBB', 'PENGB', 'UVXYB',\n  // 2026-10-28\n  'APPB', 'BSPB', 'GEVB', 'SKDDB', 'SKUUB',\n  // 2026-11-18\n  'EWJB', 'EWTB', 'EWZB', 'EWZSB', 'IWMB', 'MELIB', 'NUB',\n  // 2026-11-19\n  'ANTB',\n  // 2026-11-25\n  'ARTYB', 'FRHCB', 'IBITB', 'IGVB', 'SOXXB'
 ]);
 const finite=value=>value!==null&&value!==undefined&&value!==''&&
   typeof value!=='boolean'&&Number.isFinite(Number(value));
@@ -95,8 +85,8 @@ export function selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
     eligible,selected,
     excluded_non_crypto:excludedNonCrypto,
     excluded_non_crypto_policy:{
-      id:'BINANCE_BSTOCK_TOKENIZED_SECURITIES_V2_2026_11_27',
-      source:'BINANCE_OFFICIAL_BSTOCK_SPOT_LISTINGS_2026_08_TO_2026_11_25',
+      id:'BINANCE_BSTOCK_TOKENIZED_SECURITIES_V3_2026_11_27',
+      source:'BINANCE_OFFICIAL_BSTOCK_SPOT_LISTINGS_2026_06_11_TO_2026_11_25',
       count:excludedNonCrypto.length
     }
   };
