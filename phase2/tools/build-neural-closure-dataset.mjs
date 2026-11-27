@@ -630,9 +630,9 @@ async function main(){
         execution_return_contract:validated[0].execution_return_contract
       },
       universe:{
-        selection:'CRYPTO_ONLY_ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_COMPLETE_15M_PREHISTORY_AND_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V7_OFFICIAL_BSTOCK_LIST_86_PAIRS',
+        selection:'CRYPTO_ONLY_ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_COMPLETE_15M_PREHISTORY_AND_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V8_PINNED_OFFICIAL_BSTOCK_LIST_86',
         candidate_prefilter:{
-          method:'CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY_PLUS_KNOWN_BSTOCK_EXCLUSION_PLUS_EXACT_15M_PREHISTORY_GATE',
+          method:'CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY_PLUS_PINNED_86_BSTOCK_EXCLUSION_V3_PLUS_EXACT_15M_PREHISTORY_GATE',
           current_24h_ticker_used_for_eligibility:false,
           current_24h_ticker_used_for_ordering:false,
           current_24h_ticker_volume_is_diagnostic_only:true,
