@@ -59,7 +59,8 @@ test('candidate prefilter includes every currently eligible Spot USDT pair above
     status:'BREAK',isSpotTradingAllowed:true});
   tickers.push({symbol:'OFFUSDT',quoteVolume:'9000000',lastPrice:'1',
     priceChangePercent:'0'});
-  for(const base of ['SNDKB','MUB','EWJB','NUB','ANTB','ARTYB']){
+  const expectedBStockBases=["AAOIB","ALABB","AMDB","ANTB","APPB","ARMB","ARTYB","ASMLB","ASTSB","AVGOB","AXTIB","BABAB","BBB","BMNRB","BSPB","CBRSB","COHRB","COINB","CRCLB","CRDOB","CRWDB","CRWVB","DRAMB","EWJB","EWTB","EWYB","EWZB","EWZSB","FRHCB","GEVB","GLWB","GMEB","GOOGLB","HOODB","IBITB","IBMB","IGVB","INTCB","INTWB","IRENB","IWMB","JPMB","KORUB","LITEB","LLYB","MDBB","MELIB","METAB","MRNAB","MRVLB","MSFTB","MSTRB","MUB","MUUB","MVLLB","NBISB","NFLXB","NOKB","NUB","NVDAB","ORCLB","PENGB","PLTRB","QCOMB","QNTB","QQQB","RKLBB","SECZB","SKDDB","SKUUB","SMCIB","SNDKB","SNXXB","SOXLB","SOXXB","SPCXB","SPYB","SQQQB","STXB","TQQQB","TSLAB","TSMB","USARB","USDEB","UVXYB","WDCB"];
+  for(const base of expectedBStockBases){
     symbols.push({symbol:base+'USDT',baseAsset:base,quoteAsset:'USDT',
       status:'TRADING',isSpotTradingAllowed:true});
     tickers.push({symbol:base+'USDT',quoteVolume:'12000000',lastPrice:'100',
@@ -76,11 +77,13 @@ test('candidate prefilter includes every currently eligible Spot USDT pair above
   assert.equal(result.selected.some(item=>item.symbol==='USDCUSDT'),false);
   assert.equal(result.selected.some(item=>item.symbol==='OFFUSDT'),false);
   assert.deepEqual(result.excluded_non_crypto.map(item=>item.symbol),
-    ['ANTBUSDT','ARTYBUSDT','EWJBUSDT','MUBUSDT','NUBUSDT','SNDKBUSDT']);
+    expectedBStockBases.map(base=>base+'USDT').sort());
+  assert.equal(result.excluded_non_crypto.length,86,
+    'all official Binance bStocks Spot listings through 2026-11-25 must be removed from the crypto-only cohort');
   assert.equal(result.excluded_non_crypto.every(item=>
     item.exclusion_reason==='TOKENIZED_SECURITY_BSTOCK_NOT_CRYPTO_SPOT_ASSET'),true);
   assert.equal(result.excluded_non_crypto_policy.id,
-    'BINANCE_BSTOCK_TOKENIZED_SECURITIES_V2_2026_11_27');
+    'BINANCE_BSTOCK_TOKENIZED_SECURITIES_V3_2026_11_27');
   assert.throws(()=>selectBinanceSpotUsdtUniverse({symbols},tickers,{
     minimumQuoteVolume:750_000,maxSymbols:100,includeAllEligible:true
   }),/ELIGIBLE_UNIVERSE_EXCEEDS_CONFIGURED_MAX_SYMBOLS:126:100/);
