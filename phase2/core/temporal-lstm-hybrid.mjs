@@ -1777,7 +1777,9 @@ export function buildTcnLstmReturnRankingPairs(trainingRows,rankingRows,{
   return {
     schema:pairStrategy==='PROFITABILITY_BOUNDARY_V1'
       ?'RADARX_TCN_LSTM_PROFITABILITY_BOUNDARY_RANK_PAIRS_V1'
-      :'RADARX_TCN_LSTM_TRAINING_RETURN_RANK_PAIRS_V1',
+      :pairStrategy==='PROFITABILITY_TOPK_V2'
+        ?'RADARX_TCN_LSTM_PROFITABILITY_TOPK_RANK_PAIRS_V2'
+        :'RADARX_TCN_LSTM_TRAINING_RETURN_RANK_PAIRS_V1',
     pair_strategy:pairStrategy,
     source_partition:'TRAINING_PARTITION_ONLY',
     round_trip_cost_bps:Number(roundTripCostBps),
@@ -1790,7 +1792,11 @@ export function buildTcnLstmReturnRankingPairs(trainingRows,rankingRows,{
     all_positive_groups:allPositiveGroups,
     comparison_pairs:pairs.length,
     positive_vs_non_positive_pairs:pairStrategy==='PROFITABILITY_BOUNDARY_V1'
-      ?pairs.length:null,
+      ?pairs.length
+      :pairStrategy==='PROFITABILITY_TOPK_V2'
+        ?pairs.filter(pair=>pair.pair_type==='POSITIVE_VS_NON_POSITIVE').length:null,
+    positive_vs_positive_pairs:pairStrategy==='PROFITABILITY_TOPK_V2'
+      ?pairs.filter(pair=>pair.pair_type==='POSITIVE_VS_POSITIVE').length:0,
     pairs
   };
 }
