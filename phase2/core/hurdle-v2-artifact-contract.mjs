@@ -728,6 +728,8 @@ export function createHurdleV2Artifact({
       probability: 'UNWEIGHTED_BINARY_LOGISTIC_NEGATIVE_LOG_LIKELIHOOD_WITH_L2_0_05',
       positive_conditional_return: 'CLASS_CONDITIONAL_HUBER_DELTA_1_L2_0_1',
       non_positive_conditional_return: 'CLASS_CONDITIONAL_HUBER_DELTA_1_L2_0_1',
+      conditional_mean_calibration:
+        'SEPARATE_REGULARIZED_AFFINE_HUBER_CALIBRATORS_FIT_ON_LATER_PURGED_POSITIVE_AND_NON_POSITIVE_CALIBRATION_ROWS',
       class_reweighting: false,
       probability_class_weights: {positive: 1, non_positive: 1}
     },
