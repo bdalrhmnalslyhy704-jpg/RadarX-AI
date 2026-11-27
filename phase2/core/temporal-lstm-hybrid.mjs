@@ -3132,7 +3132,7 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
     throw new TypeError('TCN_LSTM_ORDERED_RANKING_HEAD_TRAINING_SUPPORT_TOO_SMALL');
   if(!finite(learningRate)||learningRate<=0||learningRate>0.25||
     !Number.isInteger(epochs)||epochs<1||epochs>200||
-    !finite(l2)||l2<0||l2>1||
+    !finite(l2)||l2<0||l2>8||
     !Number.isInteger(patience)||patience<1||patience>50||
     !validTemporalBlockCounts.includes(temporalBlockCount)||
     initialLogisticModel!==null&&(
@@ -3447,18 +3447,25 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
 export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   roundTripCostBps=30,minimumReturnGapPct=0.50,maxPairsPerTimestamp=16,
   pairStrategy='PROFITABILITY_BOUNDARY_V1',
-  learningRate=0.03,epochs=40,l2=0.001,patience=10,
-  l2Grid=[0.0001,0.00025,0.0005,0.001,0.01,0.05,0.10,0.25,0.5,1.0],
-  // Include intermediate temporal resolutions; selection remains inside the purged training partition.
-  temporalBlockCounts=[1,2,3,4,6,8,12,24],
+  learningRate=0.03,learningRateGrid=null,epochs=40,l2=0.001,patience=10,
+  l2Grid=[0.25,0.5,1,2],
+  // Focus compute on resolutions with the strongest previous purged-fold evidence.
+  // Lower learning rates test conservative residual updates around the Logistic anchor.
+  temporalBlockCounts=[4,6,8,24],
   validationFraction=0.08,purgeHorizonMs=4*60*60*1000
 }={}){
   const validTemporalBlockCounts=[1,2,3,4,6,8,12,24];
   if(!Array.isArray(rows)||rows.length<20)
     throw new TypeError('TCN_LSTM_ORDERED_RANKER_PARTITION_TOO_SMALL');
+  const candidateLearningRates=learningRateGrid===null
+    ?[...new Set([0.003,0.006,0.01,0.02,Number(learningRate)])].sort((a,b)=>a-b)
+    :learningRateGrid;
   if(!Array.isArray(l2Grid)||l2Grid.length<2||
-    l2Grid.some(value=>!finite(value)||value<0||value>1)||
+    l2Grid.some(value=>!finite(value)||value<0||value>8)||
     new Set(l2Grid).size!==l2Grid.length||
+    !Array.isArray(candidateLearningRates)||!candidateLearningRates.length||
+    candidateLearningRates.some(value=>!finite(value)||value<=0||value>0.25)||
+    new Set(candidateLearningRates).size!==candidateLearningRates.length||
     !Array.isArray(temporalBlockCounts)||!temporalBlockCounts.length||
     temporalBlockCounts.some(value=>!validTemporalBlockCounts.includes(value))||
     new Set(temporalBlockCounts).size!==temporalBlockCounts.length||
@@ -3661,7 +3668,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   });
   const tuningCandidates=[];
   for(const temporalBlockCount of temporalBlockCounts)
-    for(const candidateL2 of l2Grid){
+    for(const candidateL2 of l2Grid)
+      for(const candidateLearningRate of candidateLearningRates){
       const foldResults=folds.map((fold,index)=>{
         const epochModel={
           orderedRankingHeadWeights:Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0),
@@ -3671,7 +3679,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         };
         const epochSelection=fitTcnLstmOrderedPairwiseRankingHead(
           fold.epochTrainingRows,fold.epochTrainingPairSupport.pairs,epochModel,{
-            learningRate,epochs,l2:candidateL2,patience,
+            learningRate:candidateLearningRate,epochs,l2:candidateL2,patience,
             validationRows:fold.epochValidationRows,
             validationPairs:fold.epochValidationPairSupport.pairs,
             temporalBlockCount,
@@ -3691,7 +3699,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
           ?epochSelection.best_epoch:epochs;
         const tuned=fitTcnLstmOrderedPairwiseRankingHead(
           fold.tuningRows,fold.tuningPairSupport.pairs,tuningModel,{
-            learningRate,epochs:refitEpochCount,l2:candidateL2,
+            learningRate:candidateLearningRate,epochs:refitEpochCount,l2:candidateL2,
             patience:Math.max(1,refitEpochCount),
             temporalBlockCount,initialLogisticModel:foldLogisticBaselines[index].model,
             epochSelectionMode:'FIXED_EPOCHS'
@@ -3787,6 +3795,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
           TCN_LSTM_INPUT_CHANNELS+'_V1',
         parameter_count:temporalBlockCount*TCN_LSTM_INPUT_CHANNELS,
         l2:candidateL2,
+        learning_rate:candidateLearningRate,
         best_epoch:medianBestEpoch,
         best_validation_pairwise_accuracy_pct:Number(weightedValidationAccuracy.toFixed(4)),
         minimum_fold_pairwise_accuracy_pct:Number(minimumFoldValidationAccuracy.toFixed(4)),
@@ -3820,7 +3829,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     b.minimum_fold_pairwise_accuracy_pct-a.minimum_fold_pairwise_accuracy_pct||
     b.best_validation_pairwise_accuracy_pct-a.best_validation_pairwise_accuracy_pct||
     a.best_validation_pairwise_log_loss-b.best_validation_pairwise_log_loss||
-    a.parameter_count-b.parameter_count||b.l2-a.l2||a.best_epoch-b.best_epoch;
+    a.parameter_count-b.parameter_count||b.l2-a.l2||
+    a.learning_rate-b.learning_rate||a.best_epoch-b.best_epoch;
   const foldStableDualMetricCandidates=tuningCandidates.filter(item=>
     item.all_epoch_checkpoints_selected===true&&
     item.minimum_fold_pairwise_accuracy_improvement_pct>0&&
@@ -3843,7 +3853,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   };
   const training=fitTcnLstmOrderedPairwiseRankingHead(
     ordered,pairSupport.pairs,rankerModel,{
-      learningRate,epochs:finalEpochs,l2:selectedTuning.l2,
+      learningRate:selectedTuning.learning_rate,epochs:finalEpochs,l2:selectedTuning.l2,
       patience:Math.min(50,finalEpochs),
       temporalBlockCount:selectedTuning.temporal_block_count,
       initialLogisticModel:finalLogisticRankingBaseline,
@@ -3913,6 +3923,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     fold_stable_dual_metric_superiority: selectedCandidateQualified,
     robustness_status:selectedCandidateQualified?'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY':'ABSTAIN_NO_FOLD_STABLE_DUAL_SUPERIORITY',
     selected_l2:selectedTuning.l2,
+    selected_learning_rate:selectedTuning.learning_rate,
     selected_epochs:finalEpochs,
     selected_validation_pairwise_log_loss:selectedTuning.best_validation_pairwise_log_loss,
     selected_validation_pairwise_accuracy_pct:selectedTuning.best_validation_pairwise_accuracy_pct,
