@@ -21,8 +21,13 @@ export async function writeRawSpotKlineArchive({
 }={}){
   const normalizedSymbol=String(symbol||'').trim().toUpperCase();
   const normalizedInterval=String(interval||'').trim();
-  if(!/^[A-Z0-9]+USDT$/.test(normalizedSymbol))
-    throw new TypeError('NEURAL_RAW_ARCHIVE_SYMBOL_INVALID');
+  // Binance Spot symbols are opaque exchange identifiers. Keep filenames
+  // path-safe while accepting the same underscore/hyphen alphabet already
+  // supported by the archive guardian; the quote-asset suffix remains strict.
+  const archiveSymbolPattern=/^[A-Z0-9][A-Z0-9_-]{0,63}USDT$/;
+  if(!archiveSymbolPattern.test(normalizedSymbol))
+    throw new TypeError('NEURAL_RAW_ARCHIVE_SYMBOL_INVALID:'+
+      JSON.stringify(normalizedSymbol.slice(0,80)));
   if(!['1m','5m','15m'].includes(normalizedInterval))
     throw new TypeError('NEURAL_RAW_ARCHIVE_INTERVAL_INVALID');
   if(!Array.isArray(rawRows)||rawRows.some(row=>!Array.isArray(row)))
