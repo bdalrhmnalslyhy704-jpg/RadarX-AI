@@ -3,9 +3,9 @@ import { createReadStream } from 'node:fs';
 import { lstat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { createGunzip } from 'node:zlib';
+import {binanceRawArchiveFilename,isBinanceRawArchiveFilename} from './neural-closure-raw-archive-filename.mjs';
 
 const SHA256_PATTERN=/^[a-f0-9]{64}$/;
-const ARCHIVE_NAME_PATTERN=/^[A-Z0-9_-]+\.(?:1m|5m|15m)\.json\.gz$/;
 
 async function digestStream(stream,code) {
   const hash=createHash('sha256');
@@ -44,7 +44,16 @@ export async function verifyBinanceRawArchives({
 
   for(const record of archiveRecords){
     const file=String(record?.file||'');
-    if(!ARCHIVE_NAME_PATTERN.test(file)||seen.has(file))
+    const symbol=String(record?.symbol??'');
+    const interval=String(record?.interval??'');
+    let expectedFilename=null;
+    try{
+      expectedFilename=binanceRawArchiveFilename(symbol,interval);
+    }catch(error){
+      throw new Error('RAW_ARCHIVE_SYMBOL_OR_INTERVAL_INVALID:'+file+':'+
+        String(error?.message||error));
+    }
+    if(!isBinanceRawArchiveFilename(file)||file!==expectedFilename||seen.has(file))
       throw new Error('RAW_ARCHIVE_FILENAME_INVALID_OR_DUPLICATE:'+file);
     seen.add(file);
 
@@ -87,7 +96,7 @@ export async function verifyBinanceRawArchives({
     totalCompressedBytes+=compressed.bytes;
     totalRawBytes+=raw.bytes;
     totalRows+=expectedRows;
-    verified.push({file,row_count:expectedRows,
+    verified.push({file,symbol,interval,row_count:expectedRows,
       compressed_bytes:compressed.bytes,raw_bytes:raw.bytes,
       compressed_sha256:compressed.sha256,raw_sha256:raw.sha256});
   }
