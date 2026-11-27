@@ -1463,6 +1463,49 @@ test('paired outer PnL bootstrap gate requires a strictly positive matched-Logis
   assert.equal(qualifyPairedOuterExecutionPnlBootstrap(shortBlocks).passed,false);
 });
 
+test('paired PnL promotion gate accepts actual outer-bootstrap output only when matched Logistic lower CI is positive',()=>{
+  const allRows=makeRows({days:60,rowsPerDay:80});
+  const validation=splitFourHourRows(allRows).validation
+    .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
+  const candidateScores=validation.map(row=>row.target===1?0.99:0.01);
+  const logisticMatchedScores=validation.map(row=>row.target===1?0.01:0.99);
+  const baselineScores=validation.map(()=>0.35);
+  const result=bootstrapOuterValidationUncertainty(validation,{
+    LOGISTIC_REGRESSION:validation.map(row=>row.target?0.7:0.3),
+    TCN_LSTM_HYBRID:validation.map(row=>row.target?0.72:0.28)
+  },{
+    executionScoresByPolicy:{
+      LOGIT_CONTEXT_AUGMENTED:candidateScores,
+      LOGISTIC_MATCHED_CONTEXT:logisticMatchedScores
+    },
+    executionPolicyConfigurations:{
+      LOGIT_CONTEXT_AUGMENTED:{
+        minimum_score:0.5,require_positive_base_score:true
+      },
+      LOGISTIC_MATCHED_CONTEXT:{
+        match_trade_counts_with:'LOGIT_CONTEXT_AUGMENTED'
+      }
+    },
+    baseRiskAdjustedScoresByPolicy:{
+      LOGIT_CONTEXT_AUGMENTED:baselineScores
+    },
+    topKGrid:[1],roundTripCostBps:30,
+    repetitions:250,blockLengthDays:3,seed:22430,maxConcurrentPositions:30
+  });
+  assert.equal(result.status,'AVAILABLE',JSON.stringify(result));
+  assert.equal(result.sampling.repetitions,250);
+  assert.equal(result.sampling.block_length_days,3);
+  const paired=result.execution.paired_strategy_differences['1']
+    .LOGIT_CONTEXT_AUGMENTED_MINUS_LOGISTIC_MATCHED_CONTEXT.net_pnl_pct;
+  assert.equal(paired.status,'AVAILABLE');
+  assert.equal(paired.valid_repetitions,250);
+  assert.ok(paired.lower_95>0,JSON.stringify(paired));
+  const gate=qualifyPairedOuterExecutionPnlBootstrap(result);
+  assert.equal(gate.status,'PASSED',JSON.stringify({gate,paired}));
+  assert.equal(gate.candidate_minus_logistic_net_pnl_pct.lower_95,paired.lower_95);
+  assert.equal(gate.holdout_rows_or_scores_used,false);
+});
+
 test('outer-validation moving-block bootstrap returns paired Brier and execution confidence intervals without holdout access',()=>{
   const rows=makeRows({days:60,rowsPerDay:80});
   const sourceCommitSha='9'.repeat(40);
