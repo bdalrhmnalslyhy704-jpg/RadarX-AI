@@ -1414,11 +1414,14 @@ async function main(){
           // Preserve the ordered 24x29 history in the independent rank sidecar.
           // Train positive-vs-non-positive separation and ordering among profitable
           // Top-1 candidates, using only the earlier purged training rows.
-          // Keep the 30 bps cost, 0.50pp pair-gap floor and pure-Brier classifier fixed.
+          // Keep the 30 bps cost, 0.05pp pair-gap floor and pure-Brier classifier fixed.
+          // Train the ordered rank head with a frozen 0.25 score-margin hinge objective.
           rankingPairsPerTimestamp:16,
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
+          rankingHeadTrainingObjective:'PAIRWISE_MARGIN_HINGE_V1',
+          rankingHeadMargin:0.25,
           requireExternalLogisticSelectionBaseline:true,
           // Fit a separate purged expanding-window Logistic model on the
           // recurrent model-training block only. Its predictions are then
