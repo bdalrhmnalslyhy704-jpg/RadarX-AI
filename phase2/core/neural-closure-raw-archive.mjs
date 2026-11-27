@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {Readable,Transform} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import {createGzip} from 'node:zlib';
+import {binanceRawArchiveFilename,normalizeBinanceSpotUsdtSymbol} from './neural-closure-raw-archive-filename.mjs';
 
 const ARCHIVE_SCHEMA='BINANCE_SPOT_RAW_KLINE_ARCHIVE_V1';
 
@@ -19,24 +20,15 @@ const ARCHIVE_SCHEMA='BINANCE_SPOT_RAW_KLINE_ARCHIVE_V1';
 export async function writeRawSpotKlineArchive({
   symbol,interval,rawRows,archiveDir
 }={}){
-  const normalizedSymbol=String(symbol||'').trim().toUpperCase();
+  const normalizedSymbol=normalizeBinanceSpotUsdtSymbol(symbol);
   const normalizedInterval=String(interval||'').trim();
-  // Binance Spot symbols are opaque exchange identifiers. Keep filenames
-  // path-safe while accepting the same underscore/hyphen alphabet already
-  // supported by the archive guardian; the quote-asset suffix remains strict.
-  const archiveSymbolPattern=/^[A-Z0-9][A-Z0-9_-]{0,63}USDT$/;
-  if(!archiveSymbolPattern.test(normalizedSymbol))
-    throw new TypeError('NEURAL_RAW_ARCHIVE_SYMBOL_INVALID:'+
-      JSON.stringify(normalizedSymbol.slice(0,80)));
-  if(!['1m','5m','15m'].includes(normalizedInterval))
-    throw new TypeError('NEURAL_RAW_ARCHIVE_INTERVAL_INVALID');
+  const filename=binanceRawArchiveFilename(normalizedSymbol,normalizedInterval);
   if(!Array.isArray(rawRows)||rawRows.some(row=>!Array.isArray(row)))
     throw new TypeError('NEURAL_RAW_ARCHIVE_ROWS_INVALID');
   if(typeof archiveDir!=='string'||!archiveDir.trim())
     throw new TypeError('NEURAL_RAW_ARCHIVE_DIRECTORY_REQUIRED');
   await mkdir(archiveDir,{recursive:true});
 
-  const filename=normalizedSymbol+'.'+normalizedInterval+'.json.gz';
   const outputPath=join(archiveDir,filename);
   const temporaryPath=outputPath+'.tmp-'+process.pid+'-'+randomUUID();
   const rawHash=createHash('sha256');
