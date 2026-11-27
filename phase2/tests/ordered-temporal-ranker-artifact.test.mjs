@@ -392,6 +392,8 @@ test('Top-K artifact preserves per-fold pair-type metric provenance',()=>{
   const profile=makeProfile();
   const tuning=profile.training.return_ranking.ranking_head.internal_training_validation;
   profile.training.return_ranking.pair_strategy='PROFITABILITY_TOPK_V2';
+  tuning.validation_fraction=0.15;
+  tuning.validation_group_count=2;
   for(let index=0;index<tuning.folds.length;index++){
     const fold=tuning.folds[index];
     Object.assign(fold,{
@@ -433,12 +435,21 @@ test('Top-K artifact preserves per-fold pair-type metric provenance',()=>{
   const artifact=createOrderedTemporalRankerArtifact({profile,provenance});
   const verification=verifyOrderedTemporalRankerArtifact(artifact);
   assert.equal(verification.valid,true);
+  assert.equal(artifact.training_provenance.ranker_training_config.validation_fraction,0.15);
+  assert.equal(artifact.training_provenance.ranker_training_config.validation_group_count,2);
   const folds=artifact.training_provenance.internal_training_validation.folds;
   assert.equal(folds[0].validation_positive_vs_non_positive_pairs,8);
   const result=artifact.training_provenance.internal_training_validation.candidate_grid[0].fold_results[0];
   assert.equal(result.candidate_pair_type_metrics.positive_vs_positive.pairwise_accuracy_pct,55);
   assert.equal(result.logistic_pair_type_metrics.positive_vs_non_positive.pairwise_log_loss,0.66);
   assert.equal(result.positive_vs_positive_pairwise_accuracy_improvement_pct,-6);
+
+  const forgedValidationWindow=structuredClone(profile);
+  forgedValidationWindow.training.return_ranking.ranking_head.internal_training_validation
+    .validation_group_count++;
+  assert.throws(()=>createOrderedTemporalRankerArtifact({
+    profile:forgedValidationWindow,provenance
+  }),/ORDERED_RANKER_ARTIFACT_VERIFY_FAILED:ORDERED_RANKER_TRAINING_BOUNDARY_INVALID/);
 
   const forged=structuredClone(profile);
   forged.training.return_ranking.ranking_head.internal_training_validation.candidate_grid[0]
