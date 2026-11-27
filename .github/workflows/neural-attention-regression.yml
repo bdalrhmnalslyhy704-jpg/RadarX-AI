@@ -13,6 +13,7 @@ on:
       - research/build224-profitability-topk-pairs-20261127
       - research/build224-topk-pair-budget-32-20261127
       - research/build224-logistic-warmstart-ranking-20261127
+      - research/build224-logistic-residual-ranker-20261127
     paths:
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
@@ -30,7 +31,9 @@ on:
       - 'phase2/tests/logistic-temporal-cv.test.mjs'
       - 'phase2/core/temporal-logistic-baseline.mjs'
       - 'phase2/core/ordered-temporal-ranker-artifact.mjs'
+      - 'phase2/core/hurdle-v2-runtime-bundle.mjs'
       - 'phase2/tests/ordered-temporal-ranker-artifact.test.mjs'
+      - 'phase2/tests/hurdle-v2-runtime-bundle.test.mjs'
       - 'phase2/core/neural-closure-data-builder.mjs'
       - 'phase2/core/neural-closure-universe.mjs'
       - 'phase2/tools/build-neural-closure-dataset.mjs'
@@ -58,7 +61,9 @@ on:
       - 'phase2/tests/logistic-temporal-cv.test.mjs'
       - 'phase2/core/temporal-logistic-baseline.mjs'
       - 'phase2/core/ordered-temporal-ranker-artifact.mjs'
+      - 'phase2/core/hurdle-v2-runtime-bundle.mjs'
       - 'phase2/tests/ordered-temporal-ranker-artifact.test.mjs'
+      - 'phase2/tests/hurdle-v2-runtime-bundle.test.mjs'
       - 'phase2/core/neural-closure-data-builder.mjs'
       - 'phase2/core/neural-closure-universe.mjs'
       - 'phase2/tools/build-neural-closure-dataset.mjs'
@@ -118,6 +123,8 @@ jobs:
         run: node --test --test-timeout=180000 phase2/tests/hurdle-v2-artifact-contract.test.mjs
       - name: Verify ordered temporal ranker artifact integrity and inference
         run: node --test --test-timeout=180000 phase2/tests/ordered-temporal-ranker-artifact.test.mjs
+      - name: Verify complete Hurdle V2 runtime bundle and ranker-anchor pin
+        run: node --test --test-timeout=180000 phase2/tests/hurdle-v2-runtime-bundle.test.mjs
       - name: Verify checksummed model artifacts and experiment lineage
         run: node --test --test-timeout=180000 phase2/tests/model-artifact-feature-parity.test.mjs
       - name: Verify temporal training and exact artifact inference round-trip
@@ -129,7 +136,7 @@ jobs:
     # PR qualification remains protected by the repository opt-in variable.
     # This exact research branch also permits an explicit marker-gated push run;
     # that path still trains and qualifies on the inner partition only.
-    if: (github.event_name == 'pull_request' && (vars.RADARX_ENABLE_HURDLE_INNER_QUALIFICATION == 'true' || github.head_ref == 'research/build224-temporal-tied-ranker-20261125' || github.head_ref == 'research/build224-hurdle-v2-runtime-closure-20261127' || github.head_ref == 'research/build224-ranker-strong-regularization-20261127' || github.head_ref == 'research/build224-ranker-low-l2-refinement-20261127' || github.head_ref == 'research/build224-profitability-topk-pairs-20261127' || github.head_ref == 'research/build224-topk-pair-budget-32-20261127' || github.head_ref == 'research/build224-logistic-warmstart-ranking-20261127') || github.event_name == 'push' && (github.ref_name == 'research/build224-temporal-tied-ranker-20261125' || github.ref_name == 'research/build224-ranker-low-l2-refinement-20261127' || github.ref_name == 'research/build224-profitability-topk-pairs-20261127' || github.ref_name == 'research/build224-topk-pair-budget-32-20261127' || github.ref_name == 'research/build224-logistic-warmstart-ranking-20261127') && contains(github.event.head_commit.message, '[RUN-HURDLE-INNER-ONLY]')) && (github.head_ref == 'research/build224-hurdle-v2-artifact-export-20261122' || github.head_ref == 'research/build224-purged-execution-block-ranker-20261124' || github.head_ref == 'research/build224-ordered-ranker-persistence-20261124' || github.head_ref == 'research/build224-ranker-full-training-partition-20261124' || github.head_ref == 'research/build224-temporal-tied-ranker-20261125' || github.head_ref == 'research/build224-hurdle-v2-runtime-closure-20261127' || github.head_ref == 'research/build224-ranker-strong-regularization-20261127' || github.head_ref == 'research/build224-ranker-low-l2-refinement-20261127' || github.head_ref == 'research/build224-profitability-topk-pairs-20261127' || github.head_ref == 'research/build224-topk-pair-budget-32-20261127' || github.head_ref == 'research/build224-logistic-warmstart-ranking-20261127' || github.ref_name == 'research/build224-temporal-tied-ranker-20261125' || github.ref_name == 'research/build224-ranker-low-l2-refinement-20261127' || github.ref_name == 'research/build224-profitability-topk-pairs-20261127' || github.ref_name == 'research/build224-topk-pair-budget-32-20261127' || github.ref_name == 'research/build224-logistic-warmstart-ranking-20261127')
+    if: (github.event_name == 'pull_request' && (vars.RADARX_ENABLE_HURDLE_INNER_QUALIFICATION == 'true' || github.head_ref == 'research/build224-temporal-tied-ranker-20261125' || github.head_ref == 'research/build224-hurdle-v2-runtime-closure-20261127' || github.head_ref == 'research/build224-ranker-strong-regularization-20261127' || github.head_ref == 'research/build224-ranker-low-l2-refinement-20261127' || github.head_ref == 'research/build224-profitability-topk-pairs-20261127' || github.head_ref == 'research/build224-topk-pair-budget-32-20261127' || github.head_ref == 'research/build224-logistic-warmstart-ranking-20261127' || github.head_ref == 'research/build224-logistic-residual-ranker-20261127') || github.event_name == 'push' && (github.ref_name == 'research/build224-temporal-tied-ranker-20261125' || github.ref_name == 'research/build224-ranker-low-l2-refinement-20261127' || github.ref_name == 'research/build224-profitability-topk-pairs-20261127' || github.ref_name == 'research/build224-topk-pair-budget-32-20261127' || github.ref_name == 'research/build224-logistic-warmstart-ranking-20261127' || github.ref_name == 'research/build224-logistic-residual-ranker-20261127') && contains(github.event.head_commit.message, '[RUN-HURDLE-INNER-ONLY]')) && (github.head_ref == 'research/build224-hurdle-v2-artifact-export-20261122' || github.head_ref == 'research/build224-purged-execution-block-ranker-20261124' || github.head_ref == 'research/build224-ordered-ranker-persistence-20261124' || github.head_ref == 'research/build224-ranker-full-training-partition-20261124' || github.head_ref == 'research/build224-temporal-tied-ranker-20261125' || github.head_ref == 'research/build224-hurdle-v2-runtime-closure-20261127' || github.head_ref == 'research/build224-ranker-strong-regularization-20261127' || github.head_ref == 'research/build224-ranker-low-l2-refinement-20261127' || github.head_ref == 'research/build224-profitability-topk-pairs-20261127' || github.head_ref == 'research/build224-topk-pair-budget-32-20261127' || github.head_ref == 'research/build224-logistic-warmstart-ranking-20261127' || github.head_ref == 'research/build224-logistic-residual-ranker-20261127' || github.ref_name == 'research/build224-temporal-tied-ranker-20261125' || github.ref_name == 'research/build224-ranker-low-l2-refinement-20261127' || github.ref_name == 'research/build224-profitability-topk-pairs-20261127' || github.ref_name == 'research/build224-topk-pair-budget-32-20261127' || github.ref_name == 'research/build224-logistic-warmstart-ranking-20261127' || github.ref_name == 'research/build224-logistic-residual-ranker-20261127')
     needs: tcn-v11-regression
     runs-on: ubuntu-latest
     timeout-minutes: 120
