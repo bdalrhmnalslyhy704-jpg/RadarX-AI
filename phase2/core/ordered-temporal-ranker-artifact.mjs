@@ -35,7 +35,8 @@ function compareTuningCandidates(a,b){
  b.minimum_fold_pairwise_accuracy_pct-a.minimum_fold_pairwise_accuracy_pct||
  b.best_validation_pairwise_accuracy_pct-a.best_validation_pairwise_accuracy_pct||
  a.best_validation_pairwise_log_loss-b.best_validation_pairwise_log_loss||
- a.parameter_count-b.parameter_count||b.l2-a.l2||a.best_epoch-b.best_epoch;
+ a.parameter_count-b.parameter_count||b.l2-a.l2||
+ (a.learning_rate??0)-(b.learning_rate??0)||a.best_epoch-b.best_epoch;
 }
 function manifestFrom(core,contentHash){
   return {
@@ -105,6 +106,10 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
     const trainingConfig=training?.ranker_training_config;
     const tuningGrid=tuning?.candidate_grid;
     const tuningFolds=tuning?.folds;
+    const hasCandidateLearningRates=Array.isArray(tuningGrid)&&
+      tuningGrid.some(item=>item?.learning_rate!==undefined);
+    const candidateLearningRatesComplete=!hasCandidateLearningRates||
+      tuningGrid.every(item=>finite(item?.learning_rate)&&item.learning_rate>0&&item.learning_rate<=0.25);
     const foldCount=tuning?.fold_count;
     const isThreeFoldV6=tuning?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6';
     const isCurrentParetoV3=isThreeFoldV6&&tuning?.method===
@@ -181,15 +186,15 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       tuning?.tuning_pairs===tuningFolds.reduce((sum,fold)=>sum+fold.tuning_pairs,0)&&
       tuning?.validation_pairs===tuningFolds.reduce((sum,fold)=>sum+fold.validation_pairs,0)&&
       tuning?.purge_gap_ms===Math.min(...tuningFolds.map(fold=>fold.purge_gap_ms));
-    const candidateGridValid=Array.isArray(tuningGrid)&&tuningGrid.length>=2&&
-      new Set(tuningGrid.map(item=>String(item?.temporal_block_count)+'|'+String(item?.l2))).size===tuningGrid.length&&
+    const candidateGridValid=Array.isArray(tuningGrid)&&tuningGrid.length>=2&&candidateLearningRatesComplete&&
+      new Set(tuningGrid.map(item=>String(item?.temporal_block_count)+'|'+String(item?.l2)+'|'+String(item?.learning_rate??'DEFAULT'))).size===tuningGrid.length&&
       tuningGrid.every(item=>{
         const foldResults=item?.fold_results;
         if(!validTemporalBlockCounts.includes(item?.temporal_block_count)||
           item?.parameter_count!==item?.temporal_block_count*TCN_LSTM_INPUT_CHANNELS||
           item?.steps_per_block!==TCN_LSTM_STEPS/item?.temporal_block_count||
           item?.parameterization_id!=='TEMPORAL_BLOCK_TIED_'+item?.temporal_block_count+'X'+TCN_LSTM_INPUT_CHANNELS+'_V1'||
-          !finite(item?.l2)||item.l2<0||item.l2>1||!Number.isInteger(item?.best_epoch)||item.best_epoch<1||
+          !finite(item?.l2)||item.l2<0||item.l2>8||!Number.isInteger(item?.best_epoch)||item.best_epoch<1||
           !finite(item?.best_validation_pairwise_accuracy_pct)||item.best_validation_pairwise_accuracy_pct<0||
           item.best_validation_pairwise_accuracy_pct>100||!finite(item?.minimum_fold_pairwise_accuracy_pct)||
           item.minimum_fold_pairwise_accuracy_pct<0||item.minimum_fold_pairwise_accuracy_pct>100||
@@ -280,7 +285,9 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
           item?.training_pairs===trainingPairs&&item?.validation_pairs===validationPairs;
       });
     const selectedTuningCandidate=Array.isArray(tuningGrid)
-      ?tuningGrid.find(item=>item?.l2===tuning?.selected_l2&&item?.best_epoch===tuning?.selected_epochs&&
+      ?tuningGrid.find(item=>item?.l2===tuning?.selected_l2&&
+         (tuning?.selected_learning_rate===undefined||item?.learning_rate===tuning.selected_learning_rate)&&
+         item?.best_epoch===tuning?.selected_epochs&&
         item?.temporal_block_count===tuning?.selected_temporal_block_count&&
         item?.parameter_count===tuning?.selected_parameter_count&&
         item?.parameterization_id===tuning?.selected_parameterization_id&&
@@ -309,7 +316,7 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       training?.standardizer_fit_rows!==training.training_rows||
       !Number.isInteger(training?.training_pairs)||training.training_pairs<10||
       !trainingConfig||!finite(trainingConfig.learning_rate)||trainingConfig.learning_rate<=0||
-      !finite(trainingConfig.l2)||trainingConfig.l2<0||trainingConfig.l2>1||
+      !finite(trainingConfig.l2)||trainingConfig.l2<0||trainingConfig.l2>8||
       !Number.isInteger(trainingConfig.epochs_requested)||trainingConfig.epochs_requested<1||
       !Number.isInteger(trainingConfig.epochs_completed)||trainingConfig.epochs_completed<1||
       trainingConfig.epochs_completed>trainingConfig.epochs_requested||
@@ -386,6 +393,7 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       isThreeFoldV6&&Math.abs(selectedTuningCandidate.minimum_fold_pairwise_log_loss_improvement-tuning.selected_minimum_fold_pairwise_log_loss_improvement)>1e-9||
       Math.abs(selectedTuningCandidate.best_validation_pairwise_log_loss_improvement-tuning.selected_validation_pairwise_log_loss_improvement)>1e-9||
       trainingConfig.l2!==tuning.selected_l2||
+       (tuning?.selected_learning_rate!==undefined&&trainingConfig.learning_rate!==tuning.selected_learning_rate)||
       trainingConfig.epochs_requested!==tuning.selected_epochs||
       temporalBlockCount!==tuning.selected_temporal_block_count||
       trainingConfig.parameter_count!==tuning.selected_parameter_count||
