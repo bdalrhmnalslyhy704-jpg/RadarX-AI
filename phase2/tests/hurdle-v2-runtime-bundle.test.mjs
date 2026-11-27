@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import {
   HURDLE_V2_RUNTIME_BUNDLE_SCHEMA,
   createHurdleV2RuntimeBundle,
-  verifyHurdleV2RuntimeBundle
+  verifyHurdleV2RuntimeBundle,
+  verifyOrderedTemporalRankerRuntimeBinding
 } from '../core/hurdle-v2-runtime-bundle.mjs';
 
 const CONTEXT_SCHEMA =
@@ -58,6 +59,51 @@ function validProvenance() {
     roundTripCostBps: 30
   };
 }
+
+test('runtime binding pins both the residual scorer and complete Logistic anchor',()=>{
+  const makeBinding=()=>({
+    profile:{model:{
+      orderedRankingHeadWeights:Array.from({length:696},(_,i)=>i*0.0001),
+      orderedRankingFeatureMean:Array.from({length:696},(_,i)=>i*0.001),
+      orderedRankingFeatureStd:Array.from({length:696},(_,i)=>1+i*0.0001),
+      orderedRankingAnchorWeights:Array.from({length:696},(_,i)=>-i*0.0002),
+      orderedRankingAnchorFeatureMean:Array.from({length:696},(_,i)=>i*0.0003),
+      orderedRankingAnchorFeatureStd:Array.from({length:696},(_,i)=>1+i*0.0002),
+      orderedRankingAnchorBias:-0.125
+    }},
+    artifact:{parameters:{
+      weights:Array.from({length:696},(_,i)=>i*0.0001),
+      feature_mean:Array.from({length:696},(_,i)=>i*0.001),
+      feature_std:Array.from({length:696},(_,i)=>1+i*0.0001),
+      anchor_weights:Array.from({length:696},(_,i)=>-i*0.0002),
+      anchor_feature_mean:Array.from({length:696},(_,i)=>i*0.0003),
+      anchor_feature_std:Array.from({length:696},(_,i)=>1+i*0.0002),
+      anchor_bias:-0.125
+    }}
+  });
+  const valid=makeBinding();
+  assert.equal(verifyOrderedTemporalRankerRuntimeBinding(valid.profile,valid.artifact),true);
+
+  const changedResidual=makeBinding();
+  changedResidual.artifact.parameters.weights[12]+=0.01;
+  assert.equal(verifyOrderedTemporalRankerRuntimeBinding(
+    changedResidual.profile,changedResidual.artifact),false);
+
+  const changedResidualScaler=makeBinding();
+  changedResidualScaler.profile.model.orderedRankingFeatureStd[12]+=0.01;
+  assert.equal(verifyOrderedTemporalRankerRuntimeBinding(
+    changedResidualScaler.profile,changedResidualScaler.artifact),false);
+
+  const changedAnchor=makeBinding();
+  changedAnchor.artifact.parameters.anchor_weights[12]+=0.01;
+  assert.equal(verifyOrderedTemporalRankerRuntimeBinding(
+    changedAnchor.profile,changedAnchor.artifact),false);
+
+  const changedBias=makeBinding();
+  changedBias.profile.model.orderedRankingAnchorBias+=0.01;
+  assert.equal(verifyOrderedTemporalRankerRuntimeBinding(
+    changedBias.profile,changedBias.artifact),false);
+});
 
 test('runtime bundle requires a complete TCN-LSTM inference profile', () => {
   assert.throws(
