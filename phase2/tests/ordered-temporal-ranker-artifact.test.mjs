@@ -28,6 +28,11 @@ const means=Array.from({length:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT},(_,i)=>gr
 const stds=Array.from({length:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT},(_,i)=>1+(groupIndex(i)%7)*0.05);
 const weights=Array.from({length:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT},(_,i)=>
   Math.sin(groupIndex(i)*0.03)*0.015/stepsPerBlock);
+const anchorWeights=Array.from({length:TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT},(_,i)=>
+  Math.cos((i+3)*0.014)*0.0007);
+const anchorMeans=means.map((value,index)=>value*0.5+index*0.00001);
+const anchorStds=stds.map((value,index)=>value*1.1+(index%3)*0.01);
+const anchorBias=-0.17;
 const contract={
   schema:'RADARX_TCN_LSTM_EXECUTION_RANK_FEATURE_OUT_OF_SAMPLE_CONTRACT_V1',
   fit_partition:'PRE_EXECUTION_MODEL_TRAINING_PARTITION',
@@ -224,7 +229,11 @@ function makeProfile(overrides={}){
       rankingRepresentation:'RAW_ORDERED_696_V1',
       orderedRankingHeadWeights:weights,
       orderedRankingFeatureMean:means,
-      orderedRankingFeatureStd:stds
+      orderedRankingFeatureStd:stds,
+      orderedRankingAnchorWeights:anchorWeights,
+      orderedRankingAnchorFeatureMean:anchorMeans,
+      orderedRankingAnchorFeatureStd:anchorStds,
+      orderedRankingAnchorBias:anchorBias
     },
     training:{
       return_ranking:{
@@ -268,6 +277,12 @@ test('ordered raw 696 ranker exports a fully checksummed training-only artifact'
   assert.equal(artifact.parameters.weights.length,696);
   assert.equal(artifact.parameters.feature_mean.length,696);
   assert.equal(artifact.parameters.feature_std.length,696);
+  assert.equal(artifact.parameters.anchor_weights.length,696);
+  assert.equal(artifact.parameters.anchor_feature_mean.length,696);
+  assert.equal(artifact.parameters.anchor_feature_std.length,696);
+  assert.equal(artifact.parameters.anchor_bias,anchorBias);
+  assert.equal(artifact.artifact_schema_version,2);
+  assert.equal(artifact.artifact_schema,'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V2');
   assert.equal(artifact.training_provenance.fit_partition,'TRAINING_PARTITION_ONLY');
   assert.equal(artifact.training_provenance.validation_or_holdout_used,false);
   assert.equal(artifact.training_provenance.ranker_training_config.l2,0.05);
@@ -300,10 +315,28 @@ test('artifact inference reproduces the exact raw ordered linear rank score',()=
   const sequence=Array.from({length:24},(_,step)=>
     Array.from({length:29},(_,channel)=>Math.sin((step+1)*(channel+2)*0.017)));
   const features=buildTcnLstmFlattenedFeatures(sequence);
-  let expected=0;
+  let anchorScore=anchorBias;
+  for(let i=0;i<696;i++)
+    anchorScore+=anchorWeights[i]*((features[i]-anchorMeans[i])/anchorStds[i]);
+  let expected=Math.max(-30,Math.min(30,anchorScore));
   for(let i=0;i<696;i++)
     expected+=weights[i]*((features[i]-means[i])/stds[i]);
   expected=Math.max(-30,Math.min(30,expected));
+  assert.equal(predictOrderedTemporalRankerArtifact(sequence,artifact),expected);
+});
+
+test('zero temporal residual reproduces the pinned Logistic anchor exactly',()=>{
+  const profile=makeProfile();
+  profile.model.orderedRankingHeadWeights=Array(TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT).fill(0);
+  const artifact=createOrderedTemporalRankerArtifact({profile,provenance});
+  const sequence=Array.from({length:24},(_,step)=>
+    Array.from({length:29},(_,channel)=>Math.sin((step+2)*(channel+1)*0.021)));
+  const features=buildTcnLstmFlattenedFeatures(sequence);
+  let anchorScore=anchorBias;
+  for(let index=0;index<features.length;index++)
+    anchorScore+=anchorWeights[index]*
+      ((features[index]-anchorMeans[index])/anchorStds[index]);
+  const expected=Math.max(-30,Math.min(30,anchorScore));
   assert.equal(predictOrderedTemporalRankerArtifact(sequence,artifact),expected);
 });
 
