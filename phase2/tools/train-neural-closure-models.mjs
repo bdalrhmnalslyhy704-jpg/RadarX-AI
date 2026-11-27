@@ -1415,7 +1415,8 @@ async function main(){
           // Train positive-vs-non-positive separation and ordering among profitable
           // Top-1 candidates, using only the earlier purged training rows.
           // Keep the 30 bps cost, 0.50pp pair-gap floor and pure-Brier classifier fixed.
-          rankingPairsPerTimestamp:16,
+          // [RUN-HURDLE-INNER-ONLY] Double the per-decision pair budget while preserving equal Top-K strata.
+          rankingPairsPerTimestamp:32,
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
