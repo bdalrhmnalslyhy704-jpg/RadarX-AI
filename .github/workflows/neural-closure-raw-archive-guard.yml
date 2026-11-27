@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/neural-closure-raw-archive-guard.yml'
       - 'phase2/core/neural-closure-raw-archive.mjs'
+      - 'phase2/core/neural-closure-raw-archive-filename.mjs'
+      - 'phase2/core/neural-closure-archive-guardian.mjs'
       - 'phase2/tests/neural-closure-data-builder.test.mjs'
   workflow_dispatch:
 
@@ -33,7 +35,10 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
-      - name: Syntax-check raw archive writer
-        run: node --check phase2/core/neural-closure-raw-archive.mjs
+      - name: Syntax-check raw archive writer and guardian
+        run: |
+          node --check phase2/core/neural-closure-raw-archive-filename.mjs
+          node --check phase2/core/neural-closure-raw-archive.mjs
+          node --check phase2/core/neural-closure-archive-guardian.mjs
       - name: Test raw archive identity, hashing, atomicity and safe filenames
         run: node --test --test-timeout=180000 phase2/tests/neural-closure-data-builder.test.mjs
