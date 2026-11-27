@@ -661,7 +661,7 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
     pairStrategy:'PROFITABILITY_TOPK_V2',
     trainingObjective:'PAIRWISE_SOFTPLUS_MARGIN_V1',rankingMargin:0.25,
     learningRate:0.03,epochs:4,l2:0.001,patience:2,
-    l2Grid:[0.001,0.01],temporalBlockCounts:[1],validationFraction:0.08
+    l2Grid:[0.001,0.01],temporalBlockCounts:[1],validationFraction:0.15
   });
   assert.equal(fitted.pair_support.pair_strategy,'PROFITABILITY_TOPK_V2');
   assert.equal(fitted.training.pair_strategy,'PROFITABILITY_TOPK_V2');
@@ -670,6 +670,8 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
   assert.equal(fitted.training.internal_training_validation.pair_strategy,
     'PROFITABILITY_TOPK_V2');
   assert.equal(fitted.training.internal_training_validation.fold_count,3);
+  assert.equal(fitted.training.internal_training_validation.validation_fraction,0.15);
+  assert.equal(fitted.training.internal_training_validation.validation_group_count,15);
   assert.equal(fitted.training.training_objective,'PAIRWISE_SOFTPLUS_MARGIN_V1');
   assert.equal(fitted.training.ranking_margin,0.25);
   assert.equal(fitted.training.internal_training_validation.training_objective,
@@ -679,7 +681,7 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
     assert.ok(fold.tuning_decision_group_count>0);
     assert.equal(fold.tuning_pairs,
       fold.tuning_positive_vs_non_positive_pairs+fold.tuning_positive_vs_positive_pairs);
-    assert.ok(fold.validation_decision_group_count>0);
+    assert.equal(fold.validation_decision_group_count,15);
     assert.equal(fold.validation_pairs,
       fold.validation_positive_vs_non_positive_pairs+fold.validation_positive_vs_positive_pairs);
     assert.ok(fold.epoch_training_decision_group_count>0);
