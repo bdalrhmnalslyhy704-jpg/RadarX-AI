@@ -427,6 +427,35 @@ test('05b. artifact verifier rejects a head without the purged probability calib
   assert.match(result.reason,/HURDLE_V2_HEAD_INVALID:contextual/);
 });
 
+test('05e. class-conditional mean calibrator enforces outcome class and returns finite affine parameters',()=>{
+  const positive=fitHurdleConditionalMeanCalibration(
+    [0.8,1.0,1.2,1.4,1.6,1.8,2.0,2.2],
+    [1.1,1.3,1.5,1.7,1.9,2.1,2.3,2.5],
+    {positiveClass:true,minimumSamples:8,iterations:120}
+  );
+  const nonPositive=fitHurdleConditionalMeanCalibration(
+    [-0.8,-0.7,-0.6,-0.5,-0.4,-0.3,-0.2,-0.1],
+    [-1.1,-1.0,-0.9,-0.8,-0.7,-0.6,-0.5,-0.4],
+    {positiveClass:false,minimumSamples:8,iterations:120}
+  );
+  assert.equal(positive.fitted,true);
+  assert.equal(positive.class_condition,'POSITIVE_NET_RETURN');
+  assert.equal(nonPositive.fitted,true);
+  assert.equal(nonPositive.class_condition,'NON_POSITIVE_NET_RETURN');
+  assert.ok(Number.isFinite(positive.slope)&&Number.isFinite(positive.intercept));
+  assert.ok(Number.isFinite(nonPositive.slope)&&Number.isFinite(nonPositive.intercept));
+  assert.throws(()=>fitHurdleConditionalMeanCalibration(
+    [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8],
+    [1,1,1,1,-1,1,1,1],
+    {positiveClass:true}
+  ),/INPUT_INVALID/);
+  const insufficient=fitHurdleConditionalMeanCalibration(
+    [0.1,0.2],[-0.1,-0.2],{positiveClass:false,minimumSamples:8}
+  );
+  assert.equal(insufficient.fitted,false);
+  assert.equal(insufficient.validation_or_holdout_used,false);
+});
+
 test('05c. artifact verifier rejects either missing class-conditional mean calibrator',()=>{
   for(const [key,field] of [
     ['LOGIT_CONTEXT_AUGMENTED','positive_conditional_mean_model'],
