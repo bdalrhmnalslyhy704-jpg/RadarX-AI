@@ -71,30 +71,59 @@ export function parseBinanceSpotKline(raw,{serverTime,intervalMs}={}) {
 }
 
 /** Build 4h-spaced decisions on closed 15m boundaries, all with matured labels. */
-export function createNeuralClosureDecisionSchedule({serverTime,days=60}={}) {
-  const now=num(serverTime),durationDays=num(days);
-  if(now===null||now<=0||durationDays===null||
-    !Number.isInteger(durationDays)||durationDays<60||durationDays>180)
+export function createNeuralClosureDecisionSchedule({serverTime,days=60,startAt=null}={}) {
+  const now=num(serverTime);
+  if(now===null||now<=0)
     throw new TypeError('NEURAL_CLOSURE_SCHEDULE_ARGUMENTS_INVALID');
   const decisionsPerDay=DAY_MS/FOUR_HOURS_MS;
-  const decisionCount=durationDays*decisionsPerDay;
   const endAt=Math.floor((now-FOUR_HOURS_MS-DECISION_OFFSET_MS)/FOUR_HOURS_MS)*
     FOUR_HOURS_MS+DECISION_OFFSET_MS;
-  const startAt=endAt-(decisionCount-1)*FOUR_HOURS_MS;
+  const prospectiveStartProvided=startAt!==null&&startAt!==undefined;
+  const prospectiveStartAt=prospectiveStartProvided?num(startAt):null;
+  let firstAt,decisionCount,durationDays,mode;
+  if(prospectiveStartProvided){
+    // Prospective cohorts start at an exact predeclared 4h decision boundary.
+    // Do not silently round invalid input or admit an unmatured label.
+    const aligned=Number.isSafeInteger(prospectiveStartAt)&&
+      prospectiveStartAt%FOUR_HOURS_MS===DECISION_OFFSET_MS;
+    if(!aligned||prospectiveStartAt<=0||
+      prospectiveStartAt+FOUR_HOURS_MS>now||endAt<prospectiveStartAt)
+      throw new TypeError('NEURAL_CLOSURE_PROSPECTIVE_SCHEDULE_BOUNDARY_INVALID');
+    firstAt=prospectiveStartAt;
+    decisionCount=Math.floor((endAt-firstAt)/FOUR_HOURS_MS)+1;
+    if(!Number.isInteger(decisionCount)||decisionCount<12||
+      decisionCount>180*decisionsPerDay)
+      throw new TypeError('NEURAL_CLOSURE_PROSPECTIVE_SCHEDULE_SUPPORT_INVALID');
+    durationDays=Number((decisionCount/decisionsPerDay).toFixed(4));
+    mode='PROSPECTIVE_LOCKED_OUT_OF_TIME';
+  }else{
+    const duration=num(days);
+    if(duration===null||!Number.isInteger(duration)||duration<60||duration>180)
+      throw new TypeError('NEURAL_CLOSURE_SCHEDULE_ARGUMENTS_INVALID');
+    durationDays=duration;
+    decisionCount=durationDays*decisionsPerDay;
+    firstAt=endAt-(decisionCount-1)*FOUR_HOURS_MS;
+    mode='HISTORICAL_FIXED_DAY_COHORT';
+  }
+  const lastAt=firstAt+(decisionCount-1)*FOUR_HOURS_MS;
   const decisionTimes=Array.from({length:decisionCount},(_,index)=>
-    startAt+index*FOUR_HOURS_MS);
+    firstAt+index*FOUR_HOURS_MS);
+  const uniqueUtcDays=new Set(decisionTimes.map(at=>
+    Math.floor(at/DAY_MS)*DAY_MS)).size;
   return {
-    days:durationDays,decision_count:decisionCount,
-    first_decision_at:startAt,last_decision_at:endAt,
+    mode,days:durationDays,decision_count:decisionCount,
+    first_decision_at:firstAt,last_decision_at:lastAt,
     decision_interval_ms:FOUR_HOURS_MS,
     decision_times:decisionTimes,
-    one_minute_start_open_at:startAt+1,
-    one_minute_end_open_at:endAt+FOUR_HOURS_MS-MINUTE_MS+1,
-    five_minute_start_open_at:startAt-23*FIVE_MINUTES_MS-FIVE_MINUTES_MS+1,
-    five_minute_end_open_at:endAt-FIVE_MINUTES_MS+1,
-    fifteen_minute_start_open_at:startAt-95*FIFTEEN_MINUTES_MS-FIFTEEN_MINUTES_MS+1,
-    fifteen_minute_end_open_at:endAt-FIFTEEN_MINUTES_MS+1,
-    required_unique_utc_days:durationDays
+    one_minute_start_open_at:firstAt+1,
+    one_minute_end_open_at:lastAt+FOUR_HOURS_MS-MINUTE_MS+1,
+    five_minute_start_open_at:firstAt-23*FIVE_MINUTES_MS-FIVE_MINUTES_MS+1,
+    five_minute_end_open_at:lastAt-FIVE_MINUTES_MS+1,
+    fifteen_minute_start_open_at:firstAt-95*FIFTEEN_MINUTES_MS-FIFTEEN_MINUTES_MS+1,
+    fifteen_minute_end_open_at:lastAt-FIFTEEN_MINUTES_MS+1,
+    required_unique_utc_days:uniqueUtcDays,
+    labels_matured_at_collection:true,
+    start_boundary_was_rounded:false
   };
 }
 

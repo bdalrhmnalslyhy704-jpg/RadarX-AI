@@ -27,6 +27,16 @@ function hashObject(value){
   return createHash('sha256').update(Buffer.from(canonical(value),'utf8')).digest('hex');
 }
 function fail(reason){return {valid:false,reason};}
+function compareTuningCandidates(a,b){
+ return b.minimum_fold_pairwise_accuracy_improvement_pct-a.minimum_fold_pairwise_accuracy_improvement_pct||
+ (b.minimum_fold_pairwise_log_loss_improvement??0)-(a.minimum_fold_pairwise_log_loss_improvement??0)||
+ b.best_validation_pairwise_accuracy_improvement_pct-a.best_validation_pairwise_accuracy_improvement_pct||
+ b.best_validation_pairwise_log_loss_improvement-a.best_validation_pairwise_log_loss_improvement||
+ b.minimum_fold_pairwise_accuracy_pct-a.minimum_fold_pairwise_accuracy_pct||
+ b.best_validation_pairwise_accuracy_pct-a.best_validation_pairwise_accuracy_pct||
+ a.best_validation_pairwise_log_loss-b.best_validation_pairwise_log_loss||
+ a.parameter_count-b.parameter_count||b.l2-a.l2||a.best_epoch-b.best_epoch;
+}
 function manifestFrom(core,contentHash){
   return {
     schema:'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_MANIFEST_V1',
@@ -94,13 +104,203 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
     const tuning=training?.internal_training_validation;
     const trainingConfig=training?.ranker_training_config;
     const tuningGrid=tuning?.candidate_grid;
+    const tuningFolds=tuning?.folds;
+    const foldCount=tuning?.fold_count;
+    const isThreeFoldV6=tuning?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6';
+    const isCurrentParetoV3=isThreeFoldV6&&tuning?.method===
+      'THREE_FOLD_NESTED_PARETO_CHECKPOINT_REQUIRED_LOGISTIC_ANCHORED_VALIDATION_V3';
+    const isLegacyTwoFoldV5=tuning?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V5';
+    const validTemporalBlockCounts=[1,2,3,4,6,8,12,24];
+    const temporalBlockCount=trainingConfig?.temporal_block_count;
+    const temporalStepsPerBlock=Number.isInteger(temporalBlockCount)&&temporalBlockCount>0
+      ?TCN_LSTM_STEPS/temporalBlockCount:NaN;
+    const tiedParameterizationValid=validTemporalBlockCounts.includes(temporalBlockCount)&&
+      Number.isInteger(temporalStepsPerBlock)&&
+      trainingConfig?.parameter_count===temporalBlockCount*TCN_LSTM_INPUT_CHANNELS&&
+      trainingConfig?.parameterization_id===
+        'TEMPORAL_BLOCK_TIED_'+temporalBlockCount+'X'+TCN_LSTM_INPUT_CHANNELS+'_V1'&&
+      Array.from({length:TCN_LSTM_STEPS},(_,step)=>step).every(step=>
+        Array.from({length:TCN_LSTM_INPUT_CHANNELS},(_,channel)=>channel).every(channel=>{
+          const first=(Math.floor(step/temporalStepsPerBlock)*temporalStepsPerBlock)*TCN_LSTM_INPUT_CHANNELS+channel;
+          const current=step*TCN_LSTM_INPUT_CHANNELS+channel;
+          return Math.abs(parameters.weights[current]-parameters.weights[first])<=1e-12&&
+            Math.abs(parameters.feature_mean[current]-parameters.feature_mean[first])<=1e-12&&
+            Math.abs(parameters.feature_std[current]-parameters.feature_std[first])<=1e-12;
+        })
+      );
+    const foldContractValid=Array.isArray(tuningFolds)&&
+      (isThreeFoldV6?foldCount===3:isLegacyTwoFoldV5&&foldCount===2)&&
+      tuningFolds.length===foldCount&&
+      tuningFolds.every((fold,index)=>
+        fold?.fold_index===index+1&&
+        finite(fold?.fit_end_fraction)&&fold.fit_end_fraction>0&&fold.fit_end_fraction<1&&
+        Number.isInteger(fold?.tuning_rows)&&fold.tuning_rows>=20&&
+        Number.isInteger(fold?.validation_rows)&&fold.validation_rows>=20&&
+        Number.isInteger(fold?.purged_rows)&&fold.purged_rows>=0&&
+        Number.isInteger(fold?.tuning_pairs)&&fold.tuning_pairs>=10&&
+        Number.isInteger(fold?.validation_pairs)&&fold.validation_pairs>=10&&
+        Number.isInteger(fold?.epoch_training_rows)&&fold.epoch_training_rows>=20&&
+        Number.isInteger(fold?.epoch_training_pairs)&&fold.epoch_training_pairs>=10&&
+        Number.isInteger(fold?.epoch_validation_rows)&&fold.epoch_validation_rows>=20&&
+        Number.isInteger(fold?.epoch_validation_pairs)&&fold.epoch_validation_pairs>=10&&
+        Number.isInteger(fold?.epoch_purged_rows)&&fold.epoch_purged_rows>=0&&
+        Number.isInteger(fold?.epoch_unused_rows)&&fold.epoch_unused_rows>=0&&
+        fold.epoch_training_rows+fold.epoch_validation_rows+
+          fold.epoch_purged_rows+fold.epoch_unused_rows===fold.tuning_rows&&
+        finite(fold?.epoch_training_max_at)&&finite(fold?.epoch_training_max_resolved_at)&&
+        finite(fold?.epoch_validation_min_at)&&finite(fold?.epoch_validation_max_at)&&
+        fold.epoch_validation_max_at>=fold.epoch_validation_min_at&&
+        fold.epoch_validation_min_at>fold.epoch_training_max_resolved_at&&
+        finite(fold?.epoch_purge_gap_ms)&&
+        Math.abs(fold.epoch_purge_gap_ms-
+          (fold.epoch_validation_min_at-fold.epoch_training_max_at))<=1e-6&&
+        fold.epoch_purge_gap_ms>=tuning?.purge_horizon_ms&&
+        fold.epoch_validation_max_at<fold.validation_min_at&&
+        finite(fold?.tuning_max_resolved_at)&&finite(fold?.tuning_max_at)&&
+        finite(fold?.validation_min_at)&&finite(fold?.validation_max_at)&&
+        fold.validation_max_at>=fold.validation_min_at&&
+        fold.validation_min_at>fold.tuning_max_resolved_at&&
+        finite(fold?.logistic_validation_pairwise_log_loss)&&
+        finite(fold?.logistic_validation_pairwise_accuracy_pct)&&
+        fold.logistic_validation_pairwise_accuracy_pct>=0&&
+        fold.logistic_validation_pairwise_accuracy_pct<=100&&
+        fold.logistic_baseline_training_rows===fold.tuning_rows&&
+        fold.logistic_baseline_validation_labels_read===false&&
+        fold.logistic_baseline_validation_or_holdout_used===false&&
+        finite(fold?.purge_gap_ms)&&
+        Math.abs(fold.purge_gap_ms-(fold.validation_min_at-fold.tuning_max_at))<=1e-6&&
+        fold.purge_gap_ms>=tuning?.purge_horizon_ms
+      )&&
+      tuningFolds.slice(0,-1).every((fold,index)=>
+        fold.validation_max_at<tuningFolds[index+1].validation_min_at&&
+        tuningFolds[index+1].tuning_max_at>=fold.validation_max_at);
+    const foldTotalsValid=foldContractValid&&
+      tuning?.tuning_rows===tuningFolds.reduce((sum,fold)=>sum+fold.tuning_rows,0)&&
+      tuning?.validation_rows===tuningFolds.reduce((sum,fold)=>sum+fold.validation_rows,0)&&
+      tuning?.purged_rows===tuningFolds.reduce((sum,fold)=>sum+fold.purged_rows,0)&&
+      tuning?.tuning_pairs===tuningFolds.reduce((sum,fold)=>sum+fold.tuning_pairs,0)&&
+      tuning?.validation_pairs===tuningFolds.reduce((sum,fold)=>sum+fold.validation_pairs,0)&&
+      tuning?.purge_gap_ms===Math.min(...tuningFolds.map(fold=>fold.purge_gap_ms));
+    const candidateGridValid=Array.isArray(tuningGrid)&&tuningGrid.length>=2&&
+      new Set(tuningGrid.map(item=>String(item?.temporal_block_count)+'|'+String(item?.l2))).size===tuningGrid.length&&
+      tuningGrid.every(item=>{
+        const foldResults=item?.fold_results;
+        if(!validTemporalBlockCounts.includes(item?.temporal_block_count)||
+          item?.parameter_count!==item?.temporal_block_count*TCN_LSTM_INPUT_CHANNELS||
+          item?.steps_per_block!==TCN_LSTM_STEPS/item?.temporal_block_count||
+          item?.parameterization_id!=='TEMPORAL_BLOCK_TIED_'+item?.temporal_block_count+'X'+TCN_LSTM_INPUT_CHANNELS+'_V1'||
+          !finite(item?.l2)||item.l2<0||item.l2>1||!Number.isInteger(item?.best_epoch)||item.best_epoch<1||
+          !finite(item?.best_validation_pairwise_accuracy_pct)||item.best_validation_pairwise_accuracy_pct<0||
+          item.best_validation_pairwise_accuracy_pct>100||!finite(item?.minimum_fold_pairwise_accuracy_pct)||
+          item.minimum_fold_pairwise_accuracy_pct<0||item.minimum_fold_pairwise_accuracy_pct>100||
+          !finite(item?.logistic_validation_pairwise_accuracy_pct)||
+          item.logistic_validation_pairwise_accuracy_pct<0||item.logistic_validation_pairwise_accuracy_pct>100||
+          !finite(item?.logistic_validation_pairwise_log_loss)||
+          !finite(item?.best_validation_pairwise_accuracy_improvement_pct)||
+          !finite(item?.minimum_fold_pairwise_accuracy_improvement_pct)||
+          isThreeFoldV6&&!finite(item?.minimum_fold_pairwise_log_loss_improvement)||
+          !finite(item?.best_validation_pairwise_log_loss_improvement)||
+          !finite(item?.validation_pairwise_accuracy_std_pct)||item.validation_pairwise_accuracy_std_pct<0||
+          !finite(item?.training_pairwise_accuracy_pct)||item.training_pairwise_accuracy_pct<0||
+          item.training_pairwise_accuracy_pct>100||!finite(item?.best_validation_pairwise_log_loss)||
+          !finite(item?.training_pairwise_log_loss)||item?.fold_count!==foldCount||
+          !Array.isArray(foldResults)||foldResults.length!==foldCount)return false;
+        const foldResultsValid=foldResults.every((result,index)=>{
+          const fold=tuningFolds[index];
+          return result?.fold_index===fold.fold_index&&Number.isInteger(result?.best_epoch)&&result.best_epoch>=1&&
+            (!isCurrentParetoV3||typeof result?.epoch_checkpoint_selected==='boolean')&&
+            finite(result?.best_validation_pairwise_accuracy_pct)&&result.best_validation_pairwise_accuracy_pct>=0&&
+            result.best_validation_pairwise_accuracy_pct<=100&&finite(result?.logistic_validation_pairwise_accuracy_pct)&&
+            result.logistic_validation_pairwise_accuracy_pct===fold.logistic_validation_pairwise_accuracy_pct&&
+            finite(result?.logistic_validation_pairwise_log_loss)&&
+            result.logistic_validation_pairwise_log_loss===fold.logistic_validation_pairwise_log_loss&&
+            finite(result?.training_pairwise_accuracy_pct)&&result.training_pairwise_accuracy_pct>=0&&
+            result.training_pairwise_accuracy_pct<=100&&
+            finite(result?.epoch_selection_pairwise_log_loss)&&
+            finite(result?.epoch_selection_pairwise_accuracy_pct)&&
+            result.epoch_selection_pairwise_accuracy_pct>=0&&
+            result.epoch_selection_pairwise_accuracy_pct<=100&&
+            result?.epoch_training_rows===fold.epoch_training_rows&&
+            result?.epoch_training_pairs===fold.epoch_training_pairs&&
+            result?.epoch_validation_rows===fold.epoch_validation_rows&&
+            result?.epoch_validation_pairs===fold.epoch_validation_pairs&&
+            result?.epoch_purged_rows===fold.epoch_purged_rows&&
+            result?.epoch_unused_rows===fold.epoch_unused_rows&&
+            result?.epoch_purge_gap_ms===fold.epoch_purge_gap_ms&&
+            finite(result?.best_validation_pairwise_log_loss)&&finite(result?.training_pairwise_log_loss)&&
+            result?.training_rows===fold.tuning_rows&&result?.validation_rows===fold.validation_rows&&
+            result?.purged_rows===fold.purged_rows&&result?.training_pairs===fold.tuning_pairs&&
+            result?.validation_pairs===fold.validation_pairs;
+        });
+        if(!foldResultsValid)return false;
+        const checkpointSelectedCount=foldResults.filter(result=>
+          result.epoch_checkpoint_selected===true).length;
+        const allEpochCheckpointsSelected=checkpointSelectedCount===foldCount;
+        if(isCurrentParetoV3&&(
+          item.epoch_checkpoint_selected_count!==checkpointSelectedCount||
+          item.all_epoch_checkpoints_selected!==allEpochCheckpointsSelected
+        ))return false;
+        const validationPairs=foldResults.reduce((sum,result)=>sum+result.validation_pairs,0);
+        const trainingPairs=foldResults.reduce((sum,result)=>sum+result.training_pairs,0);
+        const expectedValidationLoss=foldResults.reduce((sum,result)=>sum+result.best_validation_pairwise_log_loss*result.validation_pairs,0)/validationPairs;
+        const expectedTrainingLoss=foldResults.reduce((sum,result)=>sum+result.training_pairwise_log_loss*result.training_pairs,0)/trainingPairs;
+        const expectedValidationAccuracy=foldResults.reduce((sum,result)=>sum+result.best_validation_pairwise_accuracy_pct*result.validation_pairs,0)/validationPairs;
+        const expectedTrainingAccuracy=foldResults.reduce((sum,result)=>sum+result.training_pairwise_accuracy_pct*result.training_pairs,0)/trainingPairs;
+        const expectedLogisticValidationAccuracy=foldResults.reduce((sum,result)=>sum+result.logistic_validation_pairwise_accuracy_pct*result.validation_pairs,0)/validationPairs;
+        const expectedLogisticValidationLoss=foldResults.reduce((sum,result)=>sum+result.logistic_validation_pairwise_log_loss*result.validation_pairs,0)/validationPairs;
+        const expectedMinimumFoldAccuracy=Math.min(...foldResults.map(result=>result.best_validation_pairwise_accuracy_pct));
+        const expectedMinimumFoldAccuracyImprovement=Math.min(...foldResults.map(result=>
+          result.best_validation_pairwise_accuracy_pct-result.logistic_validation_pairwise_accuracy_pct
+        ));
+        const expectedAccuracyImprovement=expectedValidationAccuracy-expectedLogisticValidationAccuracy;
+        const expectedLogLossImprovement=expectedLogisticValidationLoss-expectedValidationLoss;
+        const expectedMinimumFoldLogLossImprovement=Math.min(...foldResults.map(result=>
+          result.logistic_validation_pairwise_log_loss-result.best_validation_pairwise_log_loss
+        ));
+        const accuracyVariance=foldResults.reduce((sum,result)=>sum+result.validation_pairs*(result.best_validation_pairwise_accuracy_pct-expectedValidationAccuracy)**2,0)/validationPairs;
+        const epochs=foldResults.map(result=>result.best_epoch).sort((a,b)=>a-b);
+        const middle=Math.floor(epochs.length/2);
+        const expectedMedianEpoch=epochs.length%2?epochs[middle]:Math.max(1,Math.round((epochs[middle-1]+epochs[middle])/2));
+        return item?.best_epoch===expectedMedianEpoch&&
+          Math.abs(item.best_validation_pairwise_accuracy_pct-Number(expectedValidationAccuracy.toFixed(4)))<=1e-9&&
+          Math.abs(item.minimum_fold_pairwise_accuracy_pct-Number(expectedMinimumFoldAccuracy.toFixed(4)))<=1e-9&&
+          Math.abs(item.logistic_validation_pairwise_accuracy_pct-Number(expectedLogisticValidationAccuracy.toFixed(4)))<=1e-9&&
+          Math.abs(item.logistic_validation_pairwise_log_loss-Number(expectedLogisticValidationLoss.toFixed(8)))<=1e-9&&
+          Math.abs(item.best_validation_pairwise_accuracy_improvement_pct-Number(expectedAccuracyImprovement.toFixed(4)))<=1e-9&&
+          Math.abs(item.minimum_fold_pairwise_accuracy_improvement_pct-Number(expectedMinimumFoldAccuracyImprovement.toFixed(4)))<=1e-9&&
+          (!isThreeFoldV6||Math.abs(item.minimum_fold_pairwise_log_loss_improvement-Number(expectedMinimumFoldLogLossImprovement.toFixed(8)))<=1e-9)&&
+          Math.abs(item.best_validation_pairwise_log_loss_improvement-Number(expectedLogLossImprovement.toFixed(8)))<=1e-9&&
+          Math.abs(item.validation_pairwise_accuracy_std_pct-Number(Math.sqrt(Math.max(0,accuracyVariance)).toFixed(4)))<=1e-9&&
+          Math.abs(item.training_pairwise_accuracy_pct-Number(expectedTrainingAccuracy.toFixed(4)))<=1e-9&&
+          Math.abs(item.best_validation_pairwise_log_loss-Number(expectedValidationLoss.toFixed(8)))<=1e-9&&
+          Math.abs(item.training_pairwise_log_loss-Number(expectedTrainingLoss.toFixed(8)))<=1e-9&&
+          item?.training_rows===foldResults.reduce((sum,result)=>sum+result.training_rows,0)&&
+          item?.validation_rows===foldResults.reduce((sum,result)=>sum+result.validation_rows,0)&&
+          item?.purged_rows===foldResults.reduce((sum,result)=>sum+result.purged_rows,0)&&
+          item?.training_pairs===trainingPairs&&item?.validation_pairs===validationPairs;
+      });
     const selectedTuningCandidate=Array.isArray(tuningGrid)
-      ?tuningGrid.find(item=>item?.l2===tuning?.selected_l2&&
-        item?.best_epoch===tuning?.selected_epochs&&
-        item?.best_validation_pairwise_log_loss===tuning?.selected_validation_pairwise_log_loss)
-      :null;
-    const tuningMinimumLoss=Array.isArray(tuningGrid)&&tuningGrid.length
-      ?Math.min(...tuningGrid.map(item=>Number(item?.best_validation_pairwise_log_loss))):NaN;
+      ?tuningGrid.find(item=>item?.l2===tuning?.selected_l2&&item?.best_epoch===tuning?.selected_epochs&&
+        item?.temporal_block_count===tuning?.selected_temporal_block_count&&
+        item?.parameter_count===tuning?.selected_parameter_count&&
+        item?.parameterization_id===tuning?.selected_parameterization_id&&
+        item?.best_validation_pairwise_log_loss===tuning?.selected_validation_pairwise_log_loss&&
+        item?.best_validation_pairwise_accuracy_pct===tuning?.selected_validation_pairwise_accuracy_pct&&
+        item?.minimum_fold_pairwise_accuracy_pct===tuning?.selected_minimum_fold_pairwise_accuracy_pct&&
+        item?.logistic_validation_pairwise_accuracy_pct===tuning?.selected_logistic_validation_pairwise_accuracy_pct&&
+        item?.logistic_validation_pairwise_log_loss===tuning?.selected_logistic_validation_pairwise_log_loss&&
+        item?.best_validation_pairwise_accuracy_improvement_pct===tuning?.selected_validation_pairwise_accuracy_improvement_pct&&
+        item?.minimum_fold_pairwise_accuracy_improvement_pct===tuning?.selected_minimum_fold_pairwise_accuracy_improvement_pct&&
+        (!isThreeFoldV6||item?.minimum_fold_pairwise_log_loss_improvement===tuning?.selected_minimum_fold_pairwise_log_loss_improvement)&&
+        item?.best_validation_pairwise_log_loss_improvement===tuning?.selected_validation_pairwise_log_loss_improvement):null;
+    const robustTuningCandidates=isThreeFoldV6&&candidateGridValid?[...tuningGrid].filter(item=>
+      (!isCurrentParetoV3||item.all_epoch_checkpoints_selected===true&&
+        item.epoch_checkpoint_selected_count===foldCount)&&
+      item.minimum_fold_pairwise_accuracy_improvement_pct>0&&
+      item.minimum_fold_pairwise_log_loss_improvement>0
+    ).sort(compareTuningCandidates):[];
+    const bestTuningCandidate=robustTuningCandidates[0]??
+      (candidateGridValid?[...tuningGrid].sort(compareTuningCandidates)[0]:null);
     if(training?.fit_partition!=='TRAINING_PARTITION_ONLY'||
       training?.source_partition!=='PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
       training?.feature_scoring_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'||
@@ -116,43 +316,85 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       !Number.isInteger(trainingConfig.best_epoch)||trainingConfig.best_epoch<1||
       trainingConfig.best_epoch>trainingConfig.epochs_completed||
       !Number.isInteger(trainingConfig.patience)||trainingConfig.patience<1||
-      trainingConfig.selection_metric!=='PURGED_INTERNAL_TRAINING_VALIDATION_PAIRWISE_LOG_LOSS'||
-      tuning?.schema!=='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_TRAINING_VALIDATION_V1'||
+      !tiedParameterizationValid||
+      trainingConfig.steps_per_block!==temporalStepsPerBlock||
+      trainingConfig.epoch_selection_mode!=='FIXED_EPOCHS'||
+      trainingConfig.selection_metric!==(isThreeFoldV6
+        ?'THREE_FOLD_MINIMUM_LOGISTIC_ACCURACY_AND_LOG_LOSS_MARGIN_NESTED_PURGED_EXPANDING_WINDOW_V6'
+        :'MIN_FOLD_LOGISTIC_ACCURACY_MARGIN_THEN_PAIR_WEIGHTED_MARGIN_AND_LOG_LOSS_NESTED_PURGED_EXPANDING_WINDOW_V5')||
+      !(isThreeFoldV6
+        ?(
+          tuning?.method==='THREE_FOLD_NESTED_PARETO_CHECKPOINT_REQUIRED_LOGISTIC_ANCHORED_VALIDATION_V3'&&
+          tuning?.epoch_checkpoint_selection_policy===
+            'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1'||
+          tuning?.method==='THREE_FOLD_NESTED_PARETO_DUAL_METRIC_LOGISTIC_ANCHORED_VALIDATION_V2'&&
+          tuning?.epoch_checkpoint_selection_policy===
+            'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1'||
+          tuning?.method==='THREE_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_DUAL_METRIC_VALIDATION_V1'&&
+          tuning?.epoch_checkpoint_selection_policy===undefined
+        )
+        :tuning?.method==='TWO_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_ACCURACY_GUARDED_VALIDATION_V1')||
+      tuning?.epoch_selection_policy!=='NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS'||
+      tuning?.logistic_baseline_config?.schema!=='RADARX_FOLD_LOCAL_RAW_TEMPORAL_LOGISTIC_RANKING_REFERENCE_V1'||
+      tuning?.logistic_baseline_config?.feature_schema_id!==TCN_LSTM_ORDERED_RANKING_FEATURE_SCHEMA_ID||
+      tuning?.logistic_baseline_config?.feature_count!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      tuning?.logistic_baseline_config?.l2!==1||tuning?.logistic_baseline_config?.learning_rate!==0.03||
+      tuning?.logistic_baseline_config?.max_epochs!==160||
+      tuning?.logistic_baseline_config?.fit_partition!=='EACH_COMPLETE_OUTER_FOLD_TUNING_WINDOW_ONLY'||
+      tuning?.logistic_baseline_config?.epoch_selection_partition!==
+        'EARLIER_NESTED_PURGED_SUBWINDOW_WITHIN_OUTER_FOLD_TRAINING_WINDOW'||
+      tuning?.logistic_baseline_config?.scoring_partition!=='SAME_LATER_OUTER_FOLD_PURGED_VALIDATION_PAIRS'||
+      tuning?.logistic_baseline_config?.validation_labels_read!==false||
+      tuning?.logistic_baseline_config?.outer_validation_or_holdout_used!==false||
       tuning?.source_partition!=='PRE_EXECUTION_MODEL_TRAINING_PARTITION_ONLY'||
-      tuning?.fit_partition!=='EARLIER_SUBSET_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
-      tuning?.validation_partition!=='LATER_PURGED_SUBSET_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
+      tuning?.fit_partition!=='EXPANDING_EARLIER_SUBSETS_OF_PRE_EXECUTION_MODEL_TRAINING_PARTITION'||
+      tuning?.validation_partition!==(isThreeFoldV6
+        ?'THREE_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION'
+        :'TWO_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION')||
       tuning?.outer_validation_or_holdout_used!==false||
       tuning?.model_selection_partition_used!==false||
       tuning?.chronology_valid!==true||
+      isThreeFoldV6&&(tuning?.selection_rule!=='REQUIRE_STRICT_POSITIVE_LOGISTIC_MARGINS_FOR_PAIRWISE_ACCURACY_AND_LOG_LOSS_IN_EVERY_PURGED_TRAINING_FOLD'||
+        tuning?.fold_stable_dual_metric_candidate_count!==robustTuningCandidates.length||
+        tuning?.fold_stable_dual_metric_superiority!==(robustTuningCandidates.length>0)||
+        tuning?.robustness_status!==(robustTuningCandidates.length>0?'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY':'ABSTAIN_NO_FOLD_STABLE_DUAL_SUPERIORITY')||
+        tuning?.selected_candidate_qualified!==(robustTuningCandidates.length>0))||
       !finite(tuning?.purge_horizon_ms)||tuning.purge_horizon_ms<4*60*60*1000||
-      !finite(tuning?.tuning_max_resolved_at)||
-      !finite(tuning?.tuning_max_at)||
-      !finite(tuning?.validation_min_at)||
-      tuning.validation_min_at<=tuning.tuning_max_resolved_at||
-      !finite(tuning?.purge_gap_ms)||
-      Math.abs(tuning.purge_gap_ms-(tuning.validation_min_at-tuning.tuning_max_at))>1e-6||
-      tuning.purge_gap_ms<tuning.purge_horizon_ms||
+      !foldContractValid||!foldTotalsValid||!candidateGridValid||
       !Number.isInteger(tuning?.tuning_rows)||tuning.tuning_rows<20||
       !Number.isInteger(tuning?.validation_rows)||tuning.validation_rows<20||
       !Number.isInteger(tuning?.purged_rows)||tuning.purged_rows<0||
       !Number.isInteger(tuning?.tuning_pairs)||tuning.tuning_pairs<10||
       !Number.isInteger(tuning?.validation_pairs)||tuning.validation_pairs<10||
-      !Array.isArray(tuningGrid)||tuningGrid.length<2||
-      new Set(tuningGrid.map(item=>item?.l2)).size!==tuningGrid.length||
-      tuningGrid.some(item=>!finite(item?.l2)||item.l2<0||item.l2>1||
-        !Number.isInteger(item?.best_epoch)||item.best_epoch<1||
-        !finite(item?.best_validation_pairwise_log_loss)||
-        item?.training_rows!==tuning.tuning_rows||
-        item?.validation_rows!==tuning.validation_rows||
-        item?.purged_rows!==tuning.purged_rows||
-        item?.training_pairs!==tuning.tuning_pairs||
-        item?.validation_pairs!==tuning.validation_pairs)||
-      !selectedTuningCandidate||!finite(tuningMinimumLoss)||
-      Math.abs(tuningMinimumLoss-tuning.selected_validation_pairwise_log_loss)>1e-9||
+      !selectedTuningCandidate||!bestTuningCandidate||
+      !finite(tuning?.selected_validation_pairwise_log_loss)||!finite(tuning?.selected_validation_pairwise_accuracy_pct)||
+      !finite(tuning?.selected_minimum_fold_pairwise_accuracy_pct)||
+      !finite(tuning?.selected_logistic_validation_pairwise_accuracy_pct)||
+      !finite(tuning?.selected_logistic_validation_pairwise_log_loss)||
+      !finite(tuning?.selected_validation_pairwise_accuracy_improvement_pct)||
+      !finite(tuning?.selected_minimum_fold_pairwise_accuracy_improvement_pct)||
+      isThreeFoldV6&&!finite(tuning?.selected_minimum_fold_pairwise_log_loss_improvement)||
+      !finite(tuning?.selected_validation_pairwise_log_loss_improvement)||
+      selectedTuningCandidate!==bestTuningCandidate||
+      Math.abs(selectedTuningCandidate.best_validation_pairwise_log_loss-tuning.selected_validation_pairwise_log_loss)>1e-9||
+      Math.abs(selectedTuningCandidate.best_validation_pairwise_accuracy_pct-tuning.selected_validation_pairwise_accuracy_pct)>1e-9||
+      Math.abs(selectedTuningCandidate.minimum_fold_pairwise_accuracy_pct-tuning.selected_minimum_fold_pairwise_accuracy_pct)>1e-9||
+      Math.abs(selectedTuningCandidate.logistic_validation_pairwise_accuracy_pct-tuning.selected_logistic_validation_pairwise_accuracy_pct)>1e-9||
+      Math.abs(selectedTuningCandidate.logistic_validation_pairwise_log_loss-tuning.selected_logistic_validation_pairwise_log_loss)>1e-9||
+      Math.abs(selectedTuningCandidate.best_validation_pairwise_accuracy_improvement_pct-tuning.selected_validation_pairwise_accuracy_improvement_pct)>1e-9||
+      Math.abs(selectedTuningCandidate.minimum_fold_pairwise_accuracy_improvement_pct-tuning.selected_minimum_fold_pairwise_accuracy_improvement_pct)>1e-9||
+      isThreeFoldV6&&Math.abs(selectedTuningCandidate.minimum_fold_pairwise_log_loss_improvement-tuning.selected_minimum_fold_pairwise_log_loss_improvement)>1e-9||
+      Math.abs(selectedTuningCandidate.best_validation_pairwise_log_loss_improvement-tuning.selected_validation_pairwise_log_loss_improvement)>1e-9||
       trainingConfig.l2!==tuning.selected_l2||
       trainingConfig.epochs_requested!==tuning.selected_epochs||
+      temporalBlockCount!==tuning.selected_temporal_block_count||
+      trainingConfig.parameter_count!==tuning.selected_parameter_count||
+      trainingConfig.parameterization_id!==tuning.selected_parameterization_id||
+      tuning.selected_steps_per_block!==temporalStepsPerBlock||
       tuning?.final_refit_rows!==training.training_rows||
       tuning?.final_refit_pairs!==training.training_pairs||
+      tuning?.final_refit_epoch_selection_mode!==
+        'FIXED_EPOCHS_FROM_NESTED_PURGED_FOLD_EARLY_STOPPING'||
       contract?.schema!=='RADARX_TCN_LSTM_EXECUTION_RANK_FEATURE_OUT_OF_SAMPLE_CONTRACT_V1'||
       contract?.out_of_sample_for_execution_head_features!==true||
       contract?.training_and_execution_feature_identities_disjoint!==true||
@@ -239,7 +481,7 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
     artifact_schema:ORDERED_TEMPORAL_RANKER_ARTIFACT_SCHEMA,
     artifact_schema_version:1,
     model_family:'TCN_LSTM_INDEPENDENT_RAW_ORDERED_RETURN_RANKER',
-    model_version:'RAW_ORDERED_696_PAIRWISE_RANKER_V1',
+    model_version:'RAW_ORDERED_696_TEMPORAL_BLOCK_TIED_PAIRWISE_RANKER_V1',
     code_commit_sha:String(required.sourceCommitSha).toLowerCase(),
     dataset_sha256:String(required.datasetSha256).toLowerCase(),
     input_file_sha256:String(required.inputFileSha256).toLowerCase(),
@@ -290,7 +532,12 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
         epochs_completed:ranker.epochs_completed,
         best_epoch:ranker.best_epoch,
         patience:ranker.patience,
-        selection_metric:'PURGED_INTERNAL_TRAINING_VALIDATION_PAIRWISE_LOG_LOSS'
+        epoch_selection_mode:ranker.epoch_selection_mode,
+        parameterization_id:ranker.parameterization_id,
+        temporal_block_count:ranker.temporal_block_count,
+        steps_per_block:ranker.steps_per_block,
+        parameter_count:ranker.parameter_count,
+        selection_metric:ranker.selection_metric
       },
       internal_training_validation:ranker.internal_training_validation,
       downstream_feature_contract:downstreamContract,
@@ -323,6 +570,59 @@ export function predictOrderedTemporalRankerArtifact(sequence,artifact){
   for(let index=0;index<features.length;index++)
     score+=weights[index]*((features[index]-feature_mean[index])/feature_std[index]);
   return Math.max(-30,Math.min(30,score));
+}
+
+
+function rankerQualificationSnapshot(artifact){
+  const tuning=artifact.training_provenance?.internal_training_validation??{};
+  const selected=Array.isArray(tuning.candidate_grid)
+    ?tuning.candidate_grid.find(item=>
+      item?.l2===tuning.selected_l2&&
+      item?.best_epoch===tuning.selected_epochs&&
+      item?.temporal_block_count===tuning.selected_temporal_block_count&&
+      item?.parameter_count===tuning.selected_parameter_count&&
+      item?.parameterization_id===tuning.selected_parameterization_id)
+    :null;
+  return {
+    schema:tuning.schema??null,
+    method:tuning.method??null,
+    epoch_checkpoint_selection_policy:tuning.epoch_checkpoint_selection_policy??null,
+    fold_count:tuning.fold_count??null,
+    selected_candidate_qualified:tuning.selected_candidate_qualified===true,
+    fold_stable_dual_metric_superiority:tuning.fold_stable_dual_metric_superiority===true,
+    fold_stable_dual_metric_candidate_count:
+      Number.isInteger(tuning.fold_stable_dual_metric_candidate_count)
+        ?tuning.fold_stable_dual_metric_candidate_count:null,
+    robustness_status:tuning.robustness_status??null,
+    selection_rule:tuning.selection_rule??null,
+    validation_or_holdout_used:tuning.outer_validation_or_holdout_used??null,
+    selected_candidate:selected?{
+      temporal_block_count:selected.temporal_block_count,
+      l2:selected.l2,
+      best_epoch:selected.best_epoch,
+      parameterization_id:selected.parameterization_id,
+      parameter_count:selected.parameter_count,
+      minimum_fold_pairwise_accuracy_improvement_pct:
+        selected.minimum_fold_pairwise_accuracy_improvement_pct,
+      minimum_fold_pairwise_log_loss_improvement:
+        selected.minimum_fold_pairwise_log_loss_improvement??null,
+      fold_results:(selected.fold_results??[]).map(result=>({
+        fold_index:result.fold_index,
+        candidate_pairwise_accuracy_pct:result.best_validation_pairwise_accuracy_pct,
+        logistic_pairwise_accuracy_pct:result.logistic_validation_pairwise_accuracy_pct,
+        accuracy_improvement_pct:Number((
+          result.best_validation_pairwise_accuracy_pct-
+          result.logistic_validation_pairwise_accuracy_pct
+        ).toFixed(4)),
+        candidate_pairwise_log_loss:result.best_validation_pairwise_log_loss,
+        logistic_pairwise_log_loss:result.logistic_validation_pairwise_log_loss,
+        log_loss_improvement:Number((
+          result.logistic_validation_pairwise_log_loss-
+          result.best_validation_pairwise_log_loss
+        ).toFixed(8))
+      }))
+    }:null
+  };
 }
 
 async function atomicJson(path,value){
@@ -367,7 +667,8 @@ export async function writeOrderedTemporalRankerArtifactAtomic(directory,artifac
       feature_schema_id:artifact.feature_schema_id,
       feature_count:artifact.feature_count,
       validation_or_holdout_used:false,
-      holdout_status:'LOCKED'
+      holdout_status:'LOCKED',
+      ranker_qualification:rankerQualificationSnapshot(artifact)
     }
   };
 }

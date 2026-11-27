@@ -172,6 +172,161 @@ function validateHead(head, names, name) {
   }
   return head;
 }
+
+function hasFoldStableDualMetricRankerEvidence(dependency){
+  const evidence=dependency?.ranker_qualification;
+  const selected=evidence?.selected_candidate;
+  const folds=selected?.fold_results;
+  if(evidence?.schema!==
+      'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6'||
+    evidence?.fold_count!==3||
+    evidence?.selected_candidate_qualified!==true||
+    evidence?.fold_stable_dual_metric_superiority!==true||
+    !Number.isInteger(evidence?.fold_stable_dual_metric_candidate_count)||
+    evidence.fold_stable_dual_metric_candidate_count<1||
+    evidence?.robustness_status!=='FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY'||
+    evidence?.selection_rule!==
+      'REQUIRE_STRICT_POSITIVE_LOGISTIC_MARGINS_FOR_PAIRWISE_ACCURACY_AND_LOG_LOSS_IN_EVERY_PURGED_TRAINING_FOLD'||
+    evidence?.validation_or_holdout_used!==false||
+    !selected||![1,2,3,4,6,8,12,24].includes(selected.temporal_block_count)||
+    !finite(selected.l2)||selected.l2<0||selected.l2>1||
+    !Number.isInteger(selected.best_epoch)||selected.best_epoch<1||
+    selected.parameter_count!==selected.temporal_block_count*29||
+    selected.parameterization_id!==
+      'TEMPORAL_BLOCK_TIED_'+selected.temporal_block_count+'X29_V1'||
+    !Array.isArray(folds)||folds.length!==3)return false;
+  const accuracyMargins=[];
+  const logLossMargins=[];
+  for(let index=0;index<folds.length;index++){
+    const fold=folds[index];
+    if(fold?.fold_index!==index+1||
+      !finite(fold?.candidate_pairwise_accuracy_pct)||
+      !finite(fold?.logistic_pairwise_accuracy_pct)||
+      !finite(fold?.candidate_pairwise_log_loss)||
+      !finite(fold?.logistic_pairwise_log_loss)||
+      !finite(fold?.accuracy_improvement_pct)||
+      !finite(fold?.log_loss_improvement))return false;
+    const accuracyMargin=fold.candidate_pairwise_accuracy_pct-
+      fold.logistic_pairwise_accuracy_pct;
+    const logLossMargin=fold.logistic_pairwise_log_loss-
+      fold.candidate_pairwise_log_loss;
+    if(!(accuracyMargin>0&&logLossMargin>0)||
+      Math.abs(fold.accuracy_improvement_pct-Number(accuracyMargin.toFixed(4)))>1e-9||
+      Math.abs(fold.log_loss_improvement-Number(logLossMargin.toFixed(8)))>1e-9)return false;
+    accuracyMargins.push(accuracyMargin);
+    logLossMargins.push(logLossMargin);
+  }
+  const minimumAccuracy=Number(Math.min(...accuracyMargins).toFixed(4));
+  const minimumLogLoss=Number(Math.min(...logLossMargins).toFixed(8));
+  return minimumAccuracy>0&&minimumLogLoss>0&&
+    selected.minimum_fold_pairwise_accuracy_improvement_pct===minimumAccuracy&&
+    selected.minimum_fold_pairwise_log_loss_improvement===minimumLogLoss;
+}
+
+
+function hasStrictExecutionPolicyProfitabilityEvidence(policy,anchorGateName){
+  const trial=policy?.selected_trial;
+  const model=trial?.model_metrics;
+  const anchor=trial?.logistic_anchor_metrics;
+  const gates=trial?.gates;
+  const minimumTrades=policy?.minimum_trades;
+  const minimumWinRate=policy?.minimum_win_rate_pct;
+  const maximumDrawdown=policy?.maximum_drawdown_pct;
+  if(policy?.passed!==true||
+    !['SELECTIVE_EXECUTION_POLICY_PASSED_INNER_SELECTION','EVALUATED'].includes(policy?.status)||
+    (policy?.selection_partition_only!==true&&policy?.source_partition!=='INNER_SELECTION_ONLY')||
+    policy?.threshold_selected_on_inner_selection!==true||
+    policy?.threshold_frozen_before_outer_validation!==true||
+    policy?.holdout_values_used!==false||
+    policy?.round_trip_cost_bps!==30||
+    !Number.isInteger(minimumTrades)||minimumTrades<20||
+    !finite(minimumWinRate)||minimumWinRate<55||minimumWinRate>100||
+    !finite(maximumDrawdown)||maximumDrawdown<=0||maximumDrawdown>8||
+    policy?.top_k_per_timestamp!==1||
+    trial?.passed!==true||
+     trial?.top_k_per_timestamp!==1||
+     !gates||gates.return_data_complete!==true||
+     gates.minimum_trades!==true||
+     gates.minimum_win_rate!==true||
+     gates.positive_net_pnl!==true||
+     gates.maximum_drawdown!==true||
+     gates.genuine_abstention!==true||
+     gates.matched_logistic_signal_count!==true||
+     gates.matched_logistic_executed_trade_count!==true||
+     gates[anchorGateName]!==true||
+     trial?.logistic_anchor_signal_counts_matched!==true||
+     trial?.logistic_anchor_trade_counts_matched!==true||
+     !model||model?.return_data_status!=='COMPLETE'||
+     !Number.isInteger(model?.trade_count)||model.trade_count<minimumTrades||
+     !Number.isInteger(model?.signal_count)||model.signal_count<model.trade_count||
+     !finite(model?.win_rate_pct)||model.win_rate_pct<minimumWinRate||model.win_rate_pct>100||
+     !finite(model?.net_pnl_pct)||model.net_pnl_pct<=0||
+     !finite(model?.max_drawdown_pct)||model.max_drawdown_pct<0||
+     model.max_drawdown_pct>maximumDrawdown||
+     !anchor||anchor?.return_data_status!=='COMPLETE'||
+     !Number.isInteger(anchor?.trade_count)||anchor.trade_count!==model.trade_count||
+     !Number.isInteger(anchor?.signal_count)||anchor.signal_count!==model.signal_count||
+     !finite(anchor?.net_pnl_pct)||
+     !finite(anchor?.max_drawdown_pct)||
+     model.net_pnl_pct<=anchor.net_pnl_pct||
+     model.max_drawdown_pct>anchor.max_drawdown_pct)return false;
+  return true;
+}
+
+function hasContextAblationProfitabilityEvidence(ablation,executionRiskPolicy){
+  const metrics=ablation?.context_metrics;
+  const pooled=ablation?.pooled_only_metrics;
+  const selected=executionRiskPolicy?.selected_trial?.model_metrics;
+  const gates=ablation?.gates;
+  const noExposure=ablation?.pooled_only_no_exposure===true;
+  if(ablation?.schema!=='RADARX_TCN_LSTM_EXECUTION_HEAD_CONTEXT_ABLATION_V1'||
+    ablation?.status!=='EVALUATED'||
+    ablation?.source_partition!=='INNER_SELECTION_ONLY'||
+    ablation?.holdout_values_used!==false||
+    ablation?.candidate_variant!=='LOGIT_CONTEXT_AUGMENTED'||
+    ablation?.baseline_variant!=='POOLED_ONLY'||
+    ablation?.context_policy_passed!==true||
+    ablation?.both_policies_frozen_on_selection!==true||
+    ablation?.baseline_and_candidate_use_matched_logistic_trade_counts!==true||
+    !metrics||!selected||
+    metrics.trade_count!==selected.trade_count||
+    metrics.win_rate_pct!==selected.win_rate_pct||
+    metrics.net_pnl_pct!==selected.net_pnl_pct||
+    metrics.max_drawdown_pct!==selected.max_drawdown_pct||
+    !pooled||!gates||
+    gates.context_policy_absolute_gates!==true||
+    gates.net_pnl_strictly_improved!==true||
+    gates.win_rate_not_worse!==true||
+    gates.drawdown_not_worse!==true||
+    !finite(pooled.net_pnl_pct)||
+    !finite(pooled.max_drawdown_pct)||
+    metrics.net_pnl_pct<=pooled.net_pnl_pct)return false;
+  if(noExposure){
+    if(pooled.signal_count!==0||pooled.trade_count!==0||
+      pooled.net_pnl_pct!==0||pooled.max_drawdown_pct!==0||
+      metrics.win_rate_pct<55||metrics.max_drawdown_pct>8)return false;
+  }else{
+    if(!finite(pooled.trade_count)||pooled.trade_count<1||
+      !finite(pooled.win_rate_pct)||
+      metrics.win_rate_pct<pooled.win_rate_pct||
+      metrics.max_drawdown_pct>pooled.max_drawdown_pct)return false;
+  }
+  return true;
+}
+
+function hasInnerSelectionPolicyProvenance(policy){
+  if(!policy||typeof policy!=='object')return false;
+  if(policy.status==='UNAVAILABLE')
+    return policy.passed===false&&policy.holdout_values_used===false;
+  return (policy.selection_partition_only===true||
+      policy.source_partition==='INNER_SELECTION_ONLY')&&
+    policy.holdout_values_used===false&&
+    policy.threshold_selected_on_inner_selection===true&&
+    policy.threshold_frozen_before_outer_validation===true&&
+    policy.round_trip_cost_bps===30&&
+    policy.top_k_per_timestamp===1;
+}
+
 function policySnapshot(policy, name) {
   if (!policy || typeof policy !== 'object') {
     return {
@@ -185,8 +340,6 @@ function policySnapshot(policy, name) {
   }
   return {
     ...policy,
-    source_partition: 'INNER_SELECTION_ONLY',
-    holdout_values_used: false,
     snapshot_name: name
   };
 }
@@ -270,6 +423,8 @@ export function createHurdleV2Artifact({
     throw new TypeError('HURDLE_V2_PROVENANCE_INVALID');
   }
   const fixedSplitCounts = validateFixedSplit(splitDefinition, datasetRowCount);
+  if(innerQualified===true&&!hasFoldStableDualMetricRankerEvidence(orderedRankingDependency))
+    throw new TypeError('HURDLE_V2_RANKER_FOLD_STABILITY_EVIDENCE_REQUIRED');
   if(orderedRankingDependency!==null&&(
     orderedRankingDependency?.artifact_schema!==
       'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V1'||
@@ -328,6 +483,7 @@ export function createHurdleV2Artifact({
     candidates: (selection.candidates ?? []).map(candidate => ({
       name: candidate.name ?? null,
       selection_brier: candidate.selection_brier ?? null,
+      logistic_selection_brier:candidate.logistic_selection_brier??null,
       brier_improvement: candidate.brier_improvement ?? null,
       pairwise_ranking_improvement: candidate.pairwise_ranking_improvement ?? null,
       independent_ranking_signal_passed:
@@ -341,8 +497,39 @@ export function createHurdleV2Artifact({
       execution_head_context_ablation_passed:
         candidate.execution_head_context_ablation_passed === true,
       execution_risk_policy: candidate.execution_risk_policy ? {
+        schema:candidate.execution_risk_policy.schema??null,
         status: candidate.execution_risk_policy.status ?? null,
-        passed: candidate.execution_risk_policy.passed === true
+        passed: candidate.execution_risk_policy.passed === true,
+        selection_partition_only:candidate.execution_risk_policy.selection_partition_only===true,
+        source_partition:candidate.execution_risk_policy.source_partition??null,
+        threshold_selected_on_inner_selection:
+          candidate.execution_risk_policy.threshold_selected_on_inner_selection===true,
+        threshold_frozen_before_outer_validation:
+          candidate.execution_risk_policy.threshold_frozen_before_outer_validation===true,
+        holdout_values_used:candidate.execution_risk_policy.holdout_values_used,
+        round_trip_cost_bps:candidate.execution_risk_policy.round_trip_cost_bps??null,
+        minimum_trades:candidate.execution_risk_policy.minimum_trades??null,
+        minimum_win_rate_pct:candidate.execution_risk_policy.minimum_win_rate_pct??null,
+        maximum_drawdown_pct:candidate.execution_risk_policy.maximum_drawdown_pct??null,
+        top_k_per_timestamp:candidate.execution_risk_policy.top_k_per_timestamp??null,
+        selected_trial:candidate.execution_risk_policy.selected_trial??null
+      } : null,
+      ranking_execution_selection: candidate.ranking_execution_selection ? {
+        schema:candidate.ranking_execution_selection.schema??null,
+        status:candidate.ranking_execution_selection.status??null,
+        passed:candidate.ranking_execution_selection.passed===true,
+        source_partition:candidate.ranking_execution_selection.source_partition??null,
+        threshold_selected_on_inner_selection:
+          candidate.ranking_execution_selection.threshold_selected_on_inner_selection===true,
+        threshold_frozen_before_outer_validation:
+          candidate.ranking_execution_selection.threshold_frozen_before_outer_validation===true,
+        holdout_values_used:candidate.ranking_execution_selection.holdout_values_used,
+        round_trip_cost_bps:candidate.ranking_execution_selection.round_trip_cost_bps??null,
+        minimum_trades:candidate.ranking_execution_selection.minimum_trades??null,
+        minimum_win_rate_pct:candidate.ranking_execution_selection.minimum_win_rate_pct??null,
+        maximum_drawdown_pct:candidate.ranking_execution_selection.maximum_drawdown_pct??null,
+        top_k_per_timestamp:candidate.ranking_execution_selection.top_k_per_timestamp??null,
+        selected_trial:candidate.ranking_execution_selection.selected_trial??null
       } : null,
       return_selection_diagnostics: candidate.return_selection_diagnostics ? {
         status: candidate.return_selection_diagnostics.status ?? null,
@@ -352,7 +539,10 @@ export function createHurdleV2Artifact({
       execution_head_context_ablation: candidate.execution_head_context_ablation ?? null
     })),
     baseline: selection.baseline ?? null,
-    validation_or_holdout_used: false
+    required_inner_improvement:finite(selection.required_inner_improvement)
+      ?Number(selection.required_inner_improvement):null,
+    validation_or_holdout_used:
+      selection.validation_or_holdout_used_for_fit_or_selection
   };
   const core = {
     artifact_schema: HURDLE_V2_ARTIFACT_SCHEMA,
@@ -508,21 +698,31 @@ export function createHurdleV2Artifact({
     purge_definition: {
       outer_purge_ms: splitDefinition.purge_ms,
       execution_head_fit_partition: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
+      source_partition: trainingSummary.source_partition,
+      execution_head_split_source_partition: trainingSummary.execution_head_split_source_partition,
+      execution_head_split_status: trainingSummary.execution_head_split_status,
+      execution_head_split_method: trainingSummary.execution_head_split_method,
       execution_head_training_rows: trainingSummary.training_rows ?? trainingSummary.trainingRows ?? null,
       model_training_rows: trainingSummary.model_training_rows ?? null,
+      purged_rows: trainingSummary.purged_rows,
+      model_training_max_resolved_at: trainingSummary.model_training_max_resolved_at,
+      execution_head_min_at: trainingSummary.execution_head_min_at,
+      purge_gap_ms: trainingSummary.purge_gap_ms,
+      chronology_valid: trainingSummary.chronology_valid,
       model_and_execution_head_identities_disjoint:
         trainingSummary.training_and_execution_head_identities_disjoint === true,
       representation_out_of_sample: trainingSummary.representation_out_of_sample === true,
-      validation_or_holdout_used: false
+      validation_or_holdout_used: trainingSummary.validation_or_holdout_used
     },
     training_provenance: {
       fit_boundary: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
-      source_partition: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+      source_partition: trainingSummary.source_partition,
       training_rows: trainingSummary.training_rows ?? null,
       model_training_rows: trainingSummary.model_training_rows ?? null,
       representation_out_of_sample: trainingSummary.representation_out_of_sample === true,
       training_and_execution_head_identities_disjoint:
         trainingSummary.training_and_execution_head_identities_disjoint === true,
+      validation_or_holdout_used: trainingSummary.validation_or_holdout_used,
       round_trip_cost_bps: roundTripCostBps,
       hurdle_return_head: {
         schema: 'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V2',
@@ -548,7 +748,8 @@ export function createHurdleV2Artifact({
             purged_rows:contextual.probability_calibration.purged_rows,
             horizon_ms:contextual.probability_calibration.horizon_ms,
             resolved_label_gap_ms:contextual.probability_calibration.resolved_label_gap_ms,
-            chronology_valid:contextual.probability_calibration.chronology_valid
+            chronology_valid:contextual.probability_calibration.chronology_valid,
+            validation_or_holdout_used:contextual.probability_calibration.validation_or_holdout_used
           },
           pooled:{
             schema:pooled.probability_calibration.schema,
@@ -558,12 +759,13 @@ export function createHurdleV2Artifact({
             purged_rows:pooled.probability_calibration.purged_rows,
             horizon_ms:pooled.probability_calibration.horizon_ms,
             resolved_label_gap_ms:pooled.probability_calibration.resolved_label_gap_ms,
-            chronology_valid:pooled.probability_calibration.chronology_valid
+            chronology_valid:pooled.probability_calibration.chronology_valid,
+            validation_or_holdout_used:pooled.probability_calibration.validation_or_holdout_used
           }
         },
-        validation_or_holdout_used: false
+        validation_or_holdout_used: trainingSummary.hurdle_return_head?.validation_or_holdout_used
       },
-      validation_or_holdout_used: false
+      validation_or_holdout_used: trainingSummary.validation_or_holdout_used
     },
     inner_qualification: qualification,
     training_status: 'TRAINED',
@@ -675,6 +877,12 @@ export function verifyHurdleV2Artifact(artifact) {
         artifact.execution_qualification_status !== expectedQualificationStatus ||
         artifact.training_status !== 'TRAINED')
       return fail('QUALIFICATION_STATUS_INCONSISTENT');
+    const contextualPolicy=artifact.abstention_parameters?.contextual;
+    const pooledPolicy=artifact.abstention_parameters?.pooled;
+    if(!hasInnerSelectionPolicyProvenance(contextualPolicy)||
+      !hasInnerSelectionPolicyProvenance(pooledPolicy)||
+      (qualified&&contextualPolicy?.status==='UNAVAILABLE'))
+      return fail('ABSTENTION_POLICY_PROVENANCE_INVALID');
     if (qualified) {
       const selected = qualification.candidates?.find(candidate =>
         candidate.name === qualification.selected_configuration);
@@ -696,6 +904,29 @@ export function verifyHurdleV2Artifact(artifact) {
           selected?.return_selection_diagnostics?.status !== 'AVAILABLE' ||
           !(Number(selected?.return_selection_diagnostics?.preliminary_return_screen_candidates) > 0))
         return fail('QUALIFICATION_GATE_EVIDENCE_INCOMPLETE');
+      const baselineBrier=qualification.baseline?.selection_brier;
+      const candidateBrier=selected?.selection_brier;
+      const candidateLogisticBrier=selected?.logistic_selection_brier;
+      const recordedBrierImprovement=selected?.brier_improvement;
+      const requiredBrierImprovement=qualification.required_inner_improvement;
+      const recomputedBrierImprovement=
+        Number(candidateLogisticBrier)-Number(candidateBrier);
+      if(!finite(baselineBrier)||!finite(candidateBrier)||
+        !finite(candidateLogisticBrier)||!finite(recordedBrierImprovement)||
+        !finite(requiredBrierImprovement)||requiredBrierImprovement<=0||
+        Math.abs(candidateLogisticBrier-baselineBrier)>1e-10||
+        !(recordedBrierImprovement>requiredBrierImprovement)||
+        Math.abs(recordedBrierImprovement-recomputedBrierImprovement)>2e-8)
+        return fail('CLASSIFIER_BRIER_MARGIN_EVIDENCE_INVALID');
+      if(!hasFoldStableDualMetricRankerEvidence(rankerDependency))
+        return fail('RANKER_FOLD_STABILITY_EVIDENCE_MISSING_OR_INVALID');
+      if(!hasStrictExecutionPolicyProfitabilityEvidence(
+          selected.execution_risk_policy,'beats_matched_logistic_anchor')||
+        !hasStrictExecutionPolicyProfitabilityEvidence(
+          selected.ranking_execution_selection,'beats_logistic_anchor')||
+        !hasContextAblationProfitabilityEvidence(
+          qualification.context_ablation,selected.execution_risk_policy))
+        return fail('PROFITABILITY_GATE_EVIDENCE_MISSING_OR_INVALID');
     }
     if (artifact.target_definition !== 'FIRST_TOUCH_PLUS_3_PCT_BEFORE_MINUS_2_PCT_WITHIN_4H_1M_V1' ||
         artifact.target_semantics !== 'UP_IF_PLUS_3_PCT_FIRST_BEFORE_MINUS_2_PCT_ELSE_NON_SUCCESS_WITHIN_4H_1M_V1')
@@ -724,6 +955,35 @@ export function verifyHurdleV2Artifact(artifact) {
       if (!finite(value)||value<0||value>1)
         return fail('POSITIVE_RETURN_PROBABILITY_THRESHOLD_INVALID:'+name);
     }
+    const purge=artifact.purge_definition;
+    const training=artifact.training_provenance;
+    const modelTrainingMaxResolvedAt=purge?.model_training_max_resolved_at;
+    const executionHeadMinAt=purge?.execution_head_min_at;
+    if(purge?.execution_head_fit_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY'||
+      purge?.source_partition!=='PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK'||
+      purge?.execution_head_split_source_partition!=='INNER_TRAINING_PARTITION_ONLY'||
+      purge?.execution_head_split_status!=='READY'||
+      purge?.execution_head_split_method!=='LATEST_COMPLETE_15M_GROUPS_WITH_FORWARD_LABEL_PURGE'||
+      !Number.isInteger(purge?.execution_head_training_rows)||purge.execution_head_training_rows<20||
+      !Number.isInteger(purge?.model_training_rows)||purge.model_training_rows<20||
+      !Number.isInteger(purge?.purged_rows)||purge.purged_rows<0||
+      !finite(modelTrainingMaxResolvedAt)||!finite(executionHeadMinAt)||
+      !(modelTrainingMaxResolvedAt<executionHeadMinAt)||
+      !finite(purge?.purge_gap_ms)||
+      Math.abs(purge.purge_gap_ms-(executionHeadMinAt-modelTrainingMaxResolvedAt))>1e-6||
+      purge.purge_gap_ms<=0||purge?.chronology_valid!==true||
+      purge?.representation_out_of_sample!==true||
+      purge?.model_and_execution_head_identities_disjoint!==true||
+      training?.source_partition!==purge.source_partition||
+      training?.training_rows!==purge.execution_head_training_rows||
+      training?.model_training_rows!==purge.model_training_rows)
+      return fail('EXECUTION_HEAD_CHRONOLOGY_OR_PURGE_INVALID');
+    if (artifact.purge_definition?.validation_or_holdout_used !== false ||
+        artifact.training_provenance?.validation_or_holdout_used !== false ||
+        artifact.training_provenance?.hurdle_return_head?.validation_or_holdout_used !== false ||
+        artifact.training_provenance?.hurdle_return_head?.probability_calibration?.contextual?.validation_or_holdout_used !== false ||
+        artifact.training_provenance?.hurdle_return_head?.probability_calibration?.pooled?.validation_or_holdout_used !== false)
+      return fail('TRAINING_PROVENANCE_HOLDOUT_FLAG_INVALID');
     if (artifact.holdout_status !== 'LOCKED' || artifact.split_definition?.holdout_scored_rows !== 0 ||
         artifact.inner_qualification?.validation_or_holdout_used !== false)
       return fail('HOLDOUT_LOCK_CONTRACT_INVALID');

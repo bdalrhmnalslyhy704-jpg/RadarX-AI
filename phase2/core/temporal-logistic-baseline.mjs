@@ -240,6 +240,82 @@ export function predictTemporalLogisticProbability(featureVector,model) {
   return predictFromScaledVector(vector,model.fit);
 }
 
+/**
+ * Fit the fixed raw temporal Logistic specification on one earlier fold and
+ * score it on that fold's later purged validation block. Validation rows are
+ * checked for identity/chronology without reading labels or realized returns.
+ */
+export function fitTemporalLogisticFoldRankingReference(rows,featureVectors,{
+  validationRows=null,l2=1,learningRate=0.03,maxEpochs=160,
+  purgeHorizonMs=4*60*60*1000
+}={}) {
+  if(!Array.isArray(rows)||rows.length<20||
+    !Array.isArray(featureVectors)||featureVectors.length!==rows.length||
+    !Number.isFinite(Number(l2))||Number(l2)<0||
+    !Number.isFinite(Number(learningRate))||Number(learningRate)<=0||
+    Number(learningRate)>0.2||!Number.isInteger(maxEpochs)||maxEpochs<10||
+    !Number.isFinite(Number(purgeHorizonMs))||Number(purgeHorizonMs)<1)
+    throw new TypeError('TEMPORAL_LOGISTIC_FOLD_RANK_REFERENCE_CONFIGURATION_INVALID');
+  const identities=new Set();
+  const normalized=rows.map((row,index)=>{
+    const id=String(row?.id??'');
+    if(!id||identities.has(id)||!finite(row?.at)||!finite(row?.resolved_at)||
+      Number(row.resolved_at)<=Number(row.at)||
+      Number(row.resolved_at)>Number(row.at)+Number(purgeHorizonMs)||
+      (row.target!==0&&row.target!==1))
+      throw new TypeError('TEMPORAL_LOGISTIC_FOLD_RANK_REFERENCE_TRAIN_ROW_INVALID:'+index);
+    identities.add(id);
+    return {at:Number(row.at),resolved_at:Number(row.resolved_at)};
+  });
+  const width=featureVectors[0]?.length;
+  if(!Number.isInteger(width)||width<1||featureVectors.some(vector=>
+    !Array.isArray(vector)||vector.length!==width||vector.some(value=>!finite(value))))
+    throw new TypeError('TEMPORAL_LOGISTIC_FOLD_RANK_REFERENCE_FEATURES_INVALID');
+  if(validationRows!==null){
+    if(!Array.isArray(validationRows)||validationRows.length<20)
+      throw new TypeError('TEMPORAL_LOGISTIC_FOLD_RANK_REFERENCE_VALIDATION_INVALID');
+    const validationIds=new Set();
+    for(let index=0;index<validationRows.length;index++){
+      const row=validationRows[index],id=String(row?.id??'');
+      if(!id||validationIds.has(id)||identities.has(id)||!finite(row?.at)||
+        !finite(row?.resolved_at)||Number(row.resolved_at)<=Number(row.at))
+        throw new TypeError('TEMPORAL_LOGISTIC_FOLD_RANK_REFERENCE_VALIDATION_ROW_INVALID:'+index);
+      validationIds.add(id);
+    }
+    const trainingMaxAt=Math.max(...normalized.map(row=>row.at));
+    const trainingMaxResolvedAt=Math.max(...normalized.map(row=>row.resolved_at));
+    const validationMinAt=Math.min(...validationRows.map(row=>Number(row.at)));
+    if(!(trainingMaxResolvedAt<validationMinAt)||
+      validationMinAt-trainingMaxAt<Number(purgeHorizonMs))
+      throw new TypeError('TEMPORAL_LOGISTIC_FOLD_RANK_REFERENCE_PURGE_FAILED');
+  }
+  const standardizer=fitStandardizer(featureVectors);
+  const scaled=transformVectors(featureVectors,standardizer);
+  const fit=fitLogisticWeights(scaled,rows.map(row=>row.target),{
+    l2:Number(l2),learningRate:Number(learningRate),maxEpochs
+  });
+  return {
+    schema:'RADARX_FOLD_LOCAL_RAW_TEMPORAL_LOGISTIC_RANKING_REFERENCE_V1',
+    feature_count:width,training_rows:rows.length,
+    fit_partition:'CURRENT_PURGED_FOLD_TRAINING_ROWS_ONLY',
+    standardizer,fit,validation_rows:validationRows?.length??0,
+    validation_labels_read:false,validation_or_holdout_used:false
+  };
+}
+
+/** Return a raw Logistic logit for pair ranking without a probability transform. */
+export function predictTemporalLogisticRawLogit(featureVector,model) {
+  if(!model?.standardizer||!model?.fit||
+    !Array.isArray(model.fit.weights)||!finite(model.fit.bias))
+    throw new TypeError('TEMPORAL_LOGISTIC_RAW_LOGIT_MODEL_INVALID');
+  const vector=transformVectors([featureVector],model.standardizer)[0];
+  let logit=Number(model.fit.bias);
+  for(let index=0;index<vector.length;index++)
+    logit+=Number(vector[index])*Number(model.fit.weights[index]);
+  if(!finite(logit))throw new TypeError('TEMPORAL_LOGISTIC_RAW_LOGIT_NON_FINITE');
+  return clamp(logit,-30,30);
+}
+
 export function evaluateBinaryProbabilityMetrics(probabilities,labels) {
   if(!Array.isArray(probabilities)||!Array.isArray(labels)||
     probabilities.length===0||probabilities.length!==labels.length||
