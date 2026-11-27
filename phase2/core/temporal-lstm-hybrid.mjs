@@ -3320,9 +3320,9 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
         }
     }
     const averaged=gradient.map((value,parameter)=>
-      value/pairs.length+l2*(
-        initialWeights[parameter]-regularizationAnchorWeights[parameter]
-      ));
+      value/pairs.length+l2*(initialLogisticModel!==null
+        ?initialWeights[parameter]-regularizationAnchorWeights[parameter]
+        :initialWeights[parameter]));
     const norm=Math.sqrt(averaged.reduce((sum,value)=>sum+value*value,0));
     const clipped=norm>1?averaged.map(value=>value/norm):averaged;
     for(let parameter=0;parameter<parameterCount;parameter++){
