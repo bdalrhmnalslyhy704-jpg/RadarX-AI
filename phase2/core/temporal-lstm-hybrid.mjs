@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
-import { fitHurdleReturnHead,fitHurdlePositiveReturnCalibration,predictHurdleExpectedNetReturn } from './hurdle-return-head.mjs';
+import { fitHurdleReturnHead,fitHurdlePositiveReturnCalibration,
+  fitHurdleConditionalMeanCalibration,predictHurdleExpectedNetReturn
+} from './hurdle-return-head.mjs';
 import {
   fitTemporalLogisticFoldRankingReference,
   predictTemporalLogisticRawLogit,
@@ -2381,9 +2383,29 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
     if(hurdleCalibrationSplit.status==='READY'){
       const calibrationIndexes=hurdleCalibrationSplit.calibration_indexes;
       const calibrationReturns=calibrationIndexes.map(index=>Number(vectors[index].net));
-      const rawProbabilities=calibrationIndexes.map(index=>
+      const calibrationPredictions=calibrationIndexes.map(index=>
         predictHurdleExpectedNetReturn(vectors[index][featureKey],head)
-          .raw_probability_positive_net_return
+      );
+      const rawProbabilities=calibrationPredictions.map(item=>
+        item.raw_probability_positive_net_return
+      );
+      const calibrationPositiveIndexes=calibrationReturns.map((value,index)=>
+        value>0?index:-1).filter(index=>index>=0);
+      const calibrationNonPositiveIndexes=calibrationReturns.map((value,index)=>
+        value<=0?index:-1).filter(index=>index>=0);
+      const positiveMeanCalibrator=fitHurdleConditionalMeanCalibration(
+        calibrationPositiveIndexes.map(index=>
+          calibrationPredictions[index].positive_net_return_mean_pct),
+        calibrationPositiveIndexes.map(index=>calibrationReturns[index]),
+        {positiveClass:true,minimumSamples:8,iterations:400,
+          learningRate:0.02,regularization:0.05,huberDelta:1}
+      );
+      const nonPositiveMeanCalibrator=fitHurdleConditionalMeanCalibration(
+        calibrationNonPositiveIndexes.map(index=>
+          calibrationPredictions[index].non_positive_net_return_mean_pct),
+        calibrationNonPositiveIndexes.map(index=>calibrationReturns[index]),
+        {positiveClass:false,minimumSamples:8,iterations:400,
+          learningRate:0.02,regularization:0.05,huberDelta:1}
       );
       const calibrator=fitHurdlePositiveReturnCalibration(
         rawProbabilities,calibrationReturns,{
@@ -2391,10 +2413,10 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
           iterations:800,learningRate:0.03,regularization:0.05
         }
       );
-      if(calibrator.fitted===true){
+      if(calibrator.fitted===true&&positiveMeanCalibrator.fitted===true&&
+        nonPositiveMeanCalibrator.fitted===true){
         const split=hurdleCalibrationSplit.diagnostics;
-        head.probability_calibration={
-          ...calibrator,
+        const sharedCalibrationProvenance={
           training_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_TRAINING_BLOCK',
           calibration_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK',
           training_rows:split.training_rows,
@@ -2416,6 +2438,16 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
           disjoint_sample_identities:split.disjoint_sample_identities,
           source_partition:split.source_partition,
           validation_or_holdout_used:false
+        };
+        head.positive_conditional_mean_model.conditional_mean_calibration={
+          ...positiveMeanCalibrator,...sharedCalibrationProvenance
+        };
+        head.non_positive_conditional_mean_model.conditional_mean_calibration={
+          ...nonPositiveMeanCalibrator,...sharedCalibrationProvenance
+        };
+        head.probability_calibration={
+          ...calibrator,
+          ...sharedCalibrationProvenance
         };
       }
     }
@@ -2487,6 +2519,28 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
         pooled_fitted:hurdleReturnHeads.POOLED_ONLY?.probability_calibration?.fitted===true,
         contextual_fit_boundary:hurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED?.probability_calibration?.fit_boundary??null,
         pooled_fit_boundary:hurdleReturnHeads.POOLED_ONLY?.probability_calibration?.fit_boundary??null
+      },
+      conditional_mean_calibration:{
+        contextual:{
+          positive_fitted:hurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED
+            ?.positive_conditional_mean_model?.conditional_mean_calibration?.fitted===true,
+          non_positive_fitted:hurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED
+            ?.non_positive_conditional_mean_model?.conditional_mean_calibration?.fitted===true,
+          positive_samples:hurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED
+            ?.positive_conditional_mean_model?.conditional_mean_calibration?.samples??0,
+          non_positive_samples:hurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED
+            ?.non_positive_conditional_mean_model?.conditional_mean_calibration?.samples??0
+        },
+        pooled:{
+          positive_fitted:hurdleReturnHeads.POOLED_ONLY
+            ?.positive_conditional_mean_model?.conditional_mean_calibration?.fitted===true,
+          non_positive_fitted:hurdleReturnHeads.POOLED_ONLY
+            ?.non_positive_conditional_mean_model?.conditional_mean_calibration?.fitted===true,
+          positive_samples:hurdleReturnHeads.POOLED_ONLY
+            ?.positive_conditional_mean_model?.conditional_mean_calibration?.samples??0,
+          non_positive_samples:hurdleReturnHeads.POOLED_ONLY
+            ?.non_positive_conditional_mean_model?.conditional_mean_calibration?.samples??0
+        }
       },
       validation_or_holdout_used:false
     },
