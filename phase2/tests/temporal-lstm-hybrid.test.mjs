@@ -2527,7 +2527,11 @@ test('raw ordered ranker fits once on all pre-execution rows and can be injected
       rankingRepresentation:ranker.model_state.rankingRepresentation,
       orderedRankingHeadWeights:[...ranker.model_state.orderedRankingHeadWeights],
       orderedRankingFeatureMean:[...ranker.model_state.orderedRankingFeatureMean],
-      orderedRankingFeatureStd:[...ranker.model_state.orderedRankingFeatureStd]
+      orderedRankingFeatureStd:[...ranker.model_state.orderedRankingFeatureStd],
+      orderedRankingAnchorWeights:[...ranker.model_state.orderedRankingAnchorWeights],
+      orderedRankingAnchorFeatureMean:[...ranker.model_state.orderedRankingAnchorFeatureMean],
+      orderedRankingAnchorFeatureStd:[...ranker.model_state.orderedRankingAnchorFeatureStd],
+      orderedRankingAnchorBias:ranker.model_state.orderedRankingAnchorBias
     },
     training:{
       return_ranking:{
