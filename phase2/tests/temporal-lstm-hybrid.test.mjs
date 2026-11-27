@@ -2573,3 +2573,35 @@ test('independent return ranker fits only the earlier model-training partition a
   assert.equal(profile.probability_ready,false);
   assert.equal(profile.real_order_execution,false);
 });
+
+
+test('ordered ranker fails closed when no nested Pareto epoch checkpoint is selected',()=>{
+  const rows=makeRankedRows(0,30,'constant-feature-no-checkpoint').map(row=>({
+    ...row,
+    sequence:Array.from({length:24},()=>Array(29).fill(0))
+  }));
+  const ranker=fitTcnLstmOrderedRankerForTrainingPartition(rows,{
+    roundTripCostBps:30,minimumReturnGapPct:0.50,maxPairsPerTimestamp:16,
+    learningRate:0.03,epochs:2,l2:0.001,patience:1,
+    l2Grid:[0.001,0.01],temporalBlockCounts:[1,2]
+  });
+  const tuning=ranker.training.internal_training_validation;
+  assert.equal(tuning.method,
+    'THREE_FOLD_NESTED_PARETO_CHECKPOINT_REQUIRED_LOGISTIC_ANCHORED_VALIDATION_V3');
+  assert.equal(tuning.selected_candidate_qualified,false);
+  assert.equal(tuning.fold_stable_dual_metric_superiority,false);
+  assert.equal(tuning.fold_stable_dual_metric_candidate_count,0);
+  assert.ok(tuning.candidate_grid.length>=4);
+  for(const candidate of tuning.candidate_grid){
+    assert.equal(candidate.epoch_checkpoint_selected_count,0);
+    assert.equal(candidate.all_epoch_checkpoints_selected,false);
+    assert.deepEqual(candidate.fold_results.map(fold=>fold.epoch_checkpoint_selected),
+      [false,false,false]);
+  }
+  const rankHead={
+    schema:'RADARX_TCN_LSTM_INDEPENDENT_ORDERED_696_RETURN_RANKER_V1',
+    representation:'RAW_ORDERED_696_V1',
+    internal_training_validation:tuning
+  };
+  assert.equal(hasFoldStableOrderedRankerQualification(rankHead,'RAW_ORDERED_696_V1'),false);
+});
