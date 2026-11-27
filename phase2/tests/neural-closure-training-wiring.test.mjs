@@ -533,8 +533,8 @@ test('TCN-LSTM classifier Brier and independent ranking sweep stay within the se
     'all eight candidates must train the probability head with pure Brier loss');
   assert.doesNotMatch(candidateBlock[1],/rankingWeight:(?:0\.[1-9]|[1-9])/,
     'shared return-ranking gradients must not contaminate this Brier generalization sweep');
-  assert.match(trainer,/rankingPairsPerTimestamp:16/,
-    'the independent return-ranker must use the full available training-only extreme-pair budget');
+  assert.match(trainer,/rankingPairsPerTimestamp:32/,
+    'the independent return-ranker must use the configured stratified 32-pair budget per decision');
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.match(trainer,/minimumReturnWinRatePct:55/);
   assert.match(trainer,/rankingMinimumReturnGapPct:0\.05/);
