@@ -698,8 +698,8 @@ test('Hurdle class-conditional return means are separately calibrated on the lat
     readFile(trainerUrl,'utf8')
   ]);
   assert.match(head,/fitHurdleConditionalMeanCalibration/);
-  assert.match(head,/calibrationPositiveIndexes\.map\(index=>calibrationPredictions\[index\]\.positive_net_return_mean_pct\)/);
-  assert.match(head,/calibrationNonPositiveIndexes\.map\(index=>calibrationPredictions\[index\]\.non_positive_net_return_mean_pct\)/);
+  assert.match(head,/calibrationPositiveIndexes\.map\(index=>\s*calibrationPredictions\[index\]\.positive_net_return_mean_pct\)/);
+  assert.match(head,/calibrationNonPositiveIndexes\.map\(index=>\s*calibrationPredictions\[index\]\.non_positive_net_return_mean_pct\)/);
   assert.match(head,/head\.positive_conditional_mean_model\.conditional_mean_calibration/);
   assert.match(head,/head\.non_positive_conditional_mean_model\.conditional_mean_calibration/);
   assert.match(head,/if\(calibrator\.fitted===true&&positiveMeanCalibrator\.fitted===true&&\s*nonPositiveMeanCalibrator\.fitted===true\)/);
