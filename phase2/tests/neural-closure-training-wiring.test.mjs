@@ -538,6 +538,8 @@ test('TCN-LSTM classifier Brier and independent ranking sweep stay within the se
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.match(trainer,/minimumReturnWinRatePct:55/);
   assert.match(trainer,/rankingMinimumReturnGapPct:0\.05/);
+  assert.match(trainer,/rankingHeadTrainingObjective:'PAIRWISE_MARGIN_HINGE_V1'/);
+  assert.match(trainer,/rankingHeadMargin:0\.25/);
   // Use source offsets rather than a brace-based regex: the function has a
   // destructured options parameter whose closing brace precedes its body.
   const classifierProbabilityStart=recurrent.indexOf(
