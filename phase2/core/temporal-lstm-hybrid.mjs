@@ -4166,6 +4166,16 @@ export function trainTcnLstmHybrid(trainingRows, {
       !Array.isArray(state?.orderedRankingFeatureStd)||
       state.orderedRankingFeatureStd.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
       state.orderedRankingFeatureStd.some(value=>!finite(value)||value<=0)||
+      !Array.isArray(state?.orderedRankingAnchorWeights)||
+      state.orderedRankingAnchorWeights.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      state.orderedRankingAnchorWeights.some(value=>!finite(value))||
+      !Array.isArray(state?.orderedRankingAnchorFeatureMean)||
+      state.orderedRankingAnchorFeatureMean.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      state.orderedRankingAnchorFeatureMean.some(value=>!finite(value))||
+      !Array.isArray(state?.orderedRankingAnchorFeatureStd)||
+      state.orderedRankingAnchorFeatureStd.length!==TCN_LSTM_ORDERED_RANKING_FEATURE_COUNT||
+      state.orderedRankingAnchorFeatureStd.some(value=>!finite(value)||value<=0)||
+      !finite(state?.orderedRankingAnchorBias)||
       metadata?.schema!=='RADARX_TCN_LSTM_INDEPENDENT_ORDERED_696_RETURN_RANKER_V1'||
       metadata?.fitted!==true||
       metadata?.representation!=='RAW_ORDERED_696_V1'||
@@ -4185,6 +4195,7 @@ export function trainTcnLstmHybrid(trainingRows, {
       metadata?.standardization?.fit_rows!==Number(prefit.training_rows)||
       metadata?.validation_or_holdout_used!==false||
       metadata?.classifier_parameters_updated!==false||
+      metadata?.initialization_preserves_logistic_pair_scores!==true||
       prefit?.pair_support?.pair_strategy!==rankingPairStrategy||
       prefit?.pair_support?.round_trip_cost_bps!==rankingRoundTripCostBps||
       prefit?.pair_support?.minimum_return_gap_pct!==rankingMinimumReturnGapPct||
