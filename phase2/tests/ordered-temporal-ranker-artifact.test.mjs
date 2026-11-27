@@ -316,10 +316,12 @@ test('artifact inference reproduces the exact raw ordered linear rank score',()=
     Array.from({length:29},(_,channel)=>Math.sin((step+1)*(channel+2)*0.017)));
   const features=buildTcnLstmFlattenedFeatures(sequence);
   let expected=anchorBias;
-  for(let i=0;i<696;i++){
+  for(let i=0;i<696;i++)
     expected+=anchorWeights[i]*((features[i]-anchorMeans[i])/anchorStds[i]);
+  // Runtime clamps the frozen Logistic anchor before applying the residual.
+  expected=Math.max(-30,Math.min(30,expected));
+  for(let i=0;i<696;i++)
     expected+=weights[i]*((features[i]-means[i])/stds[i]);
-  }
   expected=Math.max(-30,Math.min(30,expected));
   assert.equal(predictOrderedTemporalRankerArtifact(sequence,artifact),expected);
 });
