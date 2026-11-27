@@ -81,7 +81,8 @@ test('candidate prefilter includes every currently eligible Spot USDT pair above
   assert.equal(result.excluded_non_crypto.length,86,
     'all official Binance bStocks Spot listings through 2026-11-25 must be removed from the crypto-only cohort');
   assert.equal(result.excluded_non_crypto.every(item=>
-    item.exclusion_reason==='TOKENIZED_SECURITY_BSTOCK_NOT_CRYPTO_SPOT_ASSET'),true);
+    item.exclusion_reason==='TOKENIZED_SECURITY_BSTOCK_NOT_CRYPTO_SPOT_ASSET'&&
+    item.exclusion_policy==='BINANCE_BSTOCK_TOKENIZED_SECURITIES_V3_2026_11_27'),true);
   assert.equal(result.excluded_non_crypto_policy.id,
     'BINANCE_BSTOCK_TOKENIZED_SECURITIES_V3_2026_11_27');
   assert.throws(()=>selectBinanceSpotUsdtUniverse({symbols},tickers,{
