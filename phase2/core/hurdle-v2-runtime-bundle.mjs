@@ -227,8 +227,35 @@ export function verifyHurdleV2RuntimeBundle(bundle,{rankerArtifact,hurdleArtifac
       hash(profile.execution_logistic_context_metadata)!==
         bundle.artifact_manifest?.temporal_logistic_metadata_sha256)
       return fail('RUNTIME_PROFILE_COMPONENT_HASH_MISMATCH');
-    if(profile.execution_logistic_context_metadata?.status!=='AVAILABLE'||
-      profile.execution_logistic_context_model?.training_partition_only!==true)
+    const logisticMetadata=profile.execution_logistic_context_metadata;
+    const temporalLogistic=profile.execution_logistic_context_model;
+    if(profile.model.executionRegressionHeadsFitted!==true||
+      profile.model.executionHeadInputFeatureSchema!==
+        'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_MATCHED_FULL_SEQUENCE_LOGISTIC_CV_OOF_CLASSIFIER_AND_INDEPENDENT_RANK_SCORE_V8'||
+      profile.model.executionHurdleReturnHeads?.LOGIT_CONTEXT_AUGMENTED?.fitted!==true||
+      profile.model.executionHurdleReturnHeads?.POOLED_ONLY?.fitted!==true||
+      !Array.isArray(profile.baseline_fit?.weights)||
+      profile.baseline_fit.weights.length!==58||
+      profile.baseline_fit.weights.some(value=>!finite(value))||
+      !finite(profile.baseline_fit.bias))
+      return fail('RUNTIME_TCN_LSTM_OR_ANCHOR_CONTRACT_INVALID');
+    if(logisticMetadata?.status!=='AVAILABLE'||
+      logisticMetadata?.logistic_cv_schema!==
+        'RADARX_TRAIN_ONLY_PURGED_EXPANDING_LOGISTIC_CV_V2'||
+      logisticMetadata?.logistic_feature_schema_id!==
+        'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1'||
+      logisticMetadata?.predictions_are_out_of_sample_for_scoring_rows!==true||
+      logisticMetadata?.training_predictions_are_out_of_fold!==true||
+      logisticMetadata?.training_predictions_source_partition!==
+        'PURGED_EXPANDING_TRAIN_ONLY_OOF_FOLDS'||
+      logisticMetadata?.classifier_training_baseline_source!==
+        'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF'||
+      logisticMetadata?.validation_or_holdout_used!==false||
+      logisticMetadata?.training_prediction_coverage?.outer_validation_or_holdout_used!==false||
+      !Number.isInteger(logisticMetadata?.training_prediction_coverage?.oof_scored_rows)||
+      logisticMetadata.training_prediction_coverage.oof_scored_rows<20||
+      temporalLogistic?.training_partition_only!==true||
+      !temporalLogistic?.standardizer||!temporalLogistic?.fit)
       return fail('RUNTIME_TEMPORAL_LOGISTIC_NOT_PINNED');
     if(!rankerArtifact||!hurdleArtifact)
       return fail('RUNTIME_EXTERNAL_ARTIFACTS_MISSING');
