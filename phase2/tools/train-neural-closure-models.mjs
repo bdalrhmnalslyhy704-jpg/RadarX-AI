@@ -1422,6 +1422,7 @@ async function main(){
           rankingHeadL2:0.001,
           rankingHeadTrainingObjective:'PAIRWISE_SOFTPLUS_MARGIN_V1',
           rankingHeadMargin:0.25,
+          rankingValidationFraction:0.15,
           requireExternalLogisticSelectionBaseline:true,
           // Fit a separate purged expanding-window Logistic model on the
           // recurrent model-training block only. Its predictions are then
