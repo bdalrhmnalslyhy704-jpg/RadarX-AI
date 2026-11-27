@@ -1688,8 +1688,8 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
       [0.25,0.5,1,2].every(l2=>
         internal.l2_grid.includes(l2)&&
         internal.candidate_grid.some(candidate=>candidate.l2===l2))&&
-      internal?.candidate_grid?.length===80&&
-      [4,6,8,24].every(blockCount=>
+      internal?.candidate_grid?.length===140&&
+      [1,2,3,4,6,8,24].every(blockCount=>
         internal.candidate_grid.some(candidate=>candidate.temporal_block_count===blockCount))&&
       [0.003,0.006,0.01,0.02,0.03].every(rate=>
         internal.candidate_grid.some(candidate=>candidate.learning_rate===rate))&&
