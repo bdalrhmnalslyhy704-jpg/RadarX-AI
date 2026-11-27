@@ -1495,6 +1495,8 @@ test('paired PnL promotion gate accepts actual outer-bootstrap output only when 
   assert.equal(result.status,'AVAILABLE',JSON.stringify(result));
   assert.equal(result.sampling.repetitions,250);
   assert.equal(result.sampling.block_length_days,3);
+  assert.equal(result.holdout_rows_or_scores_used,false,
+    'available bootstrap evidence must expose its holdout-isolation contract at the top level');
   const paired=result.execution.paired_strategy_differences['1']
     .LOGIT_CONTEXT_AUGMENTED_MINUS_LOGISTIC_MATCHED_CONTEXT.net_pnl_pct;
   assert.equal(paired.status,'AVAILABLE');
