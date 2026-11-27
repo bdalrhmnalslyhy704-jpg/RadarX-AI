@@ -8,6 +8,7 @@ on:
       - research/build224-tcn-lstm-inner-logistic-parity-20261121
       - research/build224-execution-head-no-exposure-ablation-20261121
       - research/build224-temporal-tied-ranker-20261125
+      - research/build224-pareto-checkpoint-validity-20261127
     paths:
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
