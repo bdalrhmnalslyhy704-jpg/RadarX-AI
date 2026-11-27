@@ -130,6 +130,13 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
             Math.abs(parameters.feature_std[current]-parameters.feature_std[first])<=1e-12;
         })
       );
+    const validationWindowContractValid=training?.pair_strategy!=='PROFITABILITY_TOPK_V2'||
+      finite(tuning?.validation_fraction)&&tuning.validation_fraction>=0.08&&
+      tuning.validation_fraction<=0.40&&
+      Number.isInteger(tuning?.validation_group_count)&&tuning.validation_group_count>=5&&
+      Array.isArray(tuningFolds)&&tuningFolds.every(fold=>
+        fold?.validation_decision_group_count===tuning.validation_group_count
+      );
     const foldPairBreakdownValid=training?.pair_strategy!=='PROFITABILITY_TOPK_V2'||
       Array.isArray(tuningFolds)&&tuningFolds.every(fold=>
         fold?.pair_strategy==='PROFITABILITY_TOPK_V2'&&
@@ -439,7 +446,8 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
         tuning?.robustness_status!==(robustTuningCandidates.length>0?'FOLD_STABLE_DUAL_LOGISTIC_SUPERIORITY':'ABSTAIN_NO_FOLD_STABLE_DUAL_SUPERIORITY')||
         tuning?.selected_candidate_qualified!==(robustTuningCandidates.length>0))||
       !finite(tuning?.purge_horizon_ms)||tuning.purge_horizon_ms<4*60*60*1000||
-      !foldContractValid||!foldPairBreakdownValid||!foldTotalsValid||!candidateGridValid||
+      !foldContractValid||!foldPairBreakdownValid||!validationWindowContractValid||
+      !foldTotalsValid||!candidateGridValid||
       !Number.isInteger(tuning?.tuning_rows)||tuning.tuning_rows<20||
       !Number.isInteger(tuning?.validation_rows)||tuning.validation_rows<20||
       !Number.isInteger(tuning?.purged_rows)||tuning.purged_rows<0||
@@ -616,6 +624,8 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
         epoch_selection_mode:ranker.epoch_selection_mode,
         parameterization_id:ranker.parameterization_id,
         temporal_block_count:ranker.temporal_block_count,
+        validation_fraction:ranker.internal_training_validation?.validation_fraction??0.08,
+        validation_group_count:ranker.internal_training_validation?.validation_group_count??null,
         steps_per_block:ranker.steps_per_block,
         parameter_count:ranker.parameter_count,
         selection_metric:ranker.selection_metric
