@@ -24,7 +24,7 @@ import {
 } from './hurdle-v2-artifact-contract.mjs';
 
 export const HURDLE_V2_RUNTIME_BUNDLE_SCHEMA =
-  'RADARX_BUILD224_HURDLE_V2_COMPLETE_INFERENCE_RUNTIME_BUNDLE_V1';
+  'RADARX_BUILD224_HURDLE_V2_COMPLETE_INFERENCE_RUNTIME_BUNDLE_V2';
 
 const HEX_40=/^[a-f0-9]{40}$/i;
 const HEX_64=/^[a-f0-9]{64}$/i;
@@ -71,7 +71,7 @@ function manifestFrom(core){
   const ranker=core.dependencies.ordered_ranker;
   const hurdle=core.dependencies.hurdle_v2;
   return {
-    schema:'RADARX_BUILD224_HURDLE_V2_RUNTIME_DEPENDENCY_MANIFEST_V1',
+    schema:'RADARX_BUILD224_HURDLE_V2_RUNTIME_DEPENDENCY_MANIFEST_V2',
     bundle_schema:core.schema,
     code_commit_sha:core.provenance.code_commit_sha,
     dataset_sha256:core.provenance.dataset_sha256,
