@@ -3991,6 +3991,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     outer_validation_or_holdout_used:false,
     model_selection_partition_used:false,
     purge_horizon_ms:purgeHorizonMs,
+    validation_fraction:Number(validationFraction),
+    validation_group_count:validationGroupCount,
     fold_count:foldMetadata.length,
     folds:foldMetadata,
     tuning_max_resolved_at:Math.max(...foldMetadata.map(item=>item.tuning_max_resolved_at)),
@@ -4093,6 +4095,7 @@ export function trainTcnLstmHybrid(trainingRows, {
   rankingPairStrategy='RETURN_EXTREMES_V1',
   rankingRepresentation='LATENT_MULTI_SCALE_V2',
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001,
+  rankingValidationFraction=0.08,
   fitIndependentRankingHead=true,preFittedIndependentRankingHead=null,
   executionHeadRoundTripCostBps=30,executionHeadLearningRate=0.015,
   executionHeadEpochs=100,executionHeadL2=0.002
@@ -4144,6 +4147,8 @@ export function trainTcnLstmHybrid(trainingRows, {
     rankingHeadLearningRate>0.25||!Number.isInteger(rankingHeadEpochs)||
     rankingHeadEpochs<1||rankingHeadEpochs>200||
     !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1||
+    !finite(rankingValidationFraction)||rankingValidationFraction<0.08||
+      rankingValidationFraction>0.40||
     !['RETURN_EXTREMES_V1','PROFITABILITY_BOUNDARY_V1','PROFITABILITY_TOPK_V2'].includes(rankingPairStrategy)||
     !TCN_LSTM_RANKING_REPRESENTATIONS.includes(rankingRepresentation)||
     typeof fitIndependentRankingHead!=='boolean')
@@ -4189,6 +4194,7 @@ export function trainTcnLstmHybrid(trainingRows, {
         metadata?.temporal_block_count||
       metadata?.internal_training_validation?.selected_parameter_count!==
         metadata?.parameter_count||
+      metadata?.internal_training_validation?.validation_fraction!==rankingValidationFraction||
       metadata?.training_rows!==Number(prefit.training_rows)||
       metadata?.training_pairs!==Number(prefit.training_pairs)||
       metadata?.standardization?.fit_partition!=='TRAINING_PARTITION_ONLY'||
@@ -5015,6 +5021,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   rankingPairStrategy='RETURN_EXTREMES_V1',
   rankingRepresentation='LATENT_MULTI_SCALE_V2',
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001,
+  rankingValidationFraction=0.08,
   externalLogisticExecutionContextProvider=null,
   requireExternalLogisticSelectionBaseline=false
 } = {}) {
@@ -5035,6 +5042,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     !finite(rankingHeadLearningRate)||rankingHeadLearningRate<=0||rankingHeadLearningRate>0.25||
     !Number.isInteger(rankingHeadEpochs)||rankingHeadEpochs<1||rankingHeadEpochs>200||
     !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1||
+    !finite(rankingValidationFraction)||rankingValidationFraction<0.08||
+      rankingValidationFraction>0.40||
     typeof externalLogisticExecutionContextProvider!=='function'&&
       externalLogisticExecutionContextProvider!==null||
     typeof requireExternalLogisticSelectionBaseline!=='boolean'||
@@ -5092,7 +5101,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       learningRate:rankingHeadLearningRate,
       epochs:rankingHeadEpochs,
       l2:rankingHeadL2,
-      patience:10
+      patience:10,
+      validationFraction:rankingValidationFraction
     })
     :null;
   let effectiveTrainingRowsForFit=modelTrainingRows.map(row=>{
@@ -5441,7 +5451,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       executionRows:null,
       rankingWeight:Number(config.rankingWeight??0),
       rankingHeadLearningRate:candidateRankingHeadLearningRate,
-      rankingHeadEpochs,rankingHeadL2,
+      rankingHeadEpochs,rankingHeadL2,rankingValidationFraction,
       fitIndependentRankingHead:preFittedIndependentRankingHead===null,
       preFittedIndependentRankingHead,
       rankingRoundTripCostBps:roundTripCostBps,
