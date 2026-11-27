@@ -691,10 +691,11 @@ test('TCN-LSTM never opens holdout automatically after external validation',asyn
 });
 
 test('Hurdle class-conditional return means are separately calibrated on the later purged execution calibration block',async()=>{
-  const [head,contract,returnHead]=await Promise.all([
+  const [head,contract,returnHead,trainer]=await Promise.all([
     readFile(new URL('../core/temporal-lstm-hybrid.mjs',import.meta.url),'utf8'),
     readFile(new URL('../core/hurdle-v2-artifact-contract.mjs',import.meta.url),'utf8'),
-    readFile(new URL('../core/hurdle-return-head.mjs',import.meta.url),'utf8')
+    readFile(new URL('../core/hurdle-return-head.mjs',import.meta.url),'utf8'),
+    readFile(trainerUrl,'utf8')
   ]);
   assert.match(head,/fitHurdleConditionalMeanCalibration/);
   assert.match(head,/calibrationPositiveIndexes\.map\(index=>calibrationPredictions\[index\]\.positive_net_return_mean_pct\)/);
@@ -707,6 +708,8 @@ test('Hurdle class-conditional return means are separately calibrated on the lat
   assert.match(contract,/validateConditionalMeanCalibration\(\s*model\.conditional_mean_calibration,positive,calibration/);
   assert.match(contract,/HURDLE_V2_PURGED_EXECUTION_HEAD_PLATT_AND_CLASS_MEAN_CALIBRATION_V2/);
   assert.match(contract,/training_provenance:[\s\S]*?conditional_mean_calibration:/);
+  assert.match(trainer,/executionHurdleReturnHeads[\s\S]*?positive_conditional_mean_model[\s\S]*?conditional_mean_calibration/);
+  assert.match(trainer,/executionHurdleReturnHeads[\s\S]*?non_positive_conditional_mean_model[\s\S]*?conditional_mean_calibration/);
 });
 
 test('neural candidates cannot open outer validation before passing their purged inner-selection and calibration gates',async()=>{
