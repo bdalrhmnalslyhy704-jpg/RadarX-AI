@@ -1420,7 +1420,7 @@ async function main(){
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
-          rankingHeadTrainingObjective:'PAIRWISE_MARGIN_HINGE_V1',
+          rankingHeadTrainingObjective:'PAIRWISE_SOFTPLUS_MARGIN_V1',
           rankingHeadMargin:0.25,
           requireExternalLogisticSelectionBaseline:true,
           // Fit a separate purged expanding-window Logistic model on the
