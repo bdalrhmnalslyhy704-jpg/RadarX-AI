@@ -304,7 +304,8 @@ function fitConditionalMeanHead(rows, targets, {
     huber_delta: Number(huberDelta),
     initial_huber_loss: Number(initialLoss.toFixed(8)),
     final_huber_loss: Number(bestLoss.toFixed(8)),
-    constant_mean_baseline_selected:best.weights.every(value=>value===0),
+    constant_mean_baseline_selected:best.weights.every(value=>value===0)&&
+      Math.abs(best.bias-targets.reduce((sum,value)=>sum+Number(value),0)/targets.length)<=1e-12,
     epochs_completed: completedEpochs,
     requested_epochs: epochs,
     learning_rate: Number(learningRate),
@@ -611,7 +612,8 @@ export function fitHurdleReturnHead(featureRows, netReturns, {
     class_reweighting_used: false,
     initial_log_loss: Number(initialLoss.toFixed(8)),
     final_log_loss: Number(bestLoss.toFixed(8)),
-    empirical_prior_baseline_selected:best.weights.every(value=>value===0),
+    empirical_prior_baseline_selected:best.weights.every(value=>value===0)&&
+      Math.abs(best.bias-Math.log(positiveCount/nonPositiveCount))<=1e-12,
     epochs_completed: completedEpochs,
     requested_epochs: epochs,
     learning_rate: Number(learningRate),
