@@ -670,9 +670,9 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
   assert.equal(fitted.training.validation_or_holdout_used,false);
   assert.ok(fitted.training.internal_training_validation.candidate_grid.every(candidate=>
     candidate.fold_results.every(fold=>fold.epoch_initial_matches_logistic_anchor===true&&
-      Math.abs(fold.epoch_initial_pairwise_log_loss-
+      Math.abs(fold.epoch_initial_pairwise_log_loss_raw-
         fold.epoch_logistic_validation_pairwise_log_loss)<=1e-10&&
-      Math.abs(fold.epoch_initial_pairwise_accuracy_pct-
+      Math.abs(fold.epoch_initial_pairwise_accuracy_pct_raw-
         fold.epoch_logistic_validation_pairwise_accuracy_pct)<=1e-8
     )
   ),'zero residual at epoch start must reproduce fold-local Logistic exactly on the same nested validation pairs');

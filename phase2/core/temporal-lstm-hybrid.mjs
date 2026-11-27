@@ -3472,6 +3472,11 @@ function fitTcnLstmOrderedPairwiseRankingHead(rows,pairs,model,{
       Number(initialValidationMetrics.pairwise_log_loss.toFixed(8)),
     initial_validation_pairwise_accuracy_pct:validationPairs===null?null:
       Number(initialValidationMetrics.pairwise_accuracy_pct.toFixed(4)),
+    // Preserve unrounded nested-validation metrics for exact Logistic-anchor parity audits.
+    initial_validation_pairwise_log_loss_raw:validationPairs===null?null:
+      Number(initialValidationMetrics.pairwise_log_loss),
+    initial_validation_pairwise_accuracy_pct_raw:validationPairs===null?null:
+      Number(initialValidationMetrics.pairwise_accuracy_pct),
     final_pairwise_log_loss:Number(finalTrainingMetrics.pairwise_log_loss.toFixed(8)),
     final_pairwise_accuracy_pct:Number(finalTrainingMetrics.pairwise_accuracy_pct.toFixed(4)),
     best_validation_pairwise_log_loss:finalValidationMetrics===null?null:Number(finalValidationMetrics.pairwise_log_loss.toFixed(8)),
@@ -3811,12 +3816,14 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
           epoch_selection_pairwise_accuracy_pct:epochSelection.best_validation_pairwise_accuracy_pct,
           epoch_initial_pairwise_log_loss:epochSelection.initial_validation_pairwise_log_loss,
           epoch_initial_pairwise_accuracy_pct:epochSelection.initial_validation_pairwise_accuracy_pct,
+          epoch_initial_pairwise_log_loss_raw:epochSelection.initial_validation_pairwise_log_loss_raw,
+          epoch_initial_pairwise_accuracy_pct_raw:epochSelection.initial_validation_pairwise_accuracy_pct_raw,
           epoch_logistic_validation_pairwise_log_loss:fold.epochLogisticValidationMetrics.pairwise_log_loss,
           epoch_logistic_validation_pairwise_accuracy_pct:fold.epochLogisticValidationMetrics.pairwise_accuracy_pct,
           epoch_initial_matches_logistic_anchor:
-            Math.abs(epochSelection.initial_validation_pairwise_log_loss-
+            Math.abs(epochSelection.initial_validation_pairwise_log_loss_raw-
               fold.epochLogisticValidationMetrics.pairwise_log_loss)<=1e-10&&
-            Math.abs(epochSelection.initial_validation_pairwise_accuracy_pct-
+            Math.abs(epochSelection.initial_validation_pairwise_accuracy_pct_raw-
               fold.epochLogisticValidationMetrics.pairwise_accuracy_pct)<=1e-8,
           logistic_validation_pairwise_log_loss:logistic.pairwise_log_loss,
           logistic_validation_pairwise_accuracy_pct:logistic.pairwise_accuracy_pct,
