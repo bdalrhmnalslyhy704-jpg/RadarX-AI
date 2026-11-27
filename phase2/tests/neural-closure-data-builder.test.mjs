@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
 import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
+import {verifyBinanceRawArchives} from '../core/neural-closure-archive-guardian.mjs';
 import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
 import {selectBinanceSpotUsdtUniverse,verifyProspectiveUniverseCapture,verifyProspectiveCohortRowCoverage,auditProspectiveHistoryStart} from '../core/neural-closure-universe.mjs';
 import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
@@ -814,6 +815,48 @@ test('raw archive accepts safe Binance identifier separators and rejects path tr
       }
     );
     assert.deepEqual(await readdir(directory),['A_B-CUSDT.1m.json.gz']);
+  }finally{
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+
+test('raw archive safely encodes Unicode Binance symbols and guardian verifies original symbol identity',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'radarx-raw-archive-unicode-'));
+  const symbol='币安人生USDT';
+  try{
+    const result=await writeRawSpotKlineArchive({
+      symbol,interval:'1m',archiveDir:directory,rawRows:[['valid']]
+    });
+    const expectedFile='~'+Buffer.from(symbol,'utf8').toString('hex')+'.1m.json.gz';
+    assert.equal(result.file,expectedFile);
+    assert.match(result.file,/^[a-z0-9~]+\\.1m\\.json\\.gz$/);
+    const compressed=await readFile(join(directory,result.file));
+    const parsed=JSON.parse(gunzipSync(compressed).toString('utf8'));
+    assert.equal(parsed.symbol,symbol);
+    const record={symbol,interval:'1m',...result};
+    const verified=await verifyBinanceRawArchives({
+      archiveDirectory:directory,archiveRecords:[record],expectedCount:1
+    });
+    assert.equal(verified.verified_count,1);
+    assert.equal(verified.files[0].symbol,symbol);
+    assert.equal(verified.files[0].file,expectedFile);
+    await assert.rejects(
+      verifyBinanceRawArchives({
+        archiveDirectory:directory,
+        archiveRecords:[{...record,symbol:'OTHERUSDT'}],
+        expectedCount:1
+      }),
+      /RAW_ARCHIVE_FILENAME_INVALID_OR_DUPLICATE/
+    );
+    await assert.rejects(
+      writeRawSpotKlineArchive({
+        symbol:'../EVILUSDT',interval:'1m',archiveDir:directory,rawRows:[['valid']]
+      }),
+      error=>{
+        assert.equal(error.message,'NEURAL_RAW_ARCHIVE_SYMBOL_INVALID:"../EVILUSDT"');
+        return true;
+      }
+    );
   }finally{
     await rm(directory,{recursive:true,force:true});
   }
