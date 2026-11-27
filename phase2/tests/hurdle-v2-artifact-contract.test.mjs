@@ -290,6 +290,21 @@ before(async () => {
 test('01. deterministic fixture actually trains both Hurdle heads', () => {
   assert.equal(fixture.fit.model.executionHurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED.fitted, true);
   assert.equal(fixture.fit.model.executionHurdleReturnHeads.POOLED_ONLY.fitted, true);
+  for(const key of ['LOGIT_CONTEXT_AUGMENTED','POOLED_ONLY']){
+    const head=fixture.fit.model.executionHurdleReturnHeads[key];
+    assert.equal(head.positive_conditional_mean_model
+      .conditional_mean_calibration.fitted,true);
+    assert.equal(head.non_positive_conditional_mean_model
+      .conditional_mean_calibration.fitted,true);
+    assert.equal(head.positive_conditional_mean_model
+      .conditional_mean_calibration.class_condition,'POSITIVE_NET_RETURN');
+    assert.equal(head.non_positive_conditional_mean_model
+      .conditional_mean_calibration.class_condition,'NON_POSITIVE_NET_RETURN');
+    assert.equal(head.positive_conditional_mean_model
+      .conditional_mean_calibration.samples,32);
+    assert.equal(head.non_positive_conditional_mean_model
+      .conditional_mean_calibration.samples,64);
+  }
 });
 test('02. contextual and pooled head parameters are learned, non-zero and finite', () => {
   for (const key of ['LOGIT_CONTEXT_AUGMENTED','POOLED_ONLY']) {
@@ -297,6 +312,10 @@ test('02. contextual and pooled head parameters are learned, non-zero and finite
     assert.ok(head.weights.some(value => value !== 0));
     assert.ok(head.positive_conditional_mean_model.weights.some(value => value !== 0));
     assert.ok(head.non_positive_conditional_mean_model.weights.some(value => value !== 0));
+    assert.ok(Number.isFinite(head.positive_conditional_mean_model
+      .conditional_mean_calibration.slope));
+    assert.ok(Number.isFinite(head.non_positive_conditional_mean_model
+      .conditional_mean_calibration.intercept));
     assert.ok(allFinite(head));
   }
 });
@@ -382,9 +401,20 @@ test('04. artifact records complete code, dataset, target, split and cost proven
 test('05. Hurdle objective and calibration contract are explicit', () => {
   assert.equal(artifact.objective_id, HURDLE_V2_OBJECTIVE);
   assert.equal(artifact.selection_objective_id, fixture.selectionObjectiveId);
-  assert.match(artifact.calibration_definition, /PURGED_EXECUTION_HEAD_PLATT_CALIBRATION/);
-  assert.equal(artifact.calibration_id,'RADARX_HURDLE_V2_PURGED_EXECUTION_HEAD_PLATT_CALIBRATION_V1');
+  assert.match(artifact.calibration_definition, /CLASS_CONDITIONAL/);
+  assert.equal(artifact.calibration_id,
+    'RADARX_HURDLE_V2_PURGED_EXECUTION_HEAD_PLATT_AND_CLASS_MEAN_CALIBRATION_V2');
+  assert.equal(artifact.model_version,
+    'HURDLE_V2_FEATURE_CONDITIONAL_MEANS_V5_PURGED_CLASS_MEAN_AND_PLATT_CALIBRATION_EXECUTION_POLICY');
   assert.equal(artifact.artifact_schema_version,2);
+  for(const key of ['contextual','pooled']){
+    const calibration=artifact.training_provenance.hurdle_return_head
+      .conditional_mean_calibration[key];
+    assert.equal(calibration.positive.fitted,true);
+    assert.equal(calibration.non_positive.fitted,true);
+    assert.equal(calibration.positive.validation_or_holdout_used,false);
+    assert.equal(calibration.non_positive.validation_or_holdout_used,false);
+  }
   assert.equal(artifact.contextual_head_parameters.probability_calibration.fitted,true);
   assert.equal(artifact.pooled_head_parameters.probability_calibration.fitted,true);
   assert.ok(artifact.calibration_id);
@@ -395,6 +425,44 @@ test('05b. artifact verifier rejects a head without the purged probability calib
   const result=verifyHurdleV2Artifact(invalid);
   assert.equal(result.valid,false);
   assert.match(result.reason,/HURDLE_V2_HEAD_INVALID:contextual/);
+});
+
+test('05c. artifact verifier rejects either missing class-conditional mean calibrator',()=>{
+  for(const [key,field] of [
+    ['LOGIT_CONTEXT_AUGMENTED','positive_conditional_mean_model'],
+    ['POOLED_ONLY','non_positive_conditional_mean_model']
+  ]){
+    const invalid=structuredClone(artifact);
+    delete invalid[key==='LOGIT_CONTEXT_AUGMENTED'
+      ?'contextual_head_parameters':'pooled_head_parameters'][field]
+      .conditional_mean_calibration;
+    const resealed=resealArtifact(invalid);
+    const result=verifyHurdleV2Artifact(resealed);
+    assert.equal(result.valid,false);
+    assert.match(result.reason,/HURDLE_V2_CONDITIONAL_MEAN_CALIBRATION_INVALID/);
+  }
+});
+
+test('05d. conditional mean calibration is applied at inference but remains inside training class bounds',()=>{
+  const head=structuredClone(fixture.fit.model.executionHurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED);
+  const features=Array.from({length:44},(_,index)=>(index-21.5)/37);
+  const calibrated=predictHurdleExpectedNetReturn(features,head);
+  const rawHead=structuredClone(head);
+  delete rawHead.positive_conditional_mean_model.conditional_mean_calibration;
+  delete rawHead.non_positive_conditional_mean_model.conditional_mean_calibration;
+  const raw=predictHurdleExpectedNetReturn(features,rawHead);
+  assert.notEqual(calibrated.positive_net_return_mean_pct,
+    raw.positive_net_return_mean_pct);
+  assert.notEqual(calibrated.non_positive_net_return_mean_pct,
+    raw.non_positive_net_return_mean_pct);
+  assert.ok(calibrated.positive_net_return_mean_pct>=
+    head.positive_conditional_mean_model.training_target_min_pct);
+  assert.ok(calibrated.positive_net_return_mean_pct<=
+    head.positive_conditional_mean_model.training_target_max_pct);
+  assert.ok(calibrated.non_positive_net_return_mean_pct>=
+    head.non_positive_conditional_mean_model.training_target_min_pct);
+  assert.ok(calibrated.non_positive_net_return_mean_pct<=
+    head.non_positive_conditional_mean_model.training_target_max_pct);
 });
 
 test('06. failed scientific qualification does not prevent artifact creation', () => {
