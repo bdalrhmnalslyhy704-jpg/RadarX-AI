@@ -28,7 +28,17 @@ function validProfile() {
     },
     execution_logistic_context_metadata: {
       status: 'AVAILABLE',
-      logistic_feature_schema_id: LOGISTIC_SCHEMA
+      logistic_cv_schema: 'RADARX_TRAIN_ONLY_PURGED_EXPANDING_LOGISTIC_CV_V2',
+      logistic_feature_schema_id: LOGISTIC_SCHEMA,
+      predictions_are_out_of_sample_for_scoring_rows: true,
+      training_predictions_are_out_of_fold: true,
+      training_predictions_source_partition: 'PURGED_EXPANDING_TRAIN_ONLY_OOF_FOLDS',
+      classifier_training_baseline_source: 'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF',
+      validation_or_holdout_used: false,
+      training_prediction_coverage: {
+        oof_scored_rows: 40,
+        outer_validation_or_holdout_used: false
+      }
     },
     execution_logistic_context_model: {
       training_partition_only: true,
