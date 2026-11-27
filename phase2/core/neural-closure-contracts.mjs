@@ -2828,6 +2828,7 @@ export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
     schema:'RADARX_OUTER_VALIDATION_MOVING_BLOCK_BOOTSTRAP_V1',
     status:'AVAILABLE',diagnostic_only:true,
     evaluation_partition:'OUTER_VALIDATION_ONLY',
+    holdout_rows_or_scores_used:false,
     sampling:{
       method:'MOVING_BLOCK_BOOTSTRAP_WITHOUT_REPLACEMENT_WITHIN_BLOCKS',
       resampling:'CONTIGUOUS_UTC_DAY_BLOCKS_SAMPLED_WITH_REPLACEMENT',
