@@ -659,14 +659,23 @@ test('ordered ranker threads Top-K pair policy through every purged inner fold',
     'PROFITABILITY_TOPK_V2');
   assert.equal(fitted.training.internal_training_validation.fold_count,3);
   assert.equal(fitted.training.initialization_method,
-    'PROJECTED_FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_V1');
+    'FOLD_LOCAL_LOGISTIC_ANCHORED_ZERO_RESIDUAL_HEAD_V1');
   assert.equal(fitted.training.initialization_source_rows,fitted.training.training_rows);
+  assert.equal(fitted.training.initialization_preserves_logistic_pair_scores,true);
   assert.equal(fitted.training.regularization_anchor_method,
-    'SAME_FOLD_LOGISTIC_WEIGHTS_RESIDUAL_PENALTY_V1');
+    'ZERO_RESIDUAL_CORRECTION_PENALTY_V1');
   assert.equal(fitted.training.internal_training_validation.logistic_baseline_config
     .ranker_initialization_method,
     'FOLD_LOCAL_LOGISTIC_WEIGHT_WARM_START_THEN_RETURN_PAIRWISE_FINE_TUNING_V1');
   assert.equal(fitted.training.validation_or_holdout_used,false);
+  assert.ok(fitted.training.internal_training_validation.candidate_grid.every(candidate=>
+    candidate.fold_results.every(fold=>fold.epoch_initial_matches_logistic_anchor===true&&
+      Math.abs(fold.epoch_initial_pairwise_log_loss-
+        fold.epoch_logistic_validation_pairwise_log_loss)<=1e-10&&
+      Math.abs(fold.epoch_initial_pairwise_accuracy_pct-
+        fold.epoch_logistic_validation_pairwise_accuracy_pct)<=1e-8
+    )
+  ),'zero residual at epoch start must reproduce fold-local Logistic exactly on the same nested validation pairs');
 });
 
 test('pairwise return-ranking evaluation reports only selection-supplied ranking evidence',()=>{
