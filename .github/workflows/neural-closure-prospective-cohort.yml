@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/neural-closure-prospective-cohort.yml'
       - 'phase2/core/neural-closure-data-builder.mjs'
+      - 'phase2/core/neural-closure-raw-archive.mjs'
+      - 'phase2/tests/neural-closure-data-builder.test.mjs'
       - 'phase2/core/neural-closure-universe.mjs'
       - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/core/neural-closure-secure-bundle.mjs'
@@ -69,6 +71,7 @@ jobs:
       - name: Verify prospective scheduler, collector and encryption contracts
         run: |
           node --check phase2/core/neural-closure-data-builder.mjs
+          node --check phase2/core/neural-closure-raw-archive.mjs
           node --check phase2/tools/build-neural-closure-dataset.mjs
           node --check phase2/core/neural-closure-secure-bundle.mjs
           node --check phase2/core/neural-closure-public-key-envelope.mjs
