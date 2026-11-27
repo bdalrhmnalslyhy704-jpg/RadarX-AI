@@ -360,7 +360,6 @@ export function fitHurdleConditionalMeanCalibration(rawConditionalMeans,netRetur
   const slopePenalty=Number(regularization),interceptPenalty=slopePenalty*0.25;
   let slope=1,intercept=0;
   let slopeFirst=0,slopeSecond=0,interceptFirst=0,interceptSecond=0;
-  let bestObjective=Infinity,best={slope,intercept},wait=0,completed=0;
   const beta1=0.9,beta2=0.999,epsilon=1e-8;
   const objective=(a,b)=>{
     let total=0;
@@ -368,7 +367,13 @@ export function fitHurdleConditionalMeanCalibration(rawConditionalMeans,netRetur
       total+=huberLoss(a*x[index]+b-y[index],huberDelta);
     return total/x.length+slopePenalty*(a-1)**2+interceptPenalty*b*b;
   };
+  // Preserve the identity calibrator as the incumbent. A finite first
+  // optimizer step is not automatically an improvement: Adam can overshoot
+  // on small or uneven class-specific calibration sets.
   const initial=objective(slope,intercept);
+  if(!finite(initial))
+    throw new TypeError('HURDLE_CONDITIONAL_MEAN_CALIBRATION_INITIAL_OBJECTIVE_NON_FINITE');
+  let bestObjective=initial,best={slope,intercept},wait=0,completed=0;
   for(let step=1;step<=iterations;step++){
     let gradientSlope=0,gradientIntercept=0;
     for(let index=0;index<x.length;index++){
@@ -413,7 +418,8 @@ export function fitHurdleConditionalMeanCalibration(rawConditionalMeans,netRetur
     huber_delta:Number(huberDelta),
     slope_bounds:[0.05,8],intercept_bounds:[-8,8],
     calibration_target_min_pct:Number(Math.min(...y)),
-    calibration_target_max_pct:Number(Math.max(...y))
+    calibration_target_max_pct:Number(Math.max(...y)),
+    identity_selected:Math.abs(bestObjective-initial)<=1e-10
   };
 }
 
