@@ -1,0 +1,39 @@
+name: Build 224 — Raw archive symbol and path-safety guard
+
+on:
+  push:
+    branches:
+      - ops/build224-capture-locked-cohort-20261126
+    paths:
+      - '.github/workflows/neural-closure-raw-archive-guard.yml'
+      - 'phase2/core/neural-closure-raw-archive.mjs'
+      - 'phase2/tests/neural-closure-data-builder.test.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-raw-archive-guard
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check raw archive writer
+        run: node --check phase2/core/neural-closure-raw-archive.mjs
+      - name: Test raw archive identity, hashing, atomicity and safe filenames
+        run: node --test --test-timeout=180000 phase2/tests/neural-closure-data-builder.test.mjs
