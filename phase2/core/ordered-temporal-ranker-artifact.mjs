@@ -103,6 +103,8 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
     const contract=training?.downstream_feature_contract;
     const tuning=training?.internal_training_validation;
     const trainingConfig=training?.ranker_training_config;
+    const trainingObjective=trainingConfig?.training_objective??'PAIRWISE_LOGISTIC_V1';
+    const rankingMargin=trainingConfig?.ranking_margin??0.25;
     const tuningGrid=tuning?.candidate_grid;
     const tuningFolds=tuning?.folds;
     const foldCount=tuning?.fold_count;
@@ -309,6 +311,8 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
       training?.standardizer_fit_rows!==training.training_rows||
       !Number.isInteger(training?.training_pairs)||training.training_pairs<10||
       !trainingConfig||!finite(trainingConfig.learning_rate)||trainingConfig.learning_rate<=0||
+      !['PAIRWISE_LOGISTIC_V1','PAIRWISE_MARGIN_HINGE_V1'].includes(trainingObjective)||
+      !finite(rankingMargin)||rankingMargin<=0||rankingMargin>5||
       !finite(trainingConfig.l2)||trainingConfig.l2<0||trainingConfig.l2>1||
       !Number.isInteger(trainingConfig.epochs_requested)||trainingConfig.epochs_requested<1||
       !Number.isInteger(trainingConfig.epochs_completed)||trainingConfig.epochs_completed<1||
@@ -353,6 +357,8 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
         :'TWO_NON_OVERLAPPING_LATER_PURGED_WINDOWS_WITHIN_PRE_EXECUTION_MODEL_TRAINING_PARTITION')||
       tuning?.outer_validation_or_holdout_used!==false||
       tuning?.model_selection_partition_used!==false||
+      trainingObjective==='PAIRWISE_MARGIN_HINGE_V1'&&
+        (tuning?.training_objective!==trainingObjective||tuning?.ranking_margin!==rankingMargin)||
       tuning?.chronology_valid!==true||
       isThreeFoldV6&&(tuning?.selection_rule!=='REQUIRE_STRICT_POSITIVE_LOGISTIC_MARGINS_FOR_PAIRWISE_ACCURACY_AND_LOG_LOSS_IN_EVERY_PURGED_TRAINING_FOLD'||
         tuning?.fold_stable_dual_metric_candidate_count!==robustTuningCandidates.length||
@@ -527,6 +533,8 @@ export function createOrderedTemporalRankerArtifact({profile,provenance}={}){
       final_pairwise_log_loss:ranker.final_pairwise_log_loss??null,
       ranker_training_config:{
         learning_rate:ranker.learning_rate,
+        training_objective:ranker.training_objective??'PAIRWISE_LOGISTIC_V1',
+        ranking_margin:ranker.ranking_margin??0.25,
         l2:ranker.l2,
         epochs_requested:ranker.epochs_requested,
         epochs_completed:ranker.epochs_completed,
