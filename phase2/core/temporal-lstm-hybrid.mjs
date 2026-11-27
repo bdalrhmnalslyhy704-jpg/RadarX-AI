@@ -84,7 +84,7 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
  * only the recent training window; selection, calibration, validation and
  * untouched holdout partitions remain disjoint and unchanged.
  */
-export const TCN_LSTM_MAX_TRAINING_SAMPLES = 6144;
+export const TCN_LSTM_MAX_TRAINING_SAMPLES = 8192;
 export function effectiveTcnLstmTrainingSampleBudget(
   requested=TCN_LSTM_MAX_TRAINING_SAMPLES,
   available=TCN_LSTM_MAX_TRAINING_SAMPLES
@@ -179,15 +179,35 @@ export function selectChronologicalTcnLstmTrainingRows(
   let selectedRows=[];
   let selectedOlderGroups=0;
   let selectedRecentGroups=0;
+  let desiredRecentGroups=0;
+  let spilloverToOlderGroups=0;
+  let spilloverToRecentGroups=0;
+  const recentGroupCapacity=buckets.length-recentStartIndex;
+  const olderGroupCapacity=recentStartIndex;
   while(targetGroups>=1){
-    // Preserve a broad historical anchor while allocating 70% of the fit
-    // budget to the most recent 35% of training buckets. This is designed to
-    // limit stale-regime dilution without reverting to a latest-only window.
+    // Reserve up to 70% for the newest 35% of the chronology, but never
+    // discard budget when that recent window runs out of complete groups.
+    // Reassign overflow to older groups first; only then use spare recent slots.
     const olderAvailable=recentStartIndex>0;
-    selectedRecentGroups=olderAvailable&&targetGroups>1
+    desiredRecentGroups=olderAvailable&&targetGroups>1
       ?Math.min(targetGroups-1,Math.max(1,Math.ceil(targetGroups*recentBudgetFraction)))
       :targetGroups;
-    selectedOlderGroups=targetGroups-selectedRecentGroups;
+    const desiredOlderGroups=targetGroups-desiredRecentGroups;
+    selectedRecentGroups=Math.min(recentGroupCapacity,desiredRecentGroups);
+    selectedOlderGroups=Math.min(olderGroupCapacity,desiredOlderGroups);
+    let unassignedGroups=targetGroups-selectedRecentGroups-selectedOlderGroups;
+    spilloverToOlderGroups=Math.min(
+      unassignedGroups,olderGroupCapacity-selectedOlderGroups
+    );
+    selectedOlderGroups+=spilloverToOlderGroups;
+    unassignedGroups-=spilloverToOlderGroups;
+    spilloverToRecentGroups=Math.min(
+      unassignedGroups,recentGroupCapacity-selectedRecentGroups
+    );
+    selectedRecentGroups+=spilloverToRecentGroups;
+    unassignedGroups-=spilloverToRecentGroups;
+    if(unassignedGroups!==0)
+      throw new Error('TCN_LSTM_TRAINING_BUCKET_CAPACITY_ALLOCATION_INVALID');
     const olderIndices=selectedOlderGroups>0
       ?evenIndices(0,recentStartIndex-1,selectedOlderGroups,false):[];
     const recentIndices=evenIndices(
@@ -247,6 +267,11 @@ export function selectChronologicalTcnLstmTrainingRows(
     recent_selected_decision_groups:recentSelected,
     older_selected_decision_groups:olderSelected,
     recent_selected_fraction:selectedBuckets.length?recentSelected/selectedBuckets.length:null,
+    desired_recent_decision_groups:desiredRecentGroups,
+    recent_decision_group_capacity:recentGroupCapacity,
+    recent_capacity_limited:desiredRecentGroups>recentGroupCapacity,
+    spillover_selected_older_decision_groups:spilloverToOlderGroups,
+    spillover_selected_recent_decision_groups:spilloverToRecentGroups,
     selected_bucket_min_rows:Math.min(...selectedBuckets.map(([,group])=>group.length)),
     selected_bucket_max_rows:Math.max(...selectedBuckets.map(([,group])=>group.length))
   }};

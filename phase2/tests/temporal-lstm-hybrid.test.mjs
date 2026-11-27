@@ -2204,14 +2204,42 @@ test('TCN receptive field covers all two-tap causal dilations',()=>{
 });
 
 
-test('recurrent training budget uses up to 6,144 available training rows without touching later partitions',()=>{
-  assert.equal(TCN_LSTM_MAX_TRAINING_SAMPLES,6144);
+test('recurrent training budget uses up to 8,192 available training rows without touching later partitions',()=>{
+  assert.equal(TCN_LSTM_MAX_TRAINING_SAMPLES,8192);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(8192,36102),8192);
   assert.equal(effectiveTcnLstmTrainingSampleBudget(6144,36102),6144);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(6144,1200),1200);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(8192,1200),1200);
   assert.equal(effectiveTcnLstmTrainingSampleBudget(512,36102),512);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(8192,36102),6144);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(6144,20),20);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),6144);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(12288,36102),8192);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(8192,20),20);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),8192);
+});
+
+test('recurrent budget reallocates recent-window overflow to older complete 15m groups',()=>{
+  const bucketMs=15*60*1000;
+  const rows=Array.from({length:390},(_,groupIndex)=>{
+    const at=Math.floor((BASE+groupIndex*bucketMs)/bucketMs)*bucketMs;
+    return Array.from({length:30},(_,symbolIndex)=>({
+      id:`coverage-${groupIndex}-s${symbolIndex}`,
+      symbol:`S${String(symbolIndex).padStart(2,'0')}`,
+      at
+    }));
+  }).flat();
+  const selected=selectChronologicalTcnLstmTrainingRows(rows,8192);
+  assert.equal(selected.rows.length,8190);
+  assert.equal(selected.diagnostics.effective_budget,8192);
+  assert.equal(selected.diagnostics.available_decision_groups,390);
+  assert.equal(selected.diagnostics.selected_decision_groups,273);
+  assert.equal(selected.diagnostics.recent_selected_decision_groups,137);
+  assert.equal(selected.diagnostics.older_selected_decision_groups,136);
+  assert.equal(selected.diagnostics.desired_recent_decision_groups,192);
+  assert.equal(selected.diagnostics.recent_decision_group_capacity,137);
+  assert.equal(selected.diagnostics.recent_capacity_limited,true);
+  assert.equal(selected.diagnostics.spillover_selected_older_decision_groups,55);
+  assert.equal(selected.diagnostics.sampled_across_full_training_chronology,true);
+  assert.equal(selected.diagnostics.complete_decision_groups,true);
+  assert.equal(selected.diagnostics.selected_bucket_min_rows,30);
+  assert.equal(selected.diagnostics.selected_bucket_max_rows,30);
 });
 
 test('recurrent fit budget preserves recent regimes and anchors older complete 15m groups',()=>{

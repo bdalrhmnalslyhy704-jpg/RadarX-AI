@@ -1402,7 +1402,7 @@ async function main(){
         const selection=selectTcnLstmHybridHyperparameters(
           trainingRowsWithExecutionEvidence,selectionRowsWithExecutionEvidence,{
           requiredImprovement:0.00025,
-          maxTrainingSamples:6144,
+          maxTrainingSamples:8192,
           seed:22429,
           roundTripCostBps:args.roundTripCostBps,
           minimumReturnTrades:20,
@@ -1642,7 +1642,7 @@ async function main(){
           chronology_valid:internalChronologyValid,
           internal_split_schema:internalSplit.schema??null,
           internal_split_boundaries:internalSplit.split_boundaries??null,
-          max_training_samples:6144,
+          max_training_samples:8192,
           effective_training_rows:selection.effective_training_rows??null,
           training_sample_selection:selection.training_sample_selection??null,
           diagnostic_fit_available:selection.diagnostic_fit!==null&&selection.diagnostic_fit!==undefined,
