@@ -3488,9 +3488,10 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   pairStrategy='PROFITABILITY_BOUNDARY_V1',
   learningRate=0.03,learningRateGrid=null,epochs=40,l2=0.001,patience=10,
   l2Grid=[0.25,0.5,1,2],
-  // Focus compute on resolutions with the strongest previous purged-fold evidence.
-  // Lower learning rates test conservative residual updates around the Logistic anchor.
-  temporalBlockCounts=[4,6,8,24],
+  // Include low-capacity temporal partitions because early nested folds have
+  // limited decision-group support. Keep intermediate and full-resolution
+  // controls; all existing purged-fold and dual-metric qualification gates stay fixed.
+  temporalBlockCounts=[1,2,3,4,6,8,24],
   validationFraction=0.08,purgeHorizonMs=4*60*60*1000
 }={}){
   const validTemporalBlockCounts=[1,2,3,4,6,8,12,24];
