@@ -3708,7 +3708,7 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
   const internalPurgeGapMs=Math.min(...foldMetadata.map(item=>item.purge_gap_ms));
   training.internal_training_validation={
     schema:'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6',
-    method:'THREE_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_DUAL_METRIC_VALIDATION_V1',
+    method:'THREE_FOLD_NESTED_PARETO_DUAL_METRIC_LOGISTIC_ANCHORED_VALIDATION_V2',
     epoch_checkpoint_selection_policy:
       'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1',
     epoch_selection_policy:'NESTED_PURGED_EPOCH_WINDOW_THEN_FIXED_EPOCH_REFIT_ON_FULL_OUTER_FOLD_TRAINING_ROWS',
@@ -4648,8 +4648,16 @@ export function hasFoldStableOrderedRankerQualification(rankHead, rankingReprese
   if (!isOrderedRanker) return true;
 
   const tuning = rankHead?.internal_training_validation;
-  if (tuning?.schema !==
-      'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6' ||
+  const isThreeFoldV6=tuning?.schema===
+    'RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6';
+  const currentParetoPolicy=tuning?.method===
+    'THREE_FOLD_NESTED_PARETO_DUAL_METRIC_LOGISTIC_ANCHORED_VALIDATION_V2'&&
+    tuning?.epoch_checkpoint_selection_policy===
+      'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1';
+  const legacyAccuracyFirstPolicy=tuning?.method===
+    'THREE_FOLD_NESTED_EARLY_STOPPING_LOGISTIC_ANCHORED_DUAL_METRIC_VALIDATION_V1'&&
+    tuning?.epoch_checkpoint_selection_policy===undefined;
+  if (!isThreeFoldV6 || !(currentParetoPolicy||legacyAccuracyFirstPolicy) ||
       tuning.fold_count !== 3 ||
       tuning.selected_candidate_qualified !== true ||
       tuning.fold_stable_dual_metric_superiority !== true ||
