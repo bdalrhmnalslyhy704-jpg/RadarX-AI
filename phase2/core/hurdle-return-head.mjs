@@ -306,12 +306,117 @@ function predictConditionalMean(normalized, model) {
   const raw = Number(model.bias) + normalized.reduce(
     (sum, value, index) => sum + value * Number(model.weights[index]), 0
   );
-  // Keep each conditional mean within the observed training-only target range.
+  const calibration=model.conditional_mean_calibration??null;
+  const calibrated=calibration?.fitted===true
+    ?Number(calibration.slope)*raw+Number(calibration.intercept):raw;
+  // Keep each calibrated conditional mean within the original training-only
+  // class range; the later calibration block cannot expand that range.
   return Math.max(
     Number(model.training_target_min_pct),
-    Math.min(Number(model.training_target_max_pct), raw)
+    Math.min(Number(model.training_target_max_pct), calibrated)
   );
 }
+
+/**
+ * Fit a separate affine calibration for one class-conditional return mean.
+ * The caller must supply predictions and realized net returns from the later,
+ * purged execution-head calibration block, disjoint from the Hurdle fit block.
+ */
+export function fitHurdleConditionalMeanCalibration(rawConditionalMeans,netReturns,{
+  positiveClass=true,minimumSamples=8,iterations=400,learningRate=0.02,
+  regularization=0.05,huberDelta=1
+}={}) {
+  if(!Array.isArray(rawConditionalMeans)||!Array.isArray(netReturns)||
+    rawConditionalMeans.length!==netReturns.length||
+    !Number.isInteger(minimumSamples)||minimumSamples<2||
+    !Number.isInteger(iterations)||iterations<50||iterations>4000||
+    !finite(learningRate)||learningRate<=0||learningRate>0.1||
+    !finite(regularization)||regularization<0||regularization>2||
+    !finite(huberDelta)||huberDelta<=0||huberDelta>10||
+    rawConditionalMeans.some(value=>!finite(value))||
+    netReturns.some(value=>!finite(value)||
+      (positiveClass?Number(value)<=0:Number(value)>0))) {
+    throw new TypeError('HURDLE_CONDITIONAL_MEAN_CALIBRATION_INPUT_INVALID');
+  }
+  const base={
+    schema:'RADARX_HURDLE_CLASS_CONDITIONAL_MEAN_AFFINE_CALIBRATOR_V1',
+    method:'REGULARIZED_AFFINE_HUBER_ON_LATER_PURGED_CLASS_CONDITIONAL_RETURNS_V1',
+    fitted:false,
+    class_condition:positiveClass?'POSITIVE_NET_RETURN':'NON_POSITIVE_NET_RETURN',
+    samples:rawConditionalMeans.length,
+    fit_boundary:'PURGED_INNER_TRAINING_EXECUTION_HEAD_CALIBRATION_BLOCK_ONLY',
+    target_definition:'REALIZED_FIRST_TOUCH_RETURN_MINUS_FIXED_ROUND_TRIP_COST',
+    round_trip_cost_already_applied:true,
+    validation_or_holdout_used:false
+  };
+  if(rawConditionalMeans.length<minimumSamples){
+    return {
+      ...base,
+      reason:'HURDLE_CONDITIONAL_MEAN_CALIBRATION_CLASS_SUPPORT_BELOW_MINIMUM',
+      slope:1,intercept:0,minimum_samples:minimumSamples
+    };
+  }
+  const x=rawConditionalMeans.map(Number),y=netReturns.map(Number);
+  const slopePenalty=Number(regularization),interceptPenalty=slopePenalty*0.25;
+  let slope=1,intercept=0;
+  let slopeFirst=0,slopeSecond=0,interceptFirst=0,interceptSecond=0;
+  let bestObjective=Infinity,best={slope,intercept},wait=0,completed=0;
+  const beta1=0.9,beta2=0.999,epsilon=1e-8;
+  const objective=(a,b)=>{
+    let total=0;
+    for(let index=0;index<x.length;index++)
+      total+=huberLoss(a*x[index]+b-y[index],huberDelta);
+    return total/x.length+slopePenalty*(a-1)**2+interceptPenalty*b*b;
+  };
+  const initial=objective(slope,intercept);
+  for(let step=1;step<=iterations;step++){
+    let gradientSlope=0,gradientIntercept=0;
+    for(let index=0;index<x.length;index++){
+      const residual=slope*x[index]+intercept-y[index];
+      const absolute=Math.abs(residual);
+      const error=absolute<=huberDelta
+        ?residual:Math.sign(residual)*huberDelta;
+      gradientSlope+=error*x[index];
+      gradientIntercept+=error;
+    }
+    gradientSlope=gradientSlope/x.length+2*slopePenalty*(slope-1);
+    gradientIntercept=gradientIntercept/x.length+2*interceptPenalty*intercept;
+    if(!finite(gradientSlope)||!finite(gradientIntercept))
+      throw new TypeError('HURDLE_CONDITIONAL_MEAN_CALIBRATION_GRADIENT_NON_FINITE');
+    slopeFirst=beta1*slopeFirst+(1-beta1)*gradientSlope;
+    slopeSecond=beta2*slopeSecond+(1-beta2)*gradientSlope*gradientSlope;
+    interceptFirst=beta1*interceptFirst+(1-beta1)*gradientIntercept;
+    interceptSecond=beta2*interceptSecond+(1-beta2)*gradientIntercept*gradientIntercept;
+    const correctedSlope=slopeFirst/(1-Math.pow(beta1,step));
+    const correctedSlopeVariance=slopeSecond/(1-Math.pow(beta2,step));
+    const correctedIntercept=interceptFirst/(1-Math.pow(beta1,step));
+    const correctedInterceptVariance=interceptSecond/(1-Math.pow(beta2,step));
+    slope=clamp(slope-Number(learningRate)*correctedSlope/
+      (Math.sqrt(correctedSlopeVariance)+epsilon),0.05,8);
+    intercept=clamp(intercept-Number(learningRate)*correctedIntercept/
+      (Math.sqrt(correctedInterceptVariance)+epsilon),-8,8);
+    const current=objective(slope,intercept);
+    if(!finite(current)||!finite(slope)||!finite(intercept))
+      throw new TypeError('HURDLE_CONDITIONAL_MEAN_CALIBRATION_STATE_NON_FINITE');
+    completed=step;
+    if(current<bestObjective-1e-10){
+      bestObjective=current;best={slope,intercept};wait=0;
+    }else if(++wait>=80)break;
+  }
+  return {
+    ...base,fitted:true,
+    slope:Number(best.slope),intercept:Number(best.intercept),
+    initial_objective:Number(initial.toFixed(10)),
+    final_objective:Number(bestObjective.toFixed(10)),
+    iterations_completed:completed,
+    learning_rate:Number(learningRate),regularization:Number(regularization),
+    huber_delta:Number(huberDelta),
+    slope_bounds:[0.05,8],intercept_bounds:[-8,8],
+    calibration_target_min_pct:Number(Math.min(...y)),
+    calibration_target_max_pct:Number(Math.max(...y))
+  };
+}
+
 
 /**
  * Two-part expected-return estimator:
