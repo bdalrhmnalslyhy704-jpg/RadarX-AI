@@ -43,26 +43,36 @@ const logit=p=>Math.log(Math.max(1e-9,Math.min(1-1e-9,p))/
 
 function orderedRankerAnchorMatches(profile,artifact){
   const model=profile?.model,parameters=artifact?.parameters;
-  const modelWeights=model?.orderedRankingAnchorWeights;
-  const modelMeans=model?.orderedRankingAnchorFeatureMean;
-  const modelStds=model?.orderedRankingAnchorFeatureStd;
-  const artifactWeights=parameters?.anchor_weights;
-  const artifactMeans=parameters?.anchor_feature_mean;
-  const artifactStds=parameters?.anchor_feature_std;
-  if(!Array.isArray(modelWeights)||modelWeights.length!==696||
-    !Array.isArray(modelMeans)||modelMeans.length!==696||
-    !Array.isArray(modelStds)||modelStds.length!==696||
-    !Array.isArray(artifactWeights)||artifactWeights.length!==696||
-    !Array.isArray(artifactMeans)||artifactMeans.length!==696||
-    !Array.isArray(artifactStds)||artifactStds.length!==696||
-    [...modelWeights,...modelMeans,...modelStds,...artifactWeights,...artifactMeans,...artifactStds]
-      .some(value=>!finite(value))||
-    modelStds.some(value=>value<=0)||artifactStds.some(value=>value<=0)||
+  const modelResidualWeights=model?.orderedRankingHeadWeights;
+  const modelResidualMeans=model?.orderedRankingFeatureMean;
+  const modelResidualStds=model?.orderedRankingFeatureStd;
+  const artifactResidualWeights=parameters?.weights;
+  const artifactResidualMeans=parameters?.feature_mean;
+  const artifactResidualStds=parameters?.feature_std;
+  const modelAnchorWeights=model?.orderedRankingAnchorWeights;
+  const modelAnchorMeans=model?.orderedRankingAnchorFeatureMean;
+  const modelAnchorStds=model?.orderedRankingAnchorFeatureStd;
+  const artifactAnchorWeights=parameters?.anchor_weights;
+  const artifactAnchorMeans=parameters?.anchor_feature_mean;
+  const artifactAnchorStds=parameters?.anchor_feature_std;
+  const arrays=[
+    modelResidualWeights,modelResidualMeans,modelResidualStds,
+    artifactResidualWeights,artifactResidualMeans,artifactResidualStds,
+    modelAnchorWeights,modelAnchorMeans,modelAnchorStds,
+    artifactAnchorWeights,artifactAnchorMeans,artifactAnchorStds
+  ];
+  if(arrays.some(values=>!Array.isArray(values)||values.length!==696||
+    values.some(value=>!finite(value)))||
+    [...modelResidualStds,...artifactResidualStds,
+      ...modelAnchorStds,...artifactAnchorStds].some(value=>value<=0)||
     !finite(model?.orderedRankingAnchorBias)||!finite(parameters?.anchor_bias))
     return false;
-  return canonical(modelWeights)===canonical(artifactWeights)&&
-    canonical(modelMeans)===canonical(artifactMeans)&&
-    canonical(modelStds)===canonical(artifactStds)&&
+  return canonical(modelResidualWeights)===canonical(artifactResidualWeights)&&
+    canonical(modelResidualMeans)===canonical(artifactResidualMeans)&&
+    canonical(modelResidualStds)===canonical(artifactResidualStds)&&
+    canonical(modelAnchorWeights)===canonical(artifactAnchorWeights)&&
+    canonical(modelAnchorMeans)===canonical(artifactAnchorMeans)&&
+    canonical(modelAnchorStds)===canonical(artifactAnchorStds)&&
     Number(model.orderedRankingAnchorBias)===Number(parameters.anchor_bias);
 }
 
