@@ -107,6 +107,8 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
     const tuningFolds=tuning?.folds;
     const foldCount=tuning?.fold_count;
     const isThreeFoldV6=tuning?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V6';
+    const isCurrentParetoV3=isThreeFoldV6&&tuning?.method===
+      'THREE_FOLD_NESTED_PARETO_CHECKPOINT_REQUIRED_LOGISTIC_ANCHORED_VALIDATION_V3';
     const isLegacyTwoFoldV5=tuning?.schema==='RADARX_TCN_LSTM_ORDERED_RANKER_INTERNAL_PURGED_EXPANDING_VALIDATION_V5';
     const validTemporalBlockCounts=[1,2,3,4,6,8,12,24];
     const temporalBlockCount=trainingConfig?.temporal_block_count;
@@ -206,6 +208,7 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
         const foldResultsValid=foldResults.every((result,index)=>{
           const fold=tuningFolds[index];
           return result?.fold_index===fold.fold_index&&Number.isInteger(result?.best_epoch)&&result.best_epoch>=1&&
+            (!isCurrentParetoV3||typeof result?.epoch_checkpoint_selected==='boolean')&&
             finite(result?.best_validation_pairwise_accuracy_pct)&&result.best_validation_pairwise_accuracy_pct>=0&&
             result.best_validation_pairwise_accuracy_pct<=100&&finite(result?.logistic_validation_pairwise_accuracy_pct)&&
             result.logistic_validation_pairwise_accuracy_pct===fold.logistic_validation_pairwise_accuracy_pct&&
@@ -230,6 +233,13 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
             result?.validation_pairs===fold.validation_pairs;
         });
         if(!foldResultsValid)return false;
+        const checkpointSelectedCount=foldResults.filter(result=>
+          result.epoch_checkpoint_selected===true).length;
+        const allEpochCheckpointsSelected=checkpointSelectedCount===foldCount;
+        if(isCurrentParetoV3&&(
+          item.epoch_checkpoint_selected_count!==checkpointSelectedCount||
+          item.all_epoch_checkpoints_selected!==allEpochCheckpointsSelected
+        ))return false;
         const validationPairs=foldResults.reduce((sum,result)=>sum+result.validation_pairs,0);
         const trainingPairs=foldResults.reduce((sum,result)=>sum+result.training_pairs,0);
         const expectedValidationLoss=foldResults.reduce((sum,result)=>sum+result.best_validation_pairwise_log_loss*result.validation_pairs,0)/validationPairs;
@@ -284,6 +294,8 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
         (!isThreeFoldV6||item?.minimum_fold_pairwise_log_loss_improvement===tuning?.selected_minimum_fold_pairwise_log_loss_improvement)&&
         item?.best_validation_pairwise_log_loss_improvement===tuning?.selected_validation_pairwise_log_loss_improvement):null;
     const robustTuningCandidates=isThreeFoldV6&&candidateGridValid?[...tuningGrid].filter(item=>
+      (!isCurrentParetoV3||item.all_epoch_checkpoints_selected===true&&
+        item.epoch_checkpoint_selected_count===foldCount)&&
       item.minimum_fold_pairwise_accuracy_improvement_pct>0&&
       item.minimum_fold_pairwise_log_loss_improvement>0
     ).sort(compareTuningCandidates):[];
@@ -312,6 +324,9 @@ export function verifyOrderedTemporalRankerArtifact(artifact){
         :'MIN_FOLD_LOGISTIC_ACCURACY_MARGIN_THEN_PAIR_WEIGHTED_MARGIN_AND_LOG_LOSS_NESTED_PURGED_EXPANDING_WINDOW_V5')||
       !(isThreeFoldV6
         ?(
+          tuning?.method==='THREE_FOLD_NESTED_PARETO_CHECKPOINT_REQUIRED_LOGISTIC_ANCHORED_VALIDATION_V3'&&
+          tuning?.epoch_checkpoint_selection_policy===
+            'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1'||
           tuning?.method==='THREE_FOLD_NESTED_PARETO_DUAL_METRIC_LOGISTIC_ANCHORED_VALIDATION_V2'&&
           tuning?.epoch_checkpoint_selection_policy===
             'PARETO_NON_REGRESSION_PAIRWISE_ACCURACY_AND_LOG_LOSS_V1'||
