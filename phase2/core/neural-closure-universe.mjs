@@ -2,6 +2,21 @@ const STABLE_BASE_ASSETS=new Set([
   'USDC','BUSD','TUSD','FDUSD','USDP','DAI','USDE','EUR','AEUR',
   'EURI','TRY','BRL','BIDR','IDRT','UST','USTC','PAXG'
 ]);
+
+// Binance bStocks are tokenized securities, not crypto assets. This explicit
+// list is anchored to Binance's 2026-08-28 bStocks Spot bot-pair announcement.
+// Keep these instruments out of the crypto-only pre-move cohort; corporate
+// actions and exchange suspensions can break continuous kline chronology.
+const BINANCE_BSTOCK_BASE_ASSETS=new Set([
+  'AAOIB','AAPLB','ALABB','AMATB','AMDB','AMZNB','ARMB','ASMLB','ASTSB',
+  'AVGOB','AXTIB','BABAB','BEB','BMNRB','CBRSB','COHRB','COINB','CRCLB',
+  'CRDOB','CRWVB','DELLB','DJTB','DRAMB','EWYB','FLNCB','GLWB','GMEB',
+  'GOOGLB','GSB','HOODB','IBMB','INTCB','INTWB','IRENB','KORUB','LITEB',
+  'METAB','MRVLB','MSFTB','MSTRB','MUB','MUUB','MVLLB','NBISB','NFLXB',
+  'NOKB','NVDAB','ORCLB','PLTRB','PYPLB','QCOMB','QNTB','QQQB','RKLBB',
+  'SKHYB','SMCIB','SMHB','SNDKB','SOXLB','SOXSB','SPCXB','SPYB','TQQQB',
+  'TSLAB','TSMB','USARB','WDCB'
+]);
 const finite=value=>value!==null&&value!==undefined&&value!==''&&
   typeof value!=='boolean'&&Number.isFinite(Number(value));
 const num=value=>finite(value)?Number(value):null;
@@ -22,10 +37,23 @@ export function selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
     typeof historicalEligibilityOnly!=='boolean')
     throw new TypeError('BINANCE_SPOT_USDT_UNIVERSE_ARGUMENTS_INVALID');
   const tickerMap=new Map(tickers.map(item=>[String(item?.symbol??''),item]));
-  const allowed=exchangeInfo.symbols.filter(item=>
+  const isCurrentSpotUsdt=item=>
     item?.status==='TRADING'&&item?.quoteAsset==='USDT'&&
-    item?.isSpotTradingAllowed===true&&
+    item?.isSpotTradingAllowed===true;
+  const excludedNonCrypto=exchangeInfo.symbols
+    .filter(item=>isCurrentSpotUsdt(item)&&
+      BINANCE_BSTOCK_BASE_ASSETS.has(String(item?.baseAsset||'').toUpperCase()))
+    .map(item=>({
+      symbol:String(item.symbol),base_asset:String(item.baseAsset),
+      quote_asset:String(item.quoteAsset),
+      exclusion_reason:'TOKENIZED_SECURITY_BSTOCK_NOT_CRYPTO_SPOT_ASSET',
+      exclusion_policy:'BINANCE_BSTOCK_TOKENIZED_SECURITIES_V1'
+    }))
+    .sort((a,b)=>a.symbol.localeCompare(b.symbol));
+  const allowed=exchangeInfo.symbols.filter(item=>
+    isCurrentSpotUsdt(item)&&
     !STABLE_BASE_ASSETS.has(String(item?.baseAsset||'').toUpperCase())&&
+    !BINANCE_BSTOCK_BASE_ASSETS.has(String(item?.baseAsset||'').toUpperCase())&&
     !/(UP|DOWN|BULL|BEAR)$/.test(String(item?.baseAsset||'').toUpperCase()));
   const eligible=allowed.map(symbol=>{
     const ticker=tickerMap.get(String(symbol.symbol));
@@ -55,7 +83,15 @@ export function selectBinanceSpotUsdtUniverse(exchangeInfo,tickers,{
       ?a.symbol.localeCompare(b.symbol)
       :b.quote_volume_24h-a.quote_volume_24h||a.symbol.localeCompare(b.symbol));
   }
-  return {eligible,selected};
+  return {
+    eligible,selected,
+    excluded_non_crypto:excludedNonCrypto,
+    excluded_non_crypto_policy:{
+      id:'BINANCE_BSTOCK_TOKENIZED_SECURITIES_V1',
+      source:'BINANCE_OFFICIAL_BSTOCK_SPOT_LISTING_AND_BOTS_NOTICE_2026_08_28',
+      count:excludedNonCrypto.length
+    }
+  };
 }
 
 /**
