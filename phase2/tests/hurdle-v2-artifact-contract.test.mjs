@@ -222,7 +222,7 @@ before(async () => {
     objectiveId: HURDLE_V2_OBJECTIVE,
     selectionObjectiveId: 'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6',
     orderedRankingDependency: {
-      artifact_schema:'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V1',
+      artifact_schema:'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V2',
       artifact_path:'model-artifacts/TCN_LSTM_ORDERED_RANKER.json',
       manifest_path:'model-artifacts/TCN_LSTM_ORDERED_RANKER.manifest.json',
       artifact_content_hash:'5'.repeat(64),
