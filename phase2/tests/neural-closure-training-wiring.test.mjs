@@ -339,9 +339,9 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the report must retain the complete validation evidence object');
   assert.match(trainer,/probability_stage_diagnostics:\s*model\.validation\?\.probability_stage_diagnostics\?\?null/,
     'the console and model-comparison summary must expose the full staged calibration diagnostics');
-  assert.match(trainer,/maxTrainingSamples:6144/,
+  assert.match(trainer,/maxTrainingSamples:8192/,
     'the TCN-LSTM research ablation must use the existing supported 6144-row training budget');
-  assert.match(trainer,/max_training_samples:6144/,
+  assert.match(trainer,/max_training_samples:8192/,
     'the reported TCN-LSTM training budget must match the actual trainer configuration');
   assert.match(temporal,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_MATCHED_FULL_SEQUENCE_LOGISTIC_CV_OOF_CLASSIFIER_AND_INDEPENDENT_RANK_SCORE_V8/,
     'the active execution head must include the purged temporal-CV Logistic score plus neural classifier and ranking scores');
