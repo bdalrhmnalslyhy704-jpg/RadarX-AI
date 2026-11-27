@@ -13,7 +13,8 @@ import {
   NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,
   runNeuralClosureBenchmark,sha256CanonicalArrayMapped,
   evaluateExternalExecutionRiskTopK,simulateFirstTouchPaperPortfolio,
-  bootstrapOuterValidationUncertainty
+  bootstrapOuterValidationUncertainty,
+  qualifyPairedOuterExecutionPnlBootstrap
 } from '../core/neural-closure-contracts.mjs';
 import {
   buildFourHourCognitiveLearningProfile,buildCognitiveFeatureVector,
@@ -2451,13 +2452,23 @@ async function main(){
       };
     }
   }
+  const outerValidationPnlBootstrapPromotionGate=
+    qualifyPairedOuterExecutionPnlBootstrap(outerValidationUncertaintyBootstrap,{
+      candidatePolicy:'LOGIT_CONTEXT_AUGMENTED',
+      matchedLogisticPolicy:'LOGISTIC_MATCHED_CONTEXT',
+      topK:1,roundTripCostBps:args.roundTripCostBps,
+      minimumRepetitions:250,minimumValidFraction:0.95
+    });
   training.outer_validation_uncertainty_bootstrap=outerValidationUncertaintyBootstrap;
+  training.outer_validation_pnl_bootstrap_promotion_gate=
+    outerValidationPnlBootstrapPromotionGate;
   training.model_internal_diagnostics.TCN_LSTM_HYBRID={
     ...(training.model_internal_diagnostics.TCN_LSTM_HYBRID??{}),
     external_validation_execution_risk_top_k:externalExecutionRiskTopK,
     pooled_only_external_validation_execution_risk_top_k:pooledOnlyExternalExecutionRiskTopK,
     score_conditioned_external_ablation:executionHeadExternalAblation,
-    outer_validation_uncertainty_bootstrap:outerValidationUncertaintyBootstrap
+    outer_validation_uncertainty_bootstrap:outerValidationUncertaintyBootstrap,
+    outer_validation_pnl_bootstrap_promotion_gate:outerValidationPnlBootstrapPromotionGate
   };
   const evaluated=Object.entries(benchmark.models).map(([name,model])=>({
     model:name,status:model.status,

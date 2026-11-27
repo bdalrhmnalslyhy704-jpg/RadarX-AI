@@ -23,6 +23,7 @@ import {
   topKThresholdSignals,topKMatchedCountSignals,
   evaluateExternalExecutionRiskTopK,runNeuralClosureBenchmark,
   bootstrapOuterValidationUncertainty,
+  qualifyPairedOuterExecutionPnlBootstrap,
   NEURAL_CLOSURE_HOLDOUT_OPENING_REQUIRED_CHECKS,
   evaluateNeuralClosureHoldoutOpeningProtocol
 } from '../core/neural-closure-contracts.mjs';
@@ -1374,6 +1375,139 @@ test('outer execution evaluation applies a frozen positive base-return gate befo
   assert.equal(report.trials[0].neural_metrics.trade_count,1);
   assert.equal(report.trials[0].logistic_metrics.trade_count,1);
 });
+test('paired outer PnL bootstrap gate requires a strictly positive matched-Logistic lower 95% bound',()=>{
+  const makeEvidence=()=>({
+    schema:'RADARX_OUTER_VALIDATION_MOVING_BLOCK_BOOTSTRAP_V1',
+    status:'AVAILABLE',
+    evaluation_partition:'OUTER_VALIDATION_ONLY',
+    holdout_rows_or_scores_used:false,
+    sampling:{
+      method:'MOVING_BLOCK_BOOTSTRAP_WITHOUT_REPLACEMENT_WITHIN_BLOCKS',
+      resampling:'CONTIGUOUS_UTC_DAY_BLOCKS_SAMPLED_WITH_REPLACEMENT',
+      block_length_days:3,inter_block_gap_ms:86_400_000,
+      four_hour_event_overlap_between_resampled_blocks:false,
+      repetitions:250,
+      pairing:'SAME_RESAMPLED_DAY_BLOCKS_FOR_ALL_MODELS_AND_POLICIES'
+    },
+    execution:{
+      top_k_grid:[1],round_trip_cost_bps:30,
+      policy_score_source:'FROZEN_OUTER_VALIDATION_RANK_SCORES',
+      matched_comparator_trade_counts_by_decision_bucket:true,
+      selective_policies_use_inner_selection_thresholds_only:true,
+      policy_configurations:{
+        LOGIT_CONTEXT_AUGMENTED:{
+          minimum_score:0.31,require_positive_base_score:true,
+          minimum_positive_net_return_probability:0.6
+        },
+        LOGISTIC_MATCHED_CONTEXT:{
+          match_trade_counts_with:'LOGIT_CONTEXT_AUGMENTED'
+        }
+      },
+      paired_strategy_differences:{
+        '1':{
+          LOGIT_CONTEXT_AUGMENTED_MINUS_LOGISTIC_MATCHED_CONTEXT:{
+            net_pnl_pct:{
+              status:'AVAILABLE',requested_repetitions:250,valid_repetitions:250,
+              mean:0.24,median:0.21,lower_95:0.08,upper_95:0.42,
+              probability_above_zero:0.992
+            }
+          }
+        }
+      }
+    },
+    isolation:{
+      parameters_refitted:false,thresholds_selected:false,top_k_selected:false,
+      lambda_refitted:false,calibration_selected:false,
+      holdout_rows_or_scores_used:false,affects_acceptance_gates:false
+    }
+  });
+
+  const evidence=makeEvidence();
+  const passed=qualifyPairedOuterExecutionPnlBootstrap(evidence);
+  assert.equal(passed.status,'PASSED');
+  assert.equal(passed.passed,true);
+  assert.equal(passed.strict_positive_lower_95_bound,true);
+  assert.equal(passed.candidate_minus_logistic_net_pnl_pct.lower_95,0.08);
+  assert.equal(passed.holdout_rows_or_scores_used,false);
+
+  const zeroBound=makeEvidence();
+  zeroBound.execution.paired_strategy_differences['1']
+    .LOGIT_CONTEXT_AUGMENTED_MINUS_LOGISTIC_MATCHED_CONTEXT.net_pnl_pct.lower_95=0;
+  const rejectedZero=qualifyPairedOuterExecutionPnlBootstrap(zeroBound);
+  assert.equal(rejectedZero.passed,false);
+  assert.equal(rejectedZero.reason,
+    'OUTER_PAIRED_NET_PNL_CONFIDENCE_INTERVAL_NOT_STRICTLY_POSITIVE');
+
+  const negativeBound=makeEvidence();
+  negativeBound.execution.paired_strategy_differences['1']
+    .LOGIT_CONTEXT_AUGMENTED_MINUS_LOGISTIC_MATCHED_CONTEXT.net_pnl_pct.lower_95=-0.01;
+  assert.equal(qualifyPairedOuterExecutionPnlBootstrap(negativeBound).passed,false);
+
+  const wrongMatch=makeEvidence();
+  wrongMatch.execution.policy_configurations.LOGISTIC_MATCHED_CONTEXT
+    .match_trade_counts_with='POOLED_ONLY';
+  assert.equal(qualifyPairedOuterExecutionPnlBootstrap(wrongMatch).reason,
+    'OUTER_PAIRED_PNL_BOOTSTRAP_POLICIES_NOT_MATCHED');
+
+  const tooFew=makeEvidence();
+  tooFew.execution.paired_strategy_differences['1']
+    .LOGIT_CONTEXT_AUGMENTED_MINUS_LOGISTIC_MATCHED_CONTEXT.net_pnl_pct.valid_repetitions=230;
+  assert.equal(qualifyPairedOuterExecutionPnlBootstrap(tooFew).passed,false);
+
+  const holdoutLeak=makeEvidence();
+  holdoutLeak.holdout_rows_or_scores_used=true;
+  assert.equal(qualifyPairedOuterExecutionPnlBootstrap(holdoutLeak).passed,false);
+
+  const shortBlocks=makeEvidence();
+  shortBlocks.sampling.block_length_days=2;
+  assert.equal(qualifyPairedOuterExecutionPnlBootstrap(shortBlocks).passed,false);
+});
+
+test('paired PnL promotion gate accepts actual outer-bootstrap output only when matched Logistic lower CI is positive',()=>{
+  const allRows=makeRows({days:80,rowsPerDay:80});
+  const validation=splitFourHourRows(allRows).validation
+    .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
+  const candidateScores=validation.map(row=>row.target===1?0.99:0.01);
+  const logisticMatchedScores=validation.map(row=>row.target===1?0.01:0.99);
+  const baselineScores=validation.map(()=>0.35);
+  const result=bootstrapOuterValidationUncertainty(validation,{
+    LOGISTIC_REGRESSION:validation.map(row=>row.target?0.7:0.3),
+    TCN_LSTM_HYBRID:validation.map(row=>row.target?0.72:0.28)
+  },{
+    executionScoresByPolicy:{
+      LOGIT_CONTEXT_AUGMENTED:candidateScores,
+      LOGISTIC_MATCHED_CONTEXT:logisticMatchedScores
+    },
+    executionPolicyConfigurations:{
+      LOGIT_CONTEXT_AUGMENTED:{
+        minimum_score:0.5,require_positive_base_score:true
+      },
+      LOGISTIC_MATCHED_CONTEXT:{
+        match_trade_counts_with:'LOGIT_CONTEXT_AUGMENTED'
+      }
+    },
+    baseRiskAdjustedScoresByPolicy:{
+      LOGIT_CONTEXT_AUGMENTED:baselineScores
+    },
+    topKGrid:[1],roundTripCostBps:30,
+    repetitions:250,blockLengthDays:3,seed:22430,maxConcurrentPositions:30
+  });
+  assert.equal(result.status,'AVAILABLE',JSON.stringify(result));
+  assert.equal(result.sampling.repetitions,250);
+  assert.equal(result.sampling.block_length_days,3);
+  assert.equal(result.holdout_rows_or_scores_used,false,
+    'available bootstrap evidence must expose its holdout-isolation contract at the top level');
+  const paired=result.execution.paired_strategy_differences['1']
+    .LOGIT_CONTEXT_AUGMENTED_MINUS_LOGISTIC_MATCHED_CONTEXT.net_pnl_pct;
+  assert.equal(paired.status,'AVAILABLE');
+  assert.equal(paired.valid_repetitions,250);
+  assert.ok(paired.lower_95>0,JSON.stringify(paired));
+  const gate=qualifyPairedOuterExecutionPnlBootstrap(result);
+  assert.equal(gate.status,'PASSED',JSON.stringify({gate,paired}));
+  assert.equal(gate.candidate_minus_logistic_net_pnl_pct.lower_95,paired.lower_95);
+  assert.equal(gate.holdout_rows_or_scores_used,false);
+});
+
 test('outer-validation moving-block bootstrap returns paired Brier and execution confidence intervals without holdout access',()=>{
   const rows=makeRows({days:60,rowsPerDay:80});
   const sourceCommitSha='9'.repeat(40);
