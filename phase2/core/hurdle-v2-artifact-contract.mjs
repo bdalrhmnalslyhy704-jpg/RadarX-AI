@@ -427,7 +427,7 @@ export function createHurdleV2Artifact({
     throw new TypeError('HURDLE_V2_RANKER_FOLD_STABILITY_EVIDENCE_REQUIRED');
   if(orderedRankingDependency!==null&&(
     orderedRankingDependency?.artifact_schema!==
-      'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V1'||
+      'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V2'||
     !/^[a-f0-9]{64}$/.test(String(orderedRankingDependency?.artifact_content_hash??''))||
     !/^[a-f0-9]{64}$/.test(String(orderedRankingDependency?.artifact_manifest_hash??''))||
     orderedRankingDependency?.code_commit_sha!==String(codeCommitSha).toLowerCase()||
@@ -817,7 +817,7 @@ export function verifyHurdleV2Artifact(artifact) {
     const rankerDependency=artifact.upstream_ordered_ranker_dependency??null;
     if(rankerDependency!==null&&(
       rankerDependency?.artifact_schema!==
-        'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V1'||
+        'RADARX_TCN_LSTM_ORDERED_TEMPORAL_RANKER_ARTIFACT_V2'||
       !/^[a-f0-9]{64}$/.test(String(rankerDependency?.artifact_content_hash??''))||
       !/^[a-f0-9]{64}$/.test(String(rankerDependency?.artifact_manifest_hash??''))||
       rankerDependency?.code_commit_sha!==artifact.code_commit_sha||
