@@ -3642,9 +3642,28 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
         l2:1,learningRate:0.03,maxEpochs:160,purgeHorizonMs
       }
     );
+    const epochLogisticValidationLogits=epochValidationRows.map(row=>
+      predictTemporalLogisticRawLogit(
+        buildTcnLstmFlattenedFeatures(row.sequence),epochLogisticBaseline
+      )
+    );
+    let epochLogisticLoss=0,epochLogisticCorrect=0;
+    for(const pair of epochValidationPairSupport.pairs){
+      const metric=tcnLstmPairwiseLogitRankingLoss(
+        epochLogisticValidationLogits[pair.high_index],
+        epochLogisticValidationLogits[pair.low_index]
+      );
+      epochLogisticLoss+=metric.loss;
+      epochLogisticCorrect+=metric.accuracy_contribution;
+    }
+    const epochLogisticValidationMetrics={
+      pairwise_log_loss:epochLogisticLoss/epochValidationPairSupport.comparison_pairs,
+      pairwise_accuracy_pct:100*epochLogisticCorrect/epochValidationPairSupport.comparison_pairs
+    };
     return {
       epochTrainingRows,epochTrainingPairSupport,
       epochValidationRows,epochValidationPairSupport,epochLogisticBaseline,
+      epochLogisticValidationMetrics,
       epoch_training_rows:epochTrainingRows.length,
       epoch_training_pairs:epochTrainingPairSupport.comparison_pairs,
       epoch_validation_rows:epochValidationRows.length,
@@ -3662,7 +3681,8 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
     epochTrainingRows:nestedEpochWindows[index].epochTrainingRows,
     epochTrainingPairSupport:nestedEpochWindows[index].epochTrainingPairSupport,
     epochValidationRows:nestedEpochWindows[index].epochValidationRows,
-    epochValidationPairSupport:nestedEpochWindows[index].epochValidationPairSupport
+    epochValidationPairSupport:nestedEpochWindows[index].epochValidationPairSupport,
+    epochLogisticValidationMetrics:nestedEpochWindows[index].epochLogisticValidationMetrics
   }));
   // Fit the fixed project Logistic specification separately inside each
   // purged outer fold. Both models train on all rows in that fold's fit window
@@ -3784,6 +3804,13 @@ export function fitTcnLstmOrderedRankerForTrainingPartition(rows,{
           epoch_selection_pairwise_accuracy_pct:epochSelection.best_validation_pairwise_accuracy_pct,
           epoch_initial_pairwise_log_loss:epochSelection.initial_validation_pairwise_log_loss,
           epoch_initial_pairwise_accuracy_pct:epochSelection.initial_validation_pairwise_accuracy_pct,
+          epoch_logistic_validation_pairwise_log_loss:fold.epochLogisticValidationMetrics.pairwise_log_loss,
+          epoch_logistic_validation_pairwise_accuracy_pct:fold.epochLogisticValidationMetrics.pairwise_accuracy_pct,
+          epoch_initial_matches_logistic_anchor:
+            Math.abs(epochSelection.initial_validation_pairwise_log_loss-
+              fold.epochLogisticValidationMetrics.pairwise_log_loss)<=1e-10&&
+            Math.abs(epochSelection.initial_validation_pairwise_accuracy_pct-
+              fold.epochLogisticValidationMetrics.pairwise_accuracy_pct)<=1e-8,
           logistic_validation_pairwise_log_loss:logistic.pairwise_log_loss,
           logistic_validation_pairwise_accuracy_pct:logistic.pairwise_accuracy_pct,
           training_pairwise_log_loss:tuned.final_pairwise_log_loss,
