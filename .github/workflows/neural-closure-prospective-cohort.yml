@@ -133,6 +133,21 @@ jobs:
              candidatePrefilter?.current_24h_ticker_used_for_ordering!==false||
              candidatePrefilter?.current_24h_ticker_volume_is_diagnostic_only!==true)
             failures.push('CURRENT_TICKER_UNIVERSE_LOOKAHEAD_NOT_REMOVED');
+          const policy=cohort.policy;
+          if(policy?.candidate_universe_prefilter!==candidatePrefilter?.method||
+             policy?.candidate_universe_selection!==cohort.universe?.selection||
+             Number(policy?.minimum_24h_quote_volume_usdt)!==
+               Number(cohort.universe?.minimum_quote_volume_24h_usdt)||
+             Number(policy?.candidate_universe_max_symbols)!==
+               Number(cohort.universe?.maximum_symbols)||
+             policy?.current_24h_ticker_used_for_candidate_eligibility!==
+               candidatePrefilter?.current_24h_ticker_used_for_eligibility||
+             policy?.current_24h_ticker_used_for_ordering!==
+               candidatePrefilter?.current_24h_ticker_used_for_ordering||
+             policy?.current_24h_ticker_volume_is_diagnostic_only!==
+               candidatePrefilter?.current_24h_ticker_volume_is_diagnostic_only||
+             policy?.cohort_collection_mode!==cohort.cohort_contract?.role)
+            failures.push('MARKET_DATA_POLICY_UNIVERSE_PROVENANCE_MISMATCH');
           const captureAudit=cohort.universe?.capture_audit;
           const selectedSymbols=(cohort.universe?.symbols??[]).map(item=>item.symbol).sort();
           const includedSymbols=(captureAudit?.included_symbols??[]).slice().sort();
