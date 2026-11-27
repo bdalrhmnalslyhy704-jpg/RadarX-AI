@@ -630,9 +630,9 @@ async function main(){
         execution_return_contract:validated[0].execution_return_contract
       },
       universe:{
-        selection:'ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_COMPLETE_15M_PREHISTORY_AND_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V4',
+        selection:'CRYPTO_ONLY_ALL_CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_COMPLETE_15M_PREHISTORY_AND_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V5',
         candidate_prefilter:{
-          method:'CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY_PLUS_EXACT_15M_PREHISTORY_GATE',
+          method:'CURRENT_EXCHANGE_INFO_SPOT_TRADING_USDT_STATUS_ONLY_PLUS_KNOWN_BSTOCK_EXCLUSION_PLUS_EXACT_15M_PREHISTORY_GATE',
           current_24h_ticker_used_for_eligibility:false,
           current_24h_ticker_used_for_ordering:false,
           current_24h_ticker_volume_is_diagnostic_only:true,
@@ -642,7 +642,12 @@ async function main(){
           selected_candidate_count:universe.selected.length,
           all_eligible_candidates_included:universe.selected.length===universe.eligible.length,
           hard_cap_failure_mode:'FAIL_CLOSED_NO_TOP_N_TRUNCATION',
-          scope:'CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_WITH_REQUIRED_15M_PREHISTORY'
+          scope:'CURRENTLY_TRADING_CRYPTO_BINANCE_SPOT_USDT_PAIRS_WITH_REQUIRED_15M_PREHISTORY'
+        },
+        non_crypto_exclusions:{
+          policy:universe.excluded_non_crypto_policy,
+          count:universe.excluded_non_crypto.length,
+          symbols:universe.excluded_non_crypto
         },
         historical_eligibility:{
           method:'SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE',
@@ -658,6 +663,11 @@ async function main(){
         selected_candidate_count:universe.selected.length,
         all_eligible_candidates_included:universe.selected.length===universe.eligible.length,
         history_preflight:universe.historyPreflight??null,
+        non_crypto_exclusions:{
+          policy:universe.excluded_non_crypto_policy,
+          count:universe.excluded_non_crypto.length,
+          symbols:universe.excluded_non_crypto
+        },
         capture_audit:prospectiveCaptureAudit,
         hard_cap_failure_mode:'FAIL_CLOSED_NO_TOP_N_TRUNCATION',
         survivorship_bias_warning:true,
